@@ -1,0 +1,951 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 224.3 76.3% 48%;
+}
+
+.light {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.popup-container {
+  @apply w-[400px] h-[600px] bg-background text-foreground flex flex-col;
+}
+
+.popup-header {
+  @apply flex items-center justify-between p-4 border-b bg-gradient-to-r;
+}
+
+.popup-header h1 {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  color: white;
+}
+
+.popup-content {
+  @apply flex-1 overflow-y-auto p-4;
+}
+
+.popup-footer {
+  @apply p-3 border-t bg-muted/30 text-center text-xs text-muted-foreground;
+}
+
+.section-title {
+  @apply text-lg font-semibold mb-4;
+}
+
+.settings-section {
+  @apply space-y-6;
+}
+
+.setting-item {
+  @apply flex items-center justify-between;
+}
+
+.stats-section {
+  @apply space-y-4;
+}
+
+.stat-card {
+  @apply p-4 bg-card text-card-foreground;
+}
+
+.words-section {
+  @apply space-y-4;
+}
+
+.words-grid {
+  @apply grid gap-4 grid-cols-1;
+}
+
+.word-card {
+  @apply p-4 bg-card text-card-foreground border border-border rounded-lg transition-all duration-200 hover:shadow-md;
+}
+
+.word-header {
+  @apply flex items-center justify-between mb-2;
+}
+
+.original-word {
+  @apply text-base font-medium;
+}
+
+.translated-word {
+  @apply text-sm text-muted-foreground mt-1;
+}
+
+.word-meta {
+  @apply mt-3 flex items-center justify-between text-xs text-muted-foreground;
+}
+
+.language {
+  @apply px-2 py-1 rounded-full bg-muted text-muted-foreground text-xs;
+}
+
+.empty-state {
+  @apply p-6 text-center text-muted-foreground border border-dashed border-border rounded-lg;
+}
+
+.actions {
+  @apply flex items-center gap-2;
+}
+
+.icon-button {
+  @apply p-2 rounded-full transition-colors flex items-center justify-center w-8 h-8;
+  color: white;
+}
+
+.light .icon-button {
+  color: var(--foreground);
+}
+
+.dark .icon-button {
+  color: white;
+}
+
+.icon-button:hover {
+  @apply bg-white/10;
+}
+
+.light .icon-button:hover {
+  @apply bg-black/10;
+}
+
+.practice-section {
+  @apply mt-6;
+}
+
+.practice-button {
+  @apply flex flex-col items-center justify-center gap-2 p-4 bg-card text-card-foreground rounded-lg border border-border transition-all duration-200 hover:bg-accent hover:text-accent-foreground disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.practice-button:disabled {
+  @apply hover:bg-card hover:text-card-foreground;
+}
+
+.input-field {
+  @apply w-full p-2 rounded-md bg-background border text-foreground;
+}
+
+.translated-input {
+  @apply mt-2;
+}
+
+.language-select {
+  @apply w-full mt-2;
+}
+
+.save-button {
+  @apply text-green-500 hover:text-green-600;
+}
+
+.cancel-button {
+  @apply text-red-500 hover:text-red-600;
+}
+
+.edit-button {
+  @apply text-blue-500 hover:text-blue-600;
+}
+
+.delete-button {
+  @apply text-red-500 hover:text-red-600;
+}
+
+.filters {
+  @apply flex flex-wrap gap-6 mb-4;
+}
+
+@media (max-width: 480px) {
+  .filters {
+    @apply flex-col gap-5;
+  }
+  
+  .filter-group {
+    @apply w-full mb-3;
+  }
+}
+
+.filter-group {
+  @apply flex flex-col gap-2 min-w-[170px];
+}
+
+.filter-label {
+  @apply text-xs font-medium text-muted-foreground mb-1.5;
+}
+
+.filter-stats {
+  @apply text-xs text-muted-foreground mt-3;
+}
+
+/* Date input styles */
+input[type="date"], .date-input {
+  @apply h-10 min-w-[150px] rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  direction: ltr !important;
+  unicode-bidi: isolate-override !important;
+  text-align: left !important;
+}
+
+.dark input[type="date"], .dark .date-input {
+  color-scheme: dark;
+}
+
+.light input[type="date"], .light .date-input {
+  color-scheme: light;
+}
+
+/* Force date input to use Latin numerals */
+input[type="date"]::-webkit-calendar-picker-indicator, .date-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  width: 30px;
+  height: 20px;
+  position: absolute;
+  right: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* Custom date picker styles */
+.date-picker-container {
+  position: relative;
+  width: 100%;
+}
+
+.date-picker-calendar {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  background-color: hsl(var(--card));
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+  padding: 0.75rem;
+  margin-top: 0.25rem;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+.date-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.date-picker-month-year {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--foreground);
+  letter-spacing: -0.01em;
+}
+
+.date-picker-nav {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.date-picker-nav button {
+  background-color: var(--secondary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.25rem;
+  color: var(--foreground);
+  transition: all 0.2s ease;
+}
+
+.date-picker-nav button:hover {
+  background-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.date-picker-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+}
+
+.date-picker-day-name {
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 0.25rem 0;
+}
+
+.date-picker-day {
+  text-align: center;
+  font-size: 0.875rem;
+  padding: 0.5rem 0.25rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  margin: 0.125rem;
+  font-weight: 500;
+}
+
+.date-picker-day:hover {
+  background-color: var(--accent);
+}
+
+.date-picker-day.selected {
+  background-color: var(--primary);
+  color: white;
+  font-weight: 600;
+}
+
+.date-picker-day.today {
+  font-weight: 600;
+  border: 1.5px solid var(--primary);
+}
+
+.date-picker-day.outside-month {
+  color: var(--muted-foreground);
+  opacity: 0.4;
+}
+
+input[type="date"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field {
+  direction: ltr !important;
+  unicode-bidi: isolate-override !important;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  text-align: left !important;
+}
+
+/* Original styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 400px;
+  height: 600px;
+  overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+.popup-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(to right, hsl(222.2 84% 4.9%), hsl(217.2 32.6% 17.5%));
+  color: white;
+}
+
+.popup-header h1 {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  color: white;
+}
+
+.popup-content {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.popup-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  background-color: var(--muted);
+  text-align: center;
+}
+
+.select-input {
+  @apply h-10 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring w-full;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.select-input:hover {
+  border-color: var(--primary);
+}
+
+.select-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-foreground), var(--shadow);
+}
+
+.stat-card {
+  padding: 1.5rem;
+  text-align: center;
+  background-color: var(--card);
+  color: var(--card-foreground);
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 12px -3px rgb(0 0 0 / 0.15);
+}
+
+.practice-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background-color: var(--card);
+  color: var(--card-foreground);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+.practice-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(45deg, var(--primary), var(--secondary));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.practice-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 12px -3px rgb(0 0 0 / 0.15);
+}
+
+.practice-button:hover::before {
+  opacity: 1;
+}
+
+.practice-button > * {
+  position: relative;
+  z-index: 1;
+}
+
+.practice-button:hover > * {
+  color: var(--primary-foreground);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  margin-bottom: 0.75rem;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  background-color: var(--card);
+  border-radius: var(--radius);
+}
+
+.word-card {
+  padding: 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.word-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.word-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.original-word {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.translated-word {
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  margin-bottom: 0.5rem;
+}
+
+.word-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  margin-top: auto;
+}
+
+.language-tag {
+  padding: 0.25rem 0.5rem;
+  background: var(--muted);
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+}
+
+.source {
+  text-transform: capitalize;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.edit-button,
+.delete-button {
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  color: var(--muted-foreground);
+  transition: all 0.2s ease;
+}
+
+.edit-button:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.delete-button:hover {
+  color: var(--destructive);
+  background: var(--destructive-foreground);
+}
+
+.filters {
+  @apply flex flex-wrap gap-6 mb-4;
+}
+
+.filter-container {
+  @apply mb-5 p-5 rounded-lg border border-border bg-muted/20;
+}
+
+.filter-stats {
+  @apply text-xs text-muted-foreground mt-3;
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/10 backdrop-blur-md border border-white/20 shadow-lg;
+  }
+  
+  .glass-button {
+    @apply bg-white/15 backdrop-blur-md border border-white/20 shadow-md hover:bg-white/25 transition-all duration-300;
+  }
+  
+  .gradient-border {
+    @apply border-2 border-transparent relative;
+    background-clip: padding-box;
+    background-image: linear-gradient(to right, rgba(255,255,255,0.1), rgba(255,255,255,0.2));
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.15);
+  }
+  
+  .gradient-border-success {
+    @apply border-2 border-transparent relative;
+    background-clip: padding-box;
+    background-image: linear-gradient(to right, rgba(16,185,129,0.4), rgba(5,150,105,0.6));
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+  }
+  
+  .gradient-border-error {
+    @apply border-2 border-transparent relative;
+    background-clip: padding-box;
+    background-image: linear-gradient(to right, rgba(239,68,68,0.4), rgba(185,28,28,0.6));
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+  }
+  
+  .hover-scale {
+    @apply transition-transform duration-300;
+    &:hover {
+      transform: scale(1.03);
+    }
+  }
+  
+  .gradient-text {
+    @apply bg-clip-text text-transparent font-bold;
+    background-image: linear-gradient(135deg, #ff7e5f, #feb47b);
+    text-shadow: 0 0 3px rgba(255, 255, 255, 0.15);
+  }
+  
+  .vibrant-text {
+    @apply font-extrabold;
+    text-shadow: 0 0 5px rgba(255, 255, 255, 0.25);
+  }
+  
+  .game-header-text {
+    @apply text-3xl font-extrabold bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #f6d365, #fda085);
+    text-shadow: 0 0 3px rgba(255, 255, 255, 0.2);
+  }
+  
+  .animated-gradient-bg {
+    @apply bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-700;
+    background-size: 200% 200%;
+    animation: gradientMove 20s ease infinite;
+  }
+  
+  .choice-button {
+    @apply glass-button py-4 font-medium text-lg rounded-xl hover:shadow-lg transition-all duration-300;
+  }
+  
+  .choice-button-correct {
+    @apply bg-emerald-500/30 hover:bg-emerald-500/40 text-white border-emerald-300/50;
+    text-shadow: 0 0 5px rgba(16, 185, 129, 0.5);
+  }
+  
+  .choice-button-incorrect {
+    @apply bg-red-500/30 hover:bg-red-500/40 text-white border-red-300/50;
+    text-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+  }
+  
+  .choice-button-neutral {
+    @apply glass-button bg-indigo-500/20 hover:bg-indigo-500/30 text-white;
+  }
+  
+  .memory-card {
+    @apply aspect-square flex items-center justify-center cursor-pointer rounded-xl shadow-lg text-center overflow-hidden;
+  }
+  
+  .confetti-effect {
+    animation: confetti-pop 0.5s ease-out;
+  }
+  
+  .floating {
+    animation: floating 3s ease-in-out infinite;
+  }
+  
+  .pulse-animate {
+    animation: pulse 2s ease-in-out infinite;
+  }
+  
+  .shimmer-effect {
+    position: relative;
+    overflow: hidden;
+    
+    &:after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.3) 50%,
+        rgba(255, 255, 255, 0) 100%
+      );
+      transform: rotate(30deg);
+      animation: shimmer 3s linear infinite;
+    }
+  }
+  
+  .text-shadow-sm {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+  
+  .text-shadow-md {
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  
+  .text-shadow-lg {
+    text-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  
+  .text-glow {
+    text-shadow: 0 0 5px currentColor;
+  }
+  
+  .game-title {
+    @apply text-3xl sm:text-4xl font-black tracking-tight bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #f6d365, #fda085);
+    text-shadow: 0 0 3px rgba(255, 255, 255, 0.2);
+    letter-spacing: -0.02em;
+  }
+}
+
+@keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes floating {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes confetti-pop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-150%) rotate(30deg); }
+  100% { transform: translateX(150%) rotate(30deg); }
+}
+
+/* Melhorias para o tema escuro/claro */
+.light .word-card {
+  @apply shadow-sm hover:shadow-md;
+}
+
+.dark .word-card {
+  @apply border-border/50 hover:border-border;
+}
+
+.light .practice-button {
+  @apply bg-gradient-to-br from-white to-gray-50 hover:from-indigo-50 hover:to-indigo-100;
+}
+
+.dark .practice-button {
+  @apply bg-gradient-to-br from-gray-900 to-gray-800 hover:from-indigo-950 hover:to-indigo-900;
+}
+
+.light .empty-state {
+  @apply bg-gray-50;
+}
+
+.dark .empty-state {
+  @apply bg-gray-900/50;
+}
+
+/* Estilos para o container de filtros */
+.filter-container {
+  @apply mb-5 p-5 rounded-lg border border-border bg-muted/20;
+}
+
+.filter-stats {
+  @apply text-xs text-muted-foreground mt-3;
+}
+
+.dark .date-picker-calendar {
+  background-color: hsl(var(--card));
+  border-color: var(--border);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+}
+
+.light .date-picker-calendar {
+  background-color: hsl(var(--card));
+  border-color: var(--border);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* Animation for typing indicator */
+.animation-delay-200 {
+  animation-delay: 200ms;
+}
+
+.animation-delay-400 {
+  animation-delay: 400ms;
+}
+
+/* Resize handlers */
+.resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+  background: transparent;
+  z-index: 100;
+}
+
+.resize-handle:after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid rgba(100, 100, 100, 0.4);
+  border-bottom: 2px solid rgba(100, 100, 100, 0.4);
+}
+
+/* Ensure floating panels stay on top */
+.floating-panel {
+  z-index: 9999;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(12px);
+}
+
+/* Make sure text is readable on top of video */
+.floating-controls-button {
+  background-color: rgba(0, 0, 0, 0.6);
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.floating-controls-button:hover {
+  background-color: rgba(0, 0, 0, 0.8);
+  transform: scale(1.1);
+}
+
+/* Focus styles for better accessibility */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #4285f4;
+  outline-offset: 2px;
+}
+
+/* Dark mode specifics for panels */
+.dark .gemini-panel,
+.dark .notes-panel {
+  background-color: rgba(30, 30, 30, 0.95);
+  color: #e0e0e0;
+  border-color: #444;
+}
+
+/* Light mode specifics for panels */
+.light .gemini-panel,
+.light .notes-panel {
+  background-color: rgba(255, 255, 255, 0.95);
+  color: #333;
+  border-color: #ddd;
+}
+
+/* Animated loading spinner */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: #3498db;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.dark .spinner {
+  border-color: rgba(255, 255, 255, 0.1);
+  border-top-color: #3498db;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out forwards;
+} 
