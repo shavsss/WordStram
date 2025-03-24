@@ -66,31 +66,9 @@ export function NotesPanel({
       try {
         console.log('WordStream: Loading notes for video', videoId);
         chrome.storage.local.get([`notes-${videoId}`], (result) => {
-          if (chrome.runtime.lastError) {
-            console.error('WordStream: Error loading notes:', chrome.runtime.lastError);
-            return;
-          }
-          
           if (result[`notes-${videoId}`]) {
             console.log('WordStream: Found saved notes with', result[`notes-${videoId}`].length, 'items');
-            
-            try {
-              // Validate note data before setting
-              const validatedNotes = result[`notes-${videoId}`].map((note: Note) => {
-                console.log('WordStream: Note data:', note);
-                return {
-                  id: note.id || Date.now().toString(),
-                  content: note.content || 'No content',
-                  timestamp: note.timestamp || new Date().toISOString(),
-                  videoTime: note.videoTime
-                };
-              });
-              
-              setNotes(validatedNotes);
-            } catch (parseError) {
-              console.error('WordStream: Error parsing note data:', parseError);
-              setNotes([]);
-            }
+            setNotes(result[`notes-${videoId}`]);
           } else {
             console.log('WordStream: No saved notes found for this video');
           }
@@ -191,42 +169,6 @@ export function NotesPanel({
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-  
-  // Format ISO date string to readable date
-  const formatDate = (isoString?: string) => {
-    if (!isoString) return 'No date';
-    
-    try {
-      const date = new Date(isoString);
-      if (isNaN(date.getTime())) return 'Invalid date';
-      
-      // Check if the date is today
-      const today = new Date();
-      const isToday = date.getDate() === today.getDate() &&
-                     date.getMonth() === today.getMonth() &&
-                     date.getFullYear() === today.getFullYear();
-      
-      if (isToday) {
-        // For today, just show the time
-        return date.toLocaleTimeString(undefined, {
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      } else {
-        // For other dates, show the date and time
-        return date.toLocaleString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      }
-    } catch (error) {
-      console.error('WordStream: Error formatting date:', error, isoString);
-      return 'Invalid date';
-    }
   };
   
   // Drag functionality
@@ -509,16 +451,8 @@ export function NotesPanel({
                       <circle cx="12" cy="12" r="10"></circle>
                       <polyline points="12 6 12 12 16 14"></polyline>
                     </svg>
-                    <span title={formatDate(note.timestamp)}>
+                    <span>
                       {note.videoTime !== undefined ? formatVideoTime(note.videoTime) : 'No timestamp'}
-                    </span>
-                    <span style={{ 
-                      marginLeft: '8px', 
-                      fontSize: '10px', 
-                      opacity: 0.7,
-                      color: isDarkMode ? '#a1a1aa' : '#71717a'
-                    }}>
-                      {formatDate(note.timestamp)}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: '4px' }}>
@@ -576,7 +510,7 @@ export function NotesPanel({
                   backgroundColor: isDarkMode ? '#18181b' : '#ffffff',
                   lineHeight: '1.5'
                 }}>
-                  {note.content || 'No content'}
+                  {note.content}
                 </div>
               </div>
             ))}

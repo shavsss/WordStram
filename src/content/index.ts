@@ -531,7 +531,7 @@ function addDirectFloatingControls() {
     document.body.appendChild(controlsContainer);
     
     // Create panels
-    const geminiPanel = createGeminiPanel();
+    const geminiPanel = createGeminiPanel2();
     const notesPanel = createNotesPanel();
     
     // Variables for timestamp updating
@@ -1018,7 +1018,7 @@ function showError(error: any): void {
     setTimeout(() => {
       errorContainer.style.display = 'none';
     }, 10000);
-  } else {
+              } else {
     // אם אין מיכל שגיאה קיים, ניצור אותו
     const newErrorContainer = document.createElement('div');
     newErrorContainer.id = 'gemini-error';
@@ -1040,2032 +1040,2219 @@ function showError(error: any): void {
 }
 
 function createGeminiPanel() {
+  // Predefined sizes
+  const SIZES = {
+    small: { width: 350, height: 500 },
+    medium: { width: 480, height: 550 },
+    large: { width: 640, height: 600 }
+  };
+  
+  // Current size and theme state
+  let currentSize = 'medium';
+  let isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  
+  // Create main panel container
   const panel = document.createElement('div');
-  panel.className = 'wordstream-panel gemini-panel';
+  panel.className = `wordstream-panel gemini-panel ${isDarkMode ? 'dark' : 'light'}`;
   panel.id = 'wordstream-gemini-panel';
   
-  // הגדרת מיקום וגודל התחלתי מפורש
+  // Apply initial size
+  panel.style.width = `${SIZES[currentSize as keyof typeof SIZES].width}px`;
+  panel.style.height = `${SIZES[currentSize as keyof typeof SIZES].height}px`;
+  
+  // Set panel base styles
   panel.style.position = 'fixed';
-  panel.style.top = '20px';
+  panel.style.top = '80px';
   panel.style.right = '20px';
-  panel.style.width = '380px';
-  panel.style.height = '600px';
-  panel.style.resize = 'both';
+  panel.style.zIndex = '9999999';
+  panel.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.2)';
+  panel.style.borderRadius = '12px';
   panel.style.overflow = 'hidden';
-  panel.style.minWidth = '300px';
-  panel.style.minHeight = '400px';
-  panel.style.maxWidth = '800px';
-  panel.style.maxHeight = '900px';
-  panel.style.zIndex = '9999';
+  panel.style.display = 'flex';
+  panel.style.flexDirection = 'column';
+  panel.style.backgroundColor = isDarkMode ? '#121212' : '#FFFFFF';
+  panel.style.border = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+  panel.style.fontFamily = "'Inter', 'Arial', sans-serif";
   
-  // הוספת מחוון שינוי גודל חזותי
-  // נוסיף אלמנט נפרד שישמש כידית שינוי גודל ויסייע למשתמש להבין שאפשר לשנות גודל
-  const resizeIndicator = document.createElement('div');
-  resizeIndicator.className = 'resize-indicator';
-  resizeIndicator.title = 'Drag to resize';
-  resizeIndicator.style.position = 'absolute';
-  resizeIndicator.style.bottom = '0';
-  resizeIndicator.style.right = '0';
-  resizeIndicator.style.width = '30px';
-  resizeIndicator.style.height = '30px';
-  resizeIndicator.style.cursor = 'nwse-resize';
-  resizeIndicator.style.backgroundColor = 'transparent';
-  resizeIndicator.style.zIndex = '10000';
-  resizeIndicator.style.pointerEvents = 'none'; // כדי שהלחיצות עדיין יעברו לפאנל עצמו
-  
-  // יצירת האלמנטים הגרפיים של המחוון בצורת משולש/זווית
-  const createResizeLines = () => {
-    const lineContainer = document.createElement('div');
-    lineContainer.style.position = 'absolute';
-    lineContainer.style.right = '2px';
-    lineContainer.style.bottom = '2px';
-    lineContainer.style.overflow = 'hidden';
-    lineContainer.style.width = '26px';
-    lineContainer.style.height = '26px';
-    lineContainer.style.pointerEvents = 'none';
-    
-    // יצירת שלושה קווים לסימון הפינה - מעוצבים בצורת דיאגונל
-    for (let i = 0; i < 3; i++) {
-      const line = document.createElement('div');
-      line.style.position = 'absolute';
-      line.style.right = '0';
-      line.style.bottom = `${(i * 7) + 2}px`;
-      line.style.height = '3px';
-      line.style.width = `${19 - (i * 4)}px`;
-      line.style.backgroundColor = 'rgba(138, 180, 248, 0.9)';
-      line.style.borderRadius = '1.5px';
-      line.style.transform = 'rotate(-45deg)';
-      line.style.transformOrigin = 'right bottom';
-      line.style.transition = 'all 0.2s ease';
-      lineContainer.appendChild(line);
-    }
-    
-    return lineContainer;
-  };
-  
-  resizeIndicator.appendChild(createResizeLines());
-  
-  // מוסיף את המחוון שינוי גודל לפאנל
-  panel.appendChild(resizeIndicator);
-  
-  // שיפור הרספונסיביות באמצעות הגדלת קצה תיבת השינוי
-  // זה יעבוד טוב יותר עם המחוון החדש
-  const style = document.createElement('style');
-  style.innerHTML = `
-    /* עיצוב בסיסי לפאנל */
-    #${panel.id} {
-      resize: both;
-      overflow: hidden;
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      min-width: 320px;
-      min-height: 400px;
-    }
-    
-    /* תפריט שינוי גודל */
-    #${panel.id} .size-menu {
-      position: absolute;
-      top: 100%;
-      left: 0;
-      z-index: 10005;
-      background-color: rgba(32, 33, 36, 0.9);
-      border-radius: 4px;
-      padding: 4px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-      min-width: 120px;
-    }
-    
-    /* כפתור גודל נוכחי */
-    #${panel.id} .current-size-button {
-      background: none;
-      border: none;
-      padding: 2px 8px;
-      color: #8ab4f8;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s ease;
-      border-radius: 4px;
-      height: 24px;
-    }
-    
-    #${panel.id} .current-size-button:hover {
-      background-color: rgba(138, 180, 248, 0.1);
-    }
-    
-    /* אפשרויות גודל בתפריט */
-    #${panel.id} .size-option {
-      background: none;
-      border: none;
-      width: 100%;
-      padding: 6px 8px;
-      text-align: left;
-      color: #e8eaed;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      border-radius: 3px;
-      transition: all 0.15s ease;
-    }
-    
-    #${panel.id} .size-option:hover {
-      background-color: rgba(138, 180, 248, 0.1);
-    }
-    
-    /* מבנה פנימי בסיסי */
-    #${panel.id} .panel-header {
-      flex: 0 0 auto;
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-    }
-    
-    #${panel.id} .panel-title {
-      flex: 0 0 auto;
-    }
-    
-    #${panel.id} .fixed-size-bar {
-      display: flex;
-      align-items: center;
-      margin-left: 15px;
-      margin-right: auto;
-    }
-    
-    /* אזור התוכן - הכי חשוב */
-    #${panel.id} .panel-content {
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    
-    /* אזור השיחה - חלוקה נכונה */
-    #${panel.id} .conversation-area {
-      flex: 1 1 auto;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    
-    /* הודעות בשיחה */
-    #${panel.id} .assistant-message {
-      align-self: flex-start;
-      max-width: 85%;
-    }
-    
-    #${panel.id} .user-message {
-      align-self: flex-end;
-      max-width: 85%;
-    }
-    
-    /* תיבת קלט תמיד בתחתית */
-    #${panel.id} .input-container {
-      flex: 0 0 auto;
-      border-top: 1px solid #3d3d3d;
-      padding: 12px 16px;
-      background-color: #1f1f1f;
-    }
-    
-    /* תצוגות גודל מוגדרות מראש */
-    #${panel.id}.portrait-mode {
-      width: 320px !important;
-      height: 90vh !important;
-      position: fixed !important;
-      right: 0 !important;
-      top: 0 !important;
-      border-radius: 0 0 0 8px !important;
-    }
-    
-    #${panel.id}.small-mode {
-      width: 320px !important;
-      height: 400px !important;
-    }
-    
-    #${panel.id}.medium-mode {
-      width: 450px !important;
-      height: 550px !important;
-    }
-    
-    #${panel.id}.large-mode {
-      width: 650px !important;
-      height: 700px !important;
-    }
-    
-    #${panel.id}.wide-mode {
-      width: 85vw !important;
-      height: 550px !important;
-    }
-    
-    #${panel.id}.full-mode {
-      width: 80vw !important;
-      height: 80vh !important;
-    }
-    
-    /* התאמות למצב בהיר */
-    #${panel.id}.light .input-container {
-      background-color: #ffffff;
-      border-top: 1px solid #dadce0;
-    }
-    
-    #${panel.id}.light .current-size-button {
-      color: #1a73e8;
-    }
-    
-    #${panel.id}.light .current-size-button:hover {
-      background-color: rgba(26, 115, 232, 0.1);
-    }
-    
-    #${panel.id}.light .size-menu {
-      background-color: rgba(255, 255, 255, 0.95);
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-      border: 1px solid rgba(0, 0, 0, 0.1);
-    }
-    
-    #${panel.id}.light .size-option {
-      color: #202124;
-    }
-    
-    #${panel.id}.light .size-option:hover {
-      background-color: rgba(26, 115, 232, 0.05);
-    }
-    
-    /* מחוון שינוי גודל בולט בפינה */
-    #${panel.id}::after {
-      content: '';
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 20px;
-      height: 20px;
-      cursor: nwse-resize;
-      background-color: transparent;
-      border-right: 10px solid rgba(138, 180, 248, 0.5);
-      border-bottom: 10px solid rgba(138, 180, 248, 0.5);
-      border-top: 10px solid transparent;
-      border-left: 10px solid transparent;
-    }
-    
-    #${panel.id}.light::after {
-      border-right: 10px solid rgba(26, 115, 232, 0.5);
-      border-bottom: 10px solid rgba(26, 115, 232, 0.5);
-    }
-  `;
-  document.head.appendChild(style);
-  
-  // הוספת טולטיפ המופיע כאשר העכבר מרחף מעל אזור שינוי הגודל
-  const resizeTooltip = document.createElement('div');
-  resizeTooltip.className = 'resize-tooltip';
-  resizeTooltip.textContent = 'Drag to resize';
-  panel.appendChild(resizeTooltip);
-  
-  // יצירת אירוע מעבר עכבר על אזור שינוי הגודל להצגת הטולטיפ
-  const cornerArea = document.createElement('div');
-  cornerArea.style.position = 'absolute';
-  cornerArea.style.bottom = '0';
-  cornerArea.style.right = '0';
-  cornerArea.style.width = '30px';
-  cornerArea.style.height = '30px';
-  cornerArea.style.zIndex = '9998';
-  cornerArea.style.backgroundColor = 'transparent';
-  cornerArea.style.cursor = 'nwse-resize';
-  
-  cornerArea.addEventListener('mouseenter', () => {
-    resizeTooltip.style.opacity = '1';
-    resizeTooltip.style.transform = 'translateX(0)';
-  });
-  
-  cornerArea.addEventListener('mouseleave', () => {
-    resizeTooltip.style.opacity = '0';
-    resizeTooltip.style.transform = 'translateX(10px)';
-  });
-  
-  panel.appendChild(cornerArea);
-  
-  // הוספת סרגל כפתורים עם תבניות גודל מוגדרות מראש
-  const presetSizesBar = document.createElement('div');
-  presetSizesBar.className = 'preset-sizes-bar';
-  presetSizesBar.style.position = 'absolute';
-  presetSizesBar.style.bottom = '45px';
-  presetSizesBar.style.right = '20px';
-  presetSizesBar.style.display = 'flex';
-  presetSizesBar.style.flexDirection = 'row';
-  presetSizesBar.style.gap = '6px';
-  presetSizesBar.style.zIndex = '10002';
-  presetSizesBar.style.opacity = '0';
-  presetSizesBar.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-  presetSizesBar.style.padding = '6px 8px';
-  presetSizesBar.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
-  presetSizesBar.style.borderRadius = '6px';
-  presetSizesBar.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
-  presetSizesBar.style.transform = 'translateY(10px)';
-  
-  // הוספת כותרת קטנה
-  const presetLabel = document.createElement('div');
-  presetLabel.textContent = 'Size:';
-  presetLabel.style.fontSize = '11px';
-  presetLabel.style.color = '#5f6368';
-  presetLabel.style.marginRight = '8px';
-  presetLabel.style.display = 'flex';
-  presetLabel.style.alignItems = 'center';
-  presetSizesBar.appendChild(presetLabel);
-  
-  // הגדרת התצוגות המוגדרות מראש עם מידות מעודכנות
-  const presets = [
-    { name: 'Small', width: '320px', height: '400px' },
-    { name: 'Medium', width: '450px', height: '550px' },
-    { name: 'Tall', width: '380px', height: '85vh' },
-    { name: 'Wide', width: '85vw', height: '600px' },
-    { name: 'Large', width: '80vw', height: '80vh' }
-  ];
-  
-  // יצירת הכפתורים עבור כל תצוגה מוגדרת מראש
-  presets.forEach((preset, index) => {
-    const button = document.createElement('button');
-    button.className = 'preset-size-button';
-    button.title = preset.name;
-    button.style.width = '28px';
-    button.style.height = '28px';
-    button.style.padding = '0';
-    button.style.border = '1px solid rgba(138, 180, 248, 0.3)';
-    button.style.backgroundColor = 'rgba(241, 243, 244, 0.8)';
-    button.style.borderRadius = '4px';
-    button.style.cursor = 'pointer';
-    button.style.display = 'flex';
-    button.style.alignItems = 'center';
-    button.style.justifyContent = 'center';
-    button.style.position = 'relative';
-    button.style.boxShadow = 'none';
-    button.style.transition = 'all 0.2s ease';
-    button.style.margin = '0';
-    
-    // הוספת אייקון ייחודי לכל כפתור
-    const createIcon = () => {
-      const iconElement = document.createElement('div');
-      
-      if (index === 0) { // Small
-        iconElement.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="4" y="4" width="8" height="8" stroke="#1a73e8" stroke-width="2" fill="none"/>
-          </svg>
-        `;
-      } 
-      else if (index === 1) { // Medium
-        iconElement.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="3" y="3" width="10" height="10" stroke="#1a73e8" stroke-width="2" fill="none"/>
-          </svg>
-        `;
-      }
-      else if (index === 2) { // Tall
-        iconElement.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="5" y="1" width="6" height="14" stroke="#1a73e8" stroke-width="2" fill="none"/>
-          </svg>
-        `;
-      }
-      else if (index === 3) { // Wide
-        iconElement.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="5" width="14" height="6" stroke="#1a73e8" stroke-width="2" fill="none"/>
-          </svg>
-        `;
-      }
-      else if (index === 4) { // Large
-        iconElement.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="1" width="14" height="14" stroke="#1a73e8" stroke-width="2" fill="none"/>
-          </svg>
-        `;
-      }
-      return iconElement;
-    };
-    
-    button.appendChild(createIcon());
-    
-    // הוספת אירוע לחיצה שמשנה את גודל הפאנל
-    button.addEventListener('click', () => {
-      panel.style.width = preset.width;
-      panel.style.height = preset.height;
-      
-      // מציין את הכפתור הנבחר
-      document.querySelectorAll('.preset-size-button').forEach(btn => {
-        btn.classList.remove('selected');
-      });
-      button.classList.add('selected');
-    });
-    
-    // הוספת אירועי hover
-    button.addEventListener('mouseenter', () => {
-      if (!button.classList.contains('selected')) {
-        button.style.backgroundColor = 'rgba(232, 240, 254, 0.8)';
-      }
-    });
-    
-    button.addEventListener('mouseleave', () => {
-      if (!button.classList.contains('selected')) {
-        button.style.backgroundColor = 'rgba(241, 243, 244, 0.8)';
-      }
-    });
-    
-    presetSizesBar.appendChild(button);
-  });
-  
-  panel.appendChild(presetSizesBar);
-  
-  // הפעלת הכפתור השני (Medium) כברירת מחדל
-  setTimeout(() => {
-    const defaultButton = presetSizesBar.querySelectorAll('.preset-size-button')[1] as HTMLElement;
-    if (defaultButton) {
-      defaultButton.click();
-    }
-  }, 100);
-  
-  // סידור מחדש של הפאנל והוספת סרגל הגדלים כחלק קבוע בתחתית הפאנל
-  const createFixedSizeBar = () => {
-    // הסרת סרגל הגדלים הקודם
-    if (panel.contains(presetSizesBar)) {
-      panel.removeChild(presetSizesBar);
-    }
-    
-    // הגדרת התצוגות עם דגש על מראה ויזואלי
-    const sizes = [
-      { name: 'portrait', width: '320px', height: '90vh', icon: 'portrait', position: 'right: 0; top: 0;' },
-      { name: 'small', width: '320px', height: '400px', icon: 'small', position: '' },
-      { name: 'medium', width: '450px', height: '550px', icon: 'medium', position: '' }
-    ];
-    
-    // יצירת האייקונים החזותיים לכל גודל
-    const getIcon = (type: string) => {
-      const icon = document.createElement('div');
-      icon.style.width = '16px';
-      icon.style.height = '16px';
-      icon.style.display = 'flex';
-      icon.style.alignItems = 'center';
-      icon.style.justifyContent = 'center';
-      
-      let svgContent = '';
-      
-      switch (type) {
-        case 'portrait':
-          // אייקון תצוגה לאורך
-          svgContent = `
-            <svg width="12" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="7" y="3" width="10" height="18" rx="1"></rect>
-            </svg>
-          `;
-          break;
-        case 'small':
-          // אייקון תצוגה קטנה
-          svgContent = `
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="8" y="8" width="8" height="8" rx="1"></rect>
-            </svg>
-          `;
-          break;
-        case 'medium':
-          // אייקון תצוגה בינונית
-          svgContent = `
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="6" y="6" width="12" height="12" rx="1"></rect>
-            </svg>
-          `;
-          break;
-        case 'large':
-          // אייקון תצוגה גדולה
-          svgContent = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="4" y="4" width="16" height="16" rx="1"></rect>
-            </svg>
-          `;
-          break;
-        case 'wide':
-          // אייקון תצוגה רחבה
-          svgContent = `
-            <svg width="14" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="10" rx="1"></rect>
-            </svg>
-          `;
-          break;
-        case 'full':
-          // אייקון תצוגה מלאה
-          svgContent = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="2" width="20" height="20" rx="1"></rect>
-              <line x1="7" y1="2" x2="7" y2="22" stroke="currentColor" stroke-width="1"></line>
-              <line x1="17" y1="2" x2="17" y2="22" stroke="currentColor" stroke-width="1"></line>
-              <line x1="2" y1="7" x2="22" y2="7" stroke="currentColor" stroke-width="1"></line>
-              <line x1="2" y1="17" x2="22" y2="17" stroke="currentColor" stroke-width="1"></line>
-            </svg>
-          `;
-          break;
-      }
-      
-      icon.innerHTML = svgContent;
-      return icon;
-    };
-    
-    // כפתור גודל קבוע בשורת הכותרת
-    const fixedSizeBar = document.createElement('div');
-    fixedSizeBar.className = 'fixed-size-bar';
-    fixedSizeBar.style.position = 'relative';
-    fixedSizeBar.style.display = 'flex';
-    fixedSizeBar.style.alignItems = 'center';
-    fixedSizeBar.style.justifyContent = 'center';
-    fixedSizeBar.style.zIndex = '10002';
-    
-    // יצירת כפתור יחיד להצגת הגודל הנוכחי
-    const currentSizeBtn = document.createElement('button');
-    currentSizeBtn.className = 'current-size-button';
-    currentSizeBtn.style.background = 'none';
-    currentSizeBtn.style.border = 'none';
-    currentSizeBtn.style.color = '#8ab4f8';
-    currentSizeBtn.style.display = 'flex';
-    currentSizeBtn.style.alignItems = 'center';
-    currentSizeBtn.style.justifyContent = 'center';
-    currentSizeBtn.style.cursor = 'pointer';
-    currentSizeBtn.style.padding = '4px';
-    
-    // יצירת תפריט נפתח (מוסתר תחילה)
-    const sizeMenu = document.createElement('div');
-    sizeMenu.className = 'size-menu';
-    sizeMenu.style.position = 'absolute';
-    sizeMenu.style.top = '100%';
-    sizeMenu.style.left = '0';
-    sizeMenu.style.backgroundColor = 'rgba(32, 33, 36, 0.9)';
-    sizeMenu.style.borderRadius = '4px';
-    sizeMenu.style.padding = '4px';
-    sizeMenu.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.3)';
-    sizeMenu.style.display = 'none';
-    sizeMenu.style.flexDirection = 'column';
-    sizeMenu.style.zIndex = '10003';
-    sizeMenu.style.gap = '2px';
-    
-    // פונקציה לעדכון הכפתור הנוכחי
-    const updateCurrentButton = (selectedSize: { name: string, icon: string }) => {
-      currentSizeBtn.innerHTML = '';
-      currentSizeBtn.title = `${selectedSize.name} view (click to change)`;
-      
-      const iconElement = getIcon(selectedSize.icon);
-      currentSizeBtn.appendChild(iconElement);
-      
-      // הוספת אייקון חץ קטן לידיעה שיש תפריט
-      const arrowIcon = document.createElement('div');
-      arrowIcon.innerHTML = `
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M6 9l6 6 6-6"></path>
-        </svg>
-      `;
-      arrowIcon.style.marginLeft = '2px';
-      currentSizeBtn.appendChild(arrowIcon);
-    };
-    
-    // אירוע לחיצה על הכפתור - פתיחת התפריט
-    currentSizeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      
-      // החלפת מצב התצוגה של התפריט
-      if (sizeMenu.style.display === 'none') {
-        sizeMenu.style.display = 'flex';
-        // סגירת התפריט בלחיצה מחוץ לאזור
-        const closeMenu = (event: MouseEvent) => {
-          if (!sizeMenu.contains(event.target as Node) && !currentSizeBtn.contains(event.target as Node)) {
-            sizeMenu.style.display = 'none';
-            document.removeEventListener('click', closeMenu);
-          }
-        };
-        // התחשבות בעובדה שהלחיצה הנוכחית לא תסגור את התפריט
-        setTimeout(() => {
-          document.addEventListener('click', closeMenu);
-        }, 0);
-      } else {
-        sizeMenu.style.display = 'none';
-      }
-    });
-    
-    // הוספת כל אפשרויות הגודל לתפריט
-    sizes.forEach((size, index) => {
-      const sizeOption = document.createElement('button');
-      sizeOption.className = 'size-option';
-      sizeOption.title = `${size.name} view`;
-      sizeOption.style.background = 'none';
-      sizeOption.style.border = 'none';
-      sizeOption.style.width = 'auto';
-      sizeOption.style.height = '28px';
-      sizeOption.style.padding = '4px 8px';
-      sizeOption.style.color = '#9aa0a6';
-      sizeOption.style.cursor = 'pointer';
-      sizeOption.style.display = 'flex';
-      sizeOption.style.alignItems = 'center';
-      sizeOption.style.borderRadius = '3px';
-      sizeOption.style.whiteSpace = 'nowrap';
-      
-      // הוספת האייקון והטקסט
-      const iconElement = getIcon(size.icon);
-      sizeOption.appendChild(iconElement);
-      
-      // הוספת טקסט השם
-      const nameElement = document.createElement('span');
-      nameElement.textContent = size.name;
-      nameElement.style.marginLeft = '8px';
-      nameElement.style.fontSize = '12px';
-      sizeOption.appendChild(nameElement);
-      
-      // לחיצה על אפשרות בתפריט
-      sizeOption.addEventListener('click', () => {
-        // שינוי גודל הפאנל
-        panel.style.width = size.width;
-        panel.style.height = size.height;
-        
-        // Reset position for all sizes except portrait
-        if (size.name !== 'portrait') {
-          // Maintain current position if already set
-          if (!panel.style.left || !panel.style.top) {
-            // Center the panel initially if no position is set
-            const viewportWidth = window.innerWidth;
-            const viewportHeight = window.innerHeight;
-            const panelWidth = parseInt(size.width, 10) || 320;
-            const panelHeight = parseInt(size.height, 10) || 400;
-            
-            panel.style.left = `${Math.max(0, (viewportWidth - panelWidth) / 2)}px`;
-            panel.style.top = `${Math.max(0, (viewportHeight - panelHeight) / 2)}px`;
-          }
-          // Ensure we use left/top positioning
-          panel.style.right = 'auto';
-          panel.style.bottom = 'auto';
-        } else {
-          // For portrait mode, set position at right edge
-          panel.style.right = '0';
-          panel.style.top = '0';
-          panel.style.left = 'auto';
-          panel.style.bottom = 'auto';
-        }
-        
-        // Update conversation container height
-        const conversationContainer = panel.querySelector('.conversation-container') as HTMLElement;
-        if (conversationContainer) {
-          const headerHeight = panel.querySelector('.panel-header')?.clientHeight || 50;
-          const inputAreaHeight = panel.querySelector('.input-area')?.clientHeight || 130;
-          const newConversationHeight = parseInt(size.height.replace('px', '').replace('vh', '') || '400', 10) * (size.height.includes('vh') ? window.innerHeight / 100 : 1) - headerHeight - inputAreaHeight;
-          conversationContainer.style.height = `${Math.max(100, newConversationHeight)}px`;
-        }
-        
-        // הסרת כל מחלקות גודל קודמות
-        panel.classList.remove('portrait-mode', 'small-mode', 'medium-mode', 'large-mode', 'wide-mode', 'full-mode');
-        
-        // הוספת מחלקה ספציפית לגודל הנוכחי
-        panel.classList.add(`${size.name}-mode`);
-        
-        // עדכון הכפתור הנוכחי
-        updateCurrentButton(size);
-        
-        // Make sure panel stays within viewport boundaries
-        ensurePanelInViewport();
-        
-        // סגירת התפריט
-        sizeMenu.style.display = 'none';
-      });
-      
-      // אירועי hover
-      sizeOption.addEventListener('mouseenter', () => {
-        sizeOption.style.backgroundColor = 'rgba(138, 180, 248, 0.1)';
-        sizeOption.style.color = '#e8eaed';
-      });
-      
-      sizeOption.addEventListener('mouseleave', () => {
-        sizeOption.style.backgroundColor = 'transparent';
-        sizeOption.style.color = '#9aa0a6';
-      });
-      
-      sizeMenu.appendChild(sizeOption);
-      
-      // הגדרת ברירת המחדל לאפשרות השלישית (medium)
-      if (index === 2) {
-        setTimeout(() => {
-          sizeOption.click();
-        }, 50);
-      }
-    });
-    
-    // הוספת הכפתור והתפריט
-    fixedSizeBar.appendChild(currentSizeBtn);
-    fixedSizeBar.appendChild(sizeMenu);
-    
-    return fixedSizeBar;
-  };
-  
-  // הוספת סרגל הגדלים הקבוע לפאנל
-  const fixedSizeBar = createFixedSizeBar();
-  
-  // לאחר יצירת ה-HTML
-  setTimeout(() => {
-    // זיהוי אזור הכותרת והכפתור הקיים
-    const panelHeader = panel.querySelector('.panel-header');
-    const controlsContainer = panel.querySelector('.panel-controls');
-    
-    if (panelHeader && controlsContainer) {
-      // הוספת סרגל שינוי הגודל לפני אזור הבקרה
-      panelHeader.insertBefore(fixedSizeBar, controlsContainer);
-      
-      // התאמת סגנון הכפתורים לשורת הכותרת
-      fixedSizeBar.style.position = 'relative';
-      fixedSizeBar.style.top = 'auto';
-      fixedSizeBar.style.right = 'auto';
-      fixedSizeBar.style.height = '24px';
-      fixedSizeBar.style.margin = '0 auto 0 20px';
-      
-      // התאמות נוספות למראה בשורת הכותרת
-      const buttons = fixedSizeBar.querySelectorAll('button');
-      buttons.forEach(button => {
-        (button as HTMLElement).style.height = '24px';
-      });
-    } else {
-      // גיבוי במקרה שהמבנה שונה
-      panel.appendChild(fixedSizeBar);
-    }
-    
-    // הפעלת הגודל הבינוני כברירת מחדל
-    const mediumButton = fixedSizeBar.querySelectorAll('.size-option')[2] as HTMLElement;
-    if (mediumButton) {
-      mediumButton.click();
-    }
-
-    // הוספת האזנה לשינויי גודל החלון
-    window.addEventListener('resize', () => {
-      // אם הפאנל במצב אורך, עדכן את הגובה שלו
-      if (panel.classList.contains('portrait-mode')) {
-        panel.style.height = '90vh';
-      }
-    });
-    
-    // האזנה לשינויי גודל באמצעות ResizeObserver
-    if (window.ResizeObserver) {
-      const resizeObserver = new ResizeObserver(() => {
-        // אפשר להשאיר ריק - הפריסה הגמישה שלנו תטפל בהכל
-      });
-      resizeObserver.observe(panel);
-    }
-  }, 200);
-  
-  // הצגת סרגל הכפתורים כאשר העכבר מרחף מעל הפינה של הפאנל
-  cornerArea.addEventListener('mouseenter', () => {
-    presetSizesBar.style.opacity = '1';
-    presetSizesBar.style.transform = 'translateY(0)';
-  });
-  
-  panel.addEventListener('mouseleave', () => {
-    presetSizesBar.style.opacity = '0';
-    presetSizesBar.style.transform = 'translateY(10px)';
-    resizeTooltip.style.opacity = '0';
-  });
-  
-  // יצירת היסטוריית שיחה
-  const conversationHistory: Array<{role: 'user' | 'assistant', content: string}> = [];
-  
-  // הוספת מחלקת כהה/בהיר לפי הגדרות המערכת
-  const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  panel.classList.add(isDarkMode ? 'dark' : 'light');
-  
-  // האזנה לשינויים במצב כהה/בהיר
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-    panel.classList.remove('dark', 'light');
-    panel.classList.add(e.matches ? 'dark' : 'light');
-  });
-  
-  // HTML מעודכן לדמיון ל-Gemini של גוגל
+  // Create panel HTML structure
   panel.innerHTML = `
-    <div class="panel-header draggable" title="Drag to move">
-      <h3 class="panel-title">WordStream Assistant</h3>
-      <div class="panel-controls">
-        <button class="theme-toggle-button" title="Toggle light/dark mode">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="5"></circle>
-            <line x1="12" y1="1" x2="12" y2="3"></line>
-            <line x1="12" y1="21" x2="12" y2="23"></line>
-            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-            <line x1="1" y1="12" x2="3" y2="12"></line>
-            <line x1="21" y1="12" x2="23" y2="12"></line>
-            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-          </svg>
+    <div class="panel-header">
+      <h3>AI Assistant</h3>
+      <div class="header-controls">
+        <div class="size-controls">
+          <button class="size-button size-small" title="Small size">S</button>
+          <button class="size-button size-medium active" title="Medium size">M</button>
+          <button class="size-button size-large" title="Large size">L</button>
+        </div>
+        <button class="toggle-theme" title="Toggle dark/light mode">
+          ${isDarkMode ? 
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>' : 
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>'
+          }
         </button>
         <button class="close-button" title="Close">&times;</button>
       </div>
     </div>
     <div class="panel-content">
-      <div id="gemini-conversation-area" class="conversation-area">
-        <div class="gemini-message assistant-message welcome-message">
-          Hi there! I'm your friendly WordStream assistant, here to help you learn and discover new things in a fun way. Ask me anything about this video or any general questions you have.
+      <div class="messages-container" id="messages-container">
+        <div class="welcome-message">
+          <div class="welcome-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+          </div>
+          <h3>Ask about the video content</h3>
+          <p>Example: "What does this expression mean?" or "Explain the historical context"</p>
         </div>
       </div>
-      <div class="input-container">
-        <textarea id="gemini-input" placeholder="Ask me anything..." rows="1"></textarea>
-        <button id="gemini-send-button" class="send-button" disabled>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-            <path d="M2.5 12L4.25 10.25L9.5 15.5L19.75 5.25L21.5 7L9.5 19L2.5 12Z" fill="currentColor"></path>
-          </svg>
-        </button>
-      </div>
-      <div id="gemini-error" class="error-message" style="display: none;"></div>
+    </div>
+    <div class="panel-footer">
+      <textarea id="user-input" placeholder="Type your question..."></textarea>
+      <button id="send-button" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path>
+        </svg>
+      </button>
     </div>
   `;
   
-  // הוספת event listener לכפתור הסגירה
-  panel.querySelector('.close-button')?.addEventListener('click', () => {
-    panel.style.display = 'none';
-  });
-
-  // הוספת event listener למעבר בין לייט מוד לדארק מוד
-  panel.querySelector('.theme-toggle-button')?.addEventListener('click', () => {
-    // הסרת השינוי הגלובלי
-    panel.classList.toggle('light-mode');
+  // Apply styles to panel components
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = `
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid ${isDarkMode ? '#333333' : '#E0E0E0'};
+      background-color: ${isDarkMode ? '#1E1E1E' : '#F0F2F5'};
+      cursor: move;
+    }
     
-    // שינוי ישיר של צבע הכותרת
-    const titleElement = panel.querySelector('h3');
-    if (titleElement) {
-      if (panel.classList.contains('light-mode')) {
-        titleElement.style.color = '#202124';
-      } else {
-        titleElement.style.color = '';
+    .panel-header h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: ${isDarkMode ? '#FFFFFF' : '#050505'};
+    }
+    
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .size-controls {
+      display: flex;
+      border: 1px solid ${isDarkMode ? '#444' : '#ddd'};
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    
+    .size-button {
+      background: ${isDarkMode ? '#333' : '#eee'};
+      border: none;
+      color: ${isDarkMode ? '#ccc' : '#666'};
+      width: 24px;
+      height: 24px;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+    }
+    
+    .size-button.active {
+      background: ${isDarkMode ? '#6366F1' : '#6366F1'};
+      color: white;
+    }
+    
+    .toggle-theme, .close-button {
+      background: transparent;
+      border: none;
+      color: ${isDarkMode ? '#FFFFFF' : '#050505'};
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+    }
+    
+    .close-button {
+      font-size: 20px;
+      font-weight: bold;
+    }
+    
+    .panel-content {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 16px;
+      background-color: ${isDarkMode ? '#121212' : '#FFFFFF'};
+      color: ${isDarkMode ? '#FFFFFF' : '#050505'};
+      padding-bottom: 120px; /* גובה מספק לחשיפת ההודעה האחרונה במלואה */
+    }
+    
+    .messages-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding-bottom: 30px; /* מרווח נוסף בתחתית */
+    }
+    
+    .welcome-message {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 24px 16px;
+      color: ${isDarkMode ? '#CCCCCC' : '#666666'};
+    }
+    
+    .welcome-icon {
+      margin-bottom: 16px;
+      color: ${isDarkMode ? '#AAAAAA' : '#888888'};
+    }
+    
+    .welcome-message h3 {
+      margin: 0 0 8px 0;
+      color: ${isDarkMode ? '#FFFFFF' : '#050505'};
+    }
+    
+    .welcome-message p {
+      margin: 0;
+      font-size: 14px;
+    }
+    
+    .message {
+      padding: 12px 16px;
+      border-radius: 12px;
+      max-width: 85%;
+    }
+    
+    .message.user {
+      align-self: flex-end;
+      background-color: #6366F1;
+      color: white;
+    }
+    
+    .message.ai {
+      align-self: flex-start;
+      background-color: ${isDarkMode ? '#1E1E1E' : '#F0F2F5'};
+      color: ${isDarkMode ? '#FFFFFF' : '#050505'};
+    }
+    
+    .panel-footer {
+      padding: 12px 16px;
+      border-top: 1px solid #eaeaea;
+      background-color: #f9f9f9;
+    }
+    
+    #user-input {
+      flex-grow: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      border-radius: 20px;
+      font-size: 14px;
+      resize: none;
+      outline: none;
+      min-height: 24px;
+      max-height: 120px;
+    }
+    
+    #user-input:focus {
+      outline: none;
+      border-color: #6366F1;
+    }
+    
+    #send-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: none;
+      background-color: #6366F1;
+      color: white;
+      cursor: pointer;
+    }
+    
+    #send-button:disabled {
+      background-color: ${isDarkMode ? '#444' : '#ddd'};
+      color: ${isDarkMode ? '#888' : '#aaa'};
+      cursor: not-allowed;
+    }
+    
+    .loading-spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s linear infinite;
+    }
+    
+    /* עיצוב משופר לכפתורי הפיצ'רים */
+    .wordstream-floating-button {
+      width: 50px !important;
+      height: 50px !important;
+      border-radius: 50% !important;
+      background-color: rgba(235, 245, 255, 0.95) !important;
+      border: 2px solid rgba(59, 130, 246, 0.3) !important;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.12), 0 0 0 3px rgba(59, 130, 246, 0.05) !important;
+      cursor: pointer !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+    }
+    
+    .wordstream-floating-button:hover {
+      transform: scale(1.12) translateY(-2px) !important;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.15), 0 0 0 4px rgba(59, 130, 246, 0.15) !important;
+      background-color: rgba(224, 242, 254, 0.98) !important;
+      border: 2px solid rgba(59, 130, 246, 0.5) !important;
+    }
+    
+    .wordstream-floating-button:active {
+      transform: scale(0.95) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    }
+    
+    .wordstream-floating-button img {
+      width: 26px !important;
+      height: 26px !important;
+    }
+    
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
       }
     }
-  });
+  `;
+  panel.appendChild(styleSheet);
   
-  // הוספת אפשרות הזזת החלון (גרירה)
-  const draggableHeader = panel.querySelector('.panel-header.draggable');
-  if (draggableHeader) {
-    draggableHeader.addEventListener('mousedown', (e) => {
-      // אם הקליקו על אחד הכפתורים - לא נפעיל גרירה
-      if ((e.target as HTMLElement).closest('button')) return;
-      
-      const mouseEvent = e as MouseEvent;
-      mouseEvent.preventDefault();
-      mouseEvent.stopPropagation();
-      
-      // Debug
-      console.log('Starting drag from header');
-      
-      // מיקום התחלתי
-      const startX = mouseEvent.clientX;
-      const startY = mouseEvent.clientY;
-      
-      // נשמור את המיקום הנוכחי - משתמשים ב-getComputedStyle לקבלת המיקום האמיתי
-      const computedStyle = window.getComputedStyle(panel);
-      
-      let startLeft = parseInt(panel.style.left || '0', 10);
-      if (startLeft === 0 && computedStyle.left !== 'auto') {
-        startLeft = parseInt(computedStyle.left, 10);
+  // Set event handlers
+  
+  // 1. Make the panel draggable
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+  
+  const header = panel.querySelector('.panel-header') as HTMLElement;
+  
+  if (header) {
+    header.addEventListener('mousedown', (e) => {
+      // Only initiate drag if not clicking on a control
+      if (!(e.target as HTMLElement).closest('button')) {
+        isDragging = true;
+        offsetX = e.clientX - panel.getBoundingClientRect().left;
+        offsetY = e.clientY - panel.getBoundingClientRect().top;
       }
-      
-      let startTop = parseInt(panel.style.top || '0', 10);
-      if (startTop === 0 && computedStyle.top !== 'auto') {
-        startTop = parseInt(computedStyle.top, 10);
-      }
-      
-      // Debug
-      console.log(`Initial position: left=${startLeft}, top=${startTop}`);
-      console.log(`Initial mouse: x=${startX}, y=${startY}`);
-      
-      // עדכון מיקום בזמן גרירה
-      const handleDrag = (moveEvent: MouseEvent) => {
-        const dx = moveEvent.clientX - startX;
-        const dy = moveEvent.clientY - startY;
-        
-        let newLeft = startLeft + dx;
-        let newTop = startTop + dy;
-        
-        // Ensure panel stays within screen boundaries
-        const viewportWidth = window.innerWidth;
-        const viewportHeight = window.innerHeight;
-        const panelWidth = panel.offsetWidth;
-        const panelHeight = panel.offsetHeight;
-        
-        // Prevent panel from going off-screen
-        newLeft = Math.max(0, Math.min(newLeft, viewportWidth - panelWidth));
-        newTop = Math.max(0, Math.min(newTop, viewportHeight - panelHeight));
-        
-        // Always use left/top for positioning during drag
-        panel.style.left = `${newLeft}px`;
-        panel.style.top = `${newTop}px`;
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-        
-        // Reset any size-based positioning classes to allow free movement
-        if (panel.classList.contains('portrait-mode')) {
-          panel.classList.remove('portrait-mode');
-          panel.classList.add('free-position-mode');
-        }
-        
-        // Debug info
-        console.log(`Dragging: newLeft=${newLeft}, newTop=${newTop}`);
-      };
-      
-      // סיום גרירה
-      const stopDrag = () => {
-        document.removeEventListener('mousemove', handleDrag);
-        document.removeEventListener('mouseup', stopDrag);
-        
-        // Debug
-        console.log('Drag ended');
-      };
-      
-      // הוספת מאזינים לאירועי עכבר גלובליים
-      document.addEventListener('mousemove', handleDrag);
-      document.addEventListener('mouseup', stopDrag);
     });
   }
   
-  // אפשרות שינוי גודל (משופר)
-  const resizeHandles = document.querySelectorAll('.resize-handle');
-  resizeHandles.forEach((handle) => {
-    const htmlHandle = handle as HTMLElement;
-    htmlHandle.addEventListener('mousedown', (e) => {
-      const mouseEvent = e as MouseEvent;
-      mouseEvent.preventDefault();
-      mouseEvent.stopPropagation();
-      
-      // Debug
-      console.log('Resize handle clicked', htmlHandle.className);
-      
-      // Add vibrant style to the handle to make it more noticeable
-      htmlHandle.style.backgroundColor = 'rgba(30, 144, 255, 0.3)';
-      
-      const direction = htmlHandle.getAttribute('data-direction') || '';
-      console.log('Resize direction:', direction);
-      
-      // Get current dimensions and position - use offsetWidth/Height for reliable size info
-      const startWidth = panel.offsetWidth;
-      const startHeight = panel.offsetHeight;
-      
-      // Get current position - try to get computed position if not set directly
-      const computedStyle = window.getComputedStyle(panel);
-      let startLeft = parseInt(panel.style.left || '0', 10);
-      if (startLeft === 0 && computedStyle.left !== 'auto') {
-        startLeft = parseInt(computedStyle.left, 10);
+  document.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+      panel.style.left = (e.clientX - offsetX) + 'px';
+      panel.style.top = (e.clientY - offsetY) + 'px';
+    }
+  });
+  
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+    ensurePanelInViewport();
+  });
+  
+  // 2. Theme toggling
+  const themeToggle = panel.querySelector('.toggle-theme');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      isDarkMode = !isDarkMode;
+      panel.className = `wordstream-panel gemini-panel ${isDarkMode ? 'dark' : 'light'}`;
+      updateThemeStyles();
+    });
+  }
+  
+  // 3. Size controls
+  const sizeButtons = panel.querySelectorAll('.size-button');
+  sizeButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      if (button.classList.contains('size-small')) {
+        updateSize('small');
+      } else if (button.classList.contains('size-medium')) {
+        updateSize('medium');
+      } else if (button.classList.contains('size-large')) {
+        updateSize('large');
       }
       
-      let startTop = parseInt(panel.style.top || '0', 10);
-      if (startTop === 0 && computedStyle.top !== 'auto') {
-        startTop = parseInt(computedStyle.top, 10);
-      }
-      
-      console.log(`Start resize: width=${startWidth}, height=${startHeight}, left=${startLeft}, top=${startTop}`);
-      
-      // Initial mouse position
-      const startX = mouseEvent.clientX;
-      const startY = mouseEvent.clientY;
-      
-      // Handle resize
-      const handleResize = (moveEvent: MouseEvent) => {
-        const dx = moveEvent.clientX - startX;
-        const dy = moveEvent.clientY - startY;
-        
-        let newWidth = startWidth;
-        let newHeight = startHeight;
-        let newLeft = parseInt(panel.style.left || '0', 10);
-        let newTop = parseInt(panel.style.top || '0', 10);
-        
-        // Ensure min dimensions
-        const minWidth = 300;
-        const minHeight = 400;
-        
-        // Ensure panel stays within screen boundaries
-        const viewportWidth = window.innerWidth;
-        const viewportHeight = window.innerHeight;
-        
-        // Handle different resize directions
-        if (direction.includes('e')) {
-          newWidth = Math.max(minWidth, startWidth + dx);
-          // Limit width to viewport
-          newWidth = Math.min(newWidth, viewportWidth - newLeft);
-        }
-        
-        if (direction.includes('w')) {
-          const widthChange = Math.min(dx, startWidth - minWidth);
-          newWidth = Math.max(minWidth, startWidth - widthChange);
-          newLeft = startLeft + widthChange;
-          
-          // Don't allow moving left edge beyond left edge of viewport
-          if (newLeft < 0) {
-            newLeft = 0;
-            newWidth = startWidth + startLeft;
-          }
-        }
-        
-        if (direction.includes('s')) {
-          newHeight = Math.max(minHeight, startHeight + dy);
-          // Limit height to viewport
-          newHeight = Math.min(newHeight, viewportHeight - newTop);
-        }
-        
-        if (direction.includes('n')) {
-          const heightChange = Math.min(dy, startHeight - minHeight);
-          newHeight = Math.max(minHeight, startHeight - heightChange);
-          newTop = startTop + heightChange;
-          
-          // Don't allow moving top edge beyond top edge of viewport
-          if (newTop < 0) {
-            newTop = 0;
-            newHeight = startHeight + startTop;
-          }
-        }
-        
-        // Apply new dimensions and position
-        panel.style.width = `${newWidth}px`;
-        panel.style.height = `${newHeight}px`;
-        panel.style.left = `${newLeft}px`;
-        panel.style.top = `${newTop}px`;
-        
-        // Update conversation container height
-        const conversationContainer = panel.querySelector('.conversation-container') as HTMLElement;
-        if (conversationContainer) {
-          conversationContainer.style.height = `${newHeight - 180}px`;
-        }
-        
-        // Debug info
-        console.log(`Resizing: newWidth=${newWidth}, newHeight=${newHeight}, newLeft=${newLeft}, newTop=${newTop}`);
-      };
-      
-      // End resize
-      const stopResize = () => {
-        document.removeEventListener('mousemove', handleResize);
-        document.removeEventListener('mouseup', stopResize);
-        panel.classList.remove('resizing');
-        
-        // Reset handle style
-        htmlHandle.style.backgroundColor = '';
-        
-        // Debug
-        console.log('Resize ended');
-      };
-      
-      // Add class while resizing
-      panel.classList.add('resizing');
-      
-      // Add event listeners
-      document.addEventListener('mousemove', handleResize);
-      document.addEventListener('mouseup', stopResize);
+      // Update active state for buttons
+      sizeButtons.forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
     });
   });
   
-  document.body.appendChild(panel);
-  
-  // התאמת גובה שדה הטקסט באופן דינמי
-  function adjustTextareaHeight(textarea: HTMLTextAreaElement) {
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  // 4. Close button handler
+  const closeButton = panel.querySelector('.close-button');
+  if (closeButton) {
+    closeButton.addEventListener('click', () => {
+      panel.style.display = 'none';
+      const event = new CustomEvent('geminiPanelClosed');
+      document.dispatchEvent(event);
+    });
   }
   
-  // הפעלת/ביטול כפתור השליחה בהתבסס על תוכן הקלט
-  function toggleSendButton() {
-    const inputElement = document.getElementById('gemini-input') as HTMLTextAreaElement;
-    const sendButton = document.getElementById('gemini-send-button') as HTMLButtonElement;
+  // 5. Text input handling
+  const textInput = panel.querySelector('#user-input') as HTMLTextAreaElement;
+  const sendButton = panel.querySelector('#send-button') as HTMLButtonElement;
+  
+  if (textInput && sendButton) {
+    // Enable/disable send button based on input
+    textInput.addEventListener('input', () => {
+      sendButton.disabled = textInput.value.trim() === '';
+      adjustTextareaHeight(textInput);
+    });
     
-    if (inputElement && sendButton) {
-      sendButton.disabled = inputElement.value.trim() === '';
+    // Auto-adjust height of textarea
+    function adjustTextareaHeight(textarea: HTMLTextAreaElement) {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     }
+    
+    // Handle sending message
+    sendButton.addEventListener('click', sendMessage);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
   }
   
-  // פונקציה לעטיפה בטוחה של הצגת שגיאות
-  function safeStringifyError(error: any): string {
-    if (!error) return 'Unknown error occurred';
+  // Function to handle sending messages
+  async function sendMessage() {
+    if (!textInput || textInput.value.trim() === '') return;
+    
+    const userMessage = textInput.value.trim();
+    textInput.value = '';
+    textInput.style.height = 'auto';
+    sendButton.disabled = true;
+    
+    // Add user message to UI
+    addMessage(userMessage, 'user');
+    
+    // Add loading indicator
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'loading-indicator';
+    loadingIndicator.innerHTML = `
+      <div class="spinner"></div>
+      <div>Processing...</div>
+    `;
+    const messagesContainer = panel.querySelector('.messages-container');
+    if (messagesContainer) {
+      messagesContainer.appendChild(loadingIndicator);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
     
     try {
-      if (typeof error === 'string') return error;
+      // Get video information
+      const videoId = getVideoId();
+      const videoTitle = document.title;
       
-      if (error instanceof Error) {
-        return error.message || error.toString();
-      }
-      
-      if (typeof error === 'object') {
-        // מנסה להוציא מידע שימושי מאובייקט השגיאה
-        const message = error.message || error.error || error.description;
-        return typeof message === 'string' ? message : 'Error: ' + JSON.stringify(error, null, 2);
-      }
-      
-      return String(error);
-    } catch (e) {
-      return 'Error occurred (cannot display details)';
-    }
-  }
-  
-  // פונקציה להצגת הודעת שגיאה בפאנל
-  function showError(error: any) {
-    const errorElement = document.getElementById('gemini-error');
-    if (errorElement) {
-      const errorMessage = safeStringifyError(error);
-      errorElement.textContent = `Error: ${errorMessage}`;
-      errorElement.style.display = 'block';
-      
-      // הסתרת השגיאה אחרי 8 שניות
-      setTimeout(() => {
-        errorElement.style.display = 'none';
-      }, 8000);
-    }
-  }
-  
-  // פונקציה לשליחת הודעה - עם תמיכה בשמירת היסטוריה
-  const sendMessage = async () => {
-    const inputElement = document.getElementById('gemini-input') as HTMLTextAreaElement;
-    const conversationArea = document.getElementById('gemini-conversation-area');
-    
-    if (!inputElement || !conversationArea) {
-      showError('UI elements not found. Please reload the page.');
-                return;
-              }
-
-    const userMessage = inputElement.value.trim();
-    if (!userMessage) return;
-    
-    // שמירת הטקסט המקורי לפני ניקוי של שדה הקלט
-    const originalMessage = userMessage;
-    
-    // ניקוי שדה הקלט אך לא מיד - רק אחרי שההודעה נשלחה בהצלחה
-    // כך שאם יש שגיאה, המשתמש לא יאבד את מה שכתב
-    
-    // הסתרת הודעת שגיאה קודמת אם קיימת
-    const errorElement = document.getElementById('gemini-error');
-    if (errorElement) {
-      errorElement.style.display = 'none';
-    }
-    
-    // הוספת הודעת המשתמש לאזור השיחה
-    const userMessageElement = document.createElement('div');
-    userMessageElement.className = 'gemini-message user-message';
-    userMessageElement.textContent = userMessage;
-    conversationArea.appendChild(userMessageElement);
-    
-    // הוספה להיסטוריית השיחה
-    conversationHistory.push({ role: 'user', content: userMessage });
-    
-    // שמירת ההיסטוריה מיד אחרי הוספת הודעת המשתמש
-    const videoId = getVideoId();
-    const videoTitle = document.title || 'YouTube Video';
-    saveConversationToStorage(videoId, videoTitle);
-    
-    // הצגת אינדיקטור "חושב..."
-    const thinkingElement = document.createElement('div');
-    thinkingElement.className = 'gemini-message assistant-message thinking';
-    thinkingElement.innerHTML = '<div class="spinner"></div> Thinking...';
-    conversationArea.appendChild(thinkingElement);
-    
-    // גלילה אוטומטית לחלק התחתון
-    conversationArea.scrollTop = conversationArea.scrollHeight;
-    
-    try {
-      let response;
-      
-      if (isChromeAPIAvailable()) {
-        try {
-          const videoId = getVideoId();
-          const videoTitle = document.title || 'YouTube Video';
-          
-          console.log('[WordStream] Sending message to Gemini:', {
-            action: 'gemini',
-            message: userMessage,
-            history: conversationHistory.slice(-30), // שליחת עד 30 הודעות אחרונות להקשר משופר
-            videoId,
-            videoTitle
-          });
-          
-          // שימוש בפונקציית שליחת ההודעות המשופרת
-          response = await sendMessageToBackground({
-            action: 'gemini',
-            message: userMessage,
-            history: conversationHistory.slice(-30), // שליחת עד 30 הודעות אחרונות להקשר משופר
-            videoId,
-            videoTitle
-          });
-          
-          // עכשיו כשהשליחה הצליחה, ניתן לנקות את שדה הקלט
-          inputElement.value = '';
-          adjustTextareaHeight(inputElement);
-          toggleSendButton();
-          
-          if (response && response.answer) {
-            // עדכון הודעת החשיבה בתשובה
-            thinkingElement.innerHTML = response.answer;
-            thinkingElement.className = 'gemini-message assistant-message';
-            
-            // הוספה להיסטוריית השיחה
-            conversationHistory.push({ role: 'assistant', content: response.answer });
-            
-            // שמירה למאגר הצ'אטים 
-            saveConversationToStorage(videoId, videoTitle);
-          } else {
-            console.warn('[WordStream] Invalid Gemini response:', response);
-            // שימוש בסימולציה כגיבוי
-            const simulatedResponse = getSimulatedResponse(userMessage);
-            thinkingElement.innerHTML = simulatedResponse;
-            thinkingElement.className = 'gemini-message assistant-message';
-            
-            // הוספה להיסטוריית השיחה
-            conversationHistory.push({ role: 'assistant', content: simulatedResponse });
-            
-            // שמירה למאגר הצ'אטים
-            saveConversationToStorage(videoId, videoTitle);
-          }
-        } catch (error) {
-          console.error('[WordStream] Error sending message to Gemini:', error);
-          
-          // הצגת השגיאה בממשק המשתמש
-          showError(error);
-          
-          // עדיין מספק תשובה מדומה כדי שהשיחה תוכל להמשיך
-          const simulatedResponse = getSimulatedResponse(userMessage);
-          thinkingElement.innerHTML = simulatedResponse;
-          thinkingElement.className = 'gemini-message assistant-message';
-          
-          // ניקוי שדה הקלט
-          inputElement.value = '';
-          adjustTextareaHeight(inputElement);
-          toggleSendButton();
-          
-          // הוספה להיסטוריית השיחה
-          conversationHistory.push({ role: 'assistant', content: simulatedResponse });
-          
-          // שמירה למאגר הצ'אטים
-          saveConversationToStorage(videoId, videoTitle);
-        }
-      } else {
-        console.warn('[WordStream] Chrome API not available for Gemini, using simulation');
-        
-        // ניקוי שדה הקלט
-        inputElement.value = '';
-        adjustTextareaHeight(inputElement);
-        toggleSendButton();
-        
-        // שימוש בסימולציה כשה-API אינו זמין
-        const simulatedResponse = getSimulatedResponse(userMessage);
-        thinkingElement.innerHTML = simulatedResponse;
-        thinkingElement.className = 'gemini-message assistant-message';
-        
-        // הוספה להיסטוריית השיחה
-        conversationHistory.push({ role: 'assistant', content: simulatedResponse });
-        
-        // שמירה למאגר הצ'אטים
-        saveConversationToStorage(videoId, videoTitle);
-      }
-    } catch (error) {
-      console.error('[WordStream] Error in Gemini panel:', error);
-      
-      // הצגת השגיאה בפאנל
-      showError(error);
-      
-      // עדכון הודעת החשיבה בהודעת שגיאה ידידותית
-      thinkingElement.innerHTML = "Sorry, there was an error processing your request. Please try again.";
-    }
-  };
-
-  // פונקציה לשמירת היסטוריית השיחה לאחסון של כרום
-  function saveConversationToStorage(videoId: string, videoTitle: string) {
-    // וודא שיש לנו את ה-API ואת המזהה של הסרטון וגם שיש הודעות לשמור
-    if (!isChromeAPIAvailable() || !videoId || conversationHistory.length === 0) {
-      console.warn('[WordStream] Cannot save conversation: Missing API, videoId or no messages');
-      return;
-    }
-
-    // לא לשמור שיחות עם הודעה אחת בלבד - זה לרוב שיחות חלקיות
-    // שמירה רק אם יש 3 הודעות לפחות (שאלה, תשובה, שאלה) כדי לשמור שיחות משמעותיות
-    if (conversationHistory.length < 3) {
-      console.log('[WordStream] Not saving conversation with less than 3 messages:', conversationHistory.length);
-      return;
-    }
-
-    console.log('[WordStream] Saving conversation to chats_storage:', {
-      videoId,
-      messageCount: conversationHistory.length
-    });
-
-    // יצירת אובייקט השיחה בפורמט המתאים ל-ChatConversation
-    const conversation = {
-      videoId,
-      videoTitle,
-      videoURL: window.location.href,
-      lastUpdated: new Date().toISOString(),
-      messages: conversationHistory
-    };
-
-    // שמירה ב-chats_storage
-    chrome.storage.local.get(['chats_storage'], (result) => {
-      if (chrome.runtime.lastError) {
-        console.error('[WordStream] Error getting chats_storage:', chrome.runtime.lastError);
-        return;
-      }
-
-      const chatsStorage = result.chats_storage || {};
-      
-      // עדכון או הוספת השיחה לסרטון זה
-      chatsStorage[videoId] = conversation;
-      
-      // שמירה חזרה לאחסון
-      chrome.storage.local.set({ chats_storage: chatsStorage }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('[WordStream] Error saving to chats_storage:', chrome.runtime.lastError);
-          return;
-        }
-        console.log('[WordStream] Conversation saved successfully to chats_storage');
+      // Call to Gemini API via background script
+      const response = await chrome.runtime.sendMessage({
+        action: 'gemini',
+        message: userMessage,
+        videoId,
+        videoTitle
       });
-    });
-  }
-
-  // פונקציה לטעינת היסטוריית השיחה מהאחסון
-  function loadConversationFromStorage(videoId: string) {
-    if (!isChromeAPIAvailable() || !videoId) {
-      console.warn('[WordStream] Cannot load conversation: Missing API or videoId');
-      return;
-    }
-
-    console.log('[WordStream] Loading conversation from chats_storage for video:', videoId);
-
-    chrome.storage.local.get(['chats_storage'], (result) => {
-      if (chrome.runtime.lastError) {
-        console.error('[WordStream] Error getting chats_storage:', chrome.runtime.lastError);
-        return;
+      
+      // Remove loading indicator
+      if (messagesContainer && loadingIndicator.parentNode === messagesContainer) {
+        messagesContainer.removeChild(loadingIndicator);
       }
-
-      const chatsStorage = result.chats_storage || {};
-      const conversation = chatsStorage[videoId];
-
-      if (conversation && conversation.messages && conversation.messages.length > 0) {
-        console.log('[WordStream] Found saved conversation with', conversation.messages.length, 'messages');
-        
-        // עדכון היסטוריית השיחה
-        conversationHistory.length = 0; // ניקוי ההיסטוריה הנוכחית
-        conversationHistory.push(...conversation.messages);
-        
-        // הצגת ההודעות בממשק המשתמש
-        const conversationArea = document.getElementById('gemini-conversation-area');
-        if (conversationArea) {
-          // ניקוי אזור השיחה
-          conversationArea.innerHTML = '';
-          
-          // הוספת כל הודעה לאזור השיחה
-          conversation.messages.forEach((message: {role: 'user' | 'assistant', content: string}) => {
-            const messageElement = document.createElement('div');
-            messageElement.className = `gemini-message ${message.role === 'user' ? 'user-message' : 'assistant-message'}`;
-            messageElement.textContent = message.content;
-            conversationArea.appendChild(messageElement);
-          });
-          
-          // גלילה לחלק התחתון
-          conversationArea.scrollTop = conversationArea.scrollHeight;
-
-          // כיוון שטענו שיחה, אנחנו רוצים להסתיר את הודעת הפתיחה אם קיימת
-          const welcomeMessage = document.querySelector('.gemini-welcome-message') as HTMLElement;
-          if (welcomeMessage) {
-            welcomeMessage.style.display = 'none';
-          }
-        }
+      
+      if (response && response.success) {
+        addMessage(response.answer, 'ai');
       } else {
-        console.log('[WordStream] No saved conversation found for this video');
+        throw new Error(response?.error || 'Failed to get response');
       }
-    });
+  } catch (error) {
+      console.error('Error sending message to Gemini:', error);
+      
+      // Remove loading indicator
+      if (messagesContainer && loadingIndicator.parentNode === messagesContainer) {
+        messagesContainer.removeChild(loadingIndicator);
+      }
+      
+      // Show error message
+      addMessage('Sorry, there was an error processing your request. Please try again.', 'ai');
+    }
   }
-
-  // טעינת היסטוריית השיחה בעת אתחול הפאנל
-  const videoId = getVideoId();
-  if (videoId) {
-    setTimeout(() => {
-      // קריאה מושהית מעט כדי לוודא שהממשק כבר מוכן
-      loadConversationFromStorage(videoId);
-    }, 500);
+  
+  // Function to add a message to the UI
+  function addMessage(content: string, type: 'user' | 'ai') {
+    // Create message element
+    const message = document.createElement('div');
+    message.className = `message ${type}`;
+    message.textContent = content;
+    
+    // Add to container
+    const welcomeMessage = panel.querySelector('.welcome-message');
+    const messagesContainer = panel.querySelector('.messages-container');
+    
+    if (messagesContainer) {
+      // Remove welcome message if this is the first message
+      if (welcomeMessage && welcomeMessage.parentNode === messagesContainer) {
+        messagesContainer.removeChild(welcomeMessage);
+      }
+      
+      messagesContainer.appendChild(message);
+      
+      // Use the dedicated scroll function with enhanced features
+      const extraOffset = 50;
+      
+      // הוספת השהייה ראשונית קצרה לאפשר לתוכן להתרנדר
+      setTimeout(() => {
+        // גלילה למטה עם אופסט נוסף
+        messagesContainer.scrollTop = messagesContainer.scrollHeight + extraOffset;
+        
+        const panelContent = panel.querySelector('.panel-content');
+        if (panelContent) {
+          panelContent.scrollTop = panelContent.scrollHeight + extraOffset;
+        }
+        
+        // בדיקה שנייה עם השהייה ארוכה יותר
+        setTimeout(() => {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight + extraOffset;
+          
+          if (panelContent) {
+            panelContent.scrollTop = panelContent.scrollHeight + extraOffset;
+          }
+          
+          // בדיקה שלישית עם השהייה ארוכה מאוד
+          setTimeout(() => {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight + extraOffset;
+            
+            if (panelContent) {
+              panelContent.scrollTop = panelContent.scrollHeight + extraOffset;
+            }
+            
+            // בדיקה רביעית (סופית) עם השהייה ארוכה במיוחד
+            setTimeout(() => {
+              messagesContainer.scrollTop = messagesContainer.scrollHeight + extraOffset;
+              
+              if (panelContent) {
+                panelContent.scrollTop = panelContent.scrollHeight + extraOffset;
+              }
+            }, 300);
+          }, 300);
+        }, 200);
+      }, 50);
+    }
   }
-
-  // מחלץ את מזהה הסרטון מה-URL
+  
+  // Function to update the size of the panel
+  function updateSize(size: 'small' | 'medium' | 'large') {
+    currentSize = size;
+    panel.style.width = `${SIZES[size].width}px`;
+    panel.style.height = `${SIZES[size].height}px`;
+    ensurePanelInViewport();
+  }
+  
+  // Function to update theme-related styles
+  function updateThemeStyles() {
+    // This would be better with CSS variables, but for simplicity we'll update the inline styles
+    const header = panel.querySelector('.panel-header') as HTMLElement;
+    const content = panel.querySelector('.panel-content') as HTMLElement;
+    const footer = panel.querySelector('.panel-footer') as HTMLElement;
+    const input = panel.querySelector('#user-input') as HTMLTextAreaElement;
+    
+    if (header && content && footer && input) {
+      // Update base panel styles
+      panel.style.backgroundColor = isDarkMode ? '#121212' : '#FFFFFF';
+      panel.style.border = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      
+      // Update header styles
+      header.style.borderBottom = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      header.style.backgroundColor = isDarkMode ? '#1E1E1E' : '#F0F2F5';
+      
+      // Update header title
+      const title = header.querySelector('h3');
+      if (title) {
+        title.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      }
+      
+      // Update content area
+      content.style.backgroundColor = isDarkMode ? '#121212' : '#FFFFFF';
+      content.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      
+      // Update footer
+      footer.style.borderTop = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      footer.style.backgroundColor = isDarkMode ? '#1E1E1E' : '#F0F2F5';
+      
+      // Update input
+      input.style.borderColor = isDarkMode ? '#444' : '#ddd';
+      input.style.backgroundColor = isDarkMode ? '#2D2D2D' : '#FFFFFF';
+      input.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      
+      // Update all AI messages - improved background for better contrast
+      const aiMessages = panel.querySelectorAll('.message.ai');
+      aiMessages.forEach(msg => {
+        (msg as HTMLElement).style.backgroundColor = isDarkMode ? '#2a2a30' : '#eff1f5';
+        (msg as HTMLElement).style.color = isDarkMode ? '#e8e8e8' : '#333333';
+        (msg as HTMLElement).style.border = `1px solid ${isDarkMode ? '#444444' : '#e0e0e0'}`;
+      });
+      
+      // Update all user messages - use stronger blue for better contrast
+      const userMessages = panel.querySelectorAll('.message.user');
+      userMessages.forEach(msg => {
+        (msg as HTMLElement).style.backgroundColor = isDarkMode ? '#4c6ef5' : '#4b8df8';
+        (msg as HTMLElement).style.color = '#FFFFFF';
+        (msg as HTMLElement).style.border = 'none';
+      });
+      
+      // Update size buttons for better contrast in light mode
+      const sizeButtons = panel.querySelectorAll('.size-button:not(.active)');
+      sizeButtons.forEach(btn => {
+        (btn as HTMLElement).style.backgroundColor = isDarkMode ? '#333' : '#e8e8e8';
+        (btn as HTMLElement).style.color = isDarkMode ? '#ccc' : '#555';
+      });
+      
+      // Update theme toggle icon
+      const themeToggle = panel.querySelector('.toggle-theme');
+      if (themeToggle) {
+        // ראשית נעצב את כפתור ה-toggle עצמו
+        (themeToggle as HTMLElement).style.background = isDarkMode ? '#f5f5f5' : '#333333';
+        (themeToggle as HTMLElement).style.border = `1px solid ${isDarkMode ? '#777777' : '#222222'}`;
+        (themeToggle as HTMLElement).style.borderRadius = '8px';
+        (themeToggle as HTMLElement).style.padding = '6px 10px';
+        (themeToggle as HTMLElement).style.color = isDarkMode ? '#333333' : '#ffffff';
+        (themeToggle as HTMLElement).style.boxShadow = '0 1px 3px rgba(0,0,0,0.2)';
+        (themeToggle as HTMLElement).style.display = 'flex';
+        (themeToggle as HTMLElement).style.alignItems = 'center';
+        (themeToggle as HTMLElement).style.gap = '6px';
+        (themeToggle as HTMLElement).style.fontWeight = '500';
+        (themeToggle as HTMLElement).style.fontSize = '12px';
+        (themeToggle as HTMLElement).title = isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode";
+        
+        // עכשיו נעדכן את האייקון עם טקסט
+        themeToggle.innerHTML = isDarkMode ? 
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg><span>Light</span>' : 
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg><span>Dark</span>';
+      }
+    }
+  }
+  
+  // Function to help get video ID
   function getVideoId(): string {
     const url = window.location.href;
-    if (url.includes('youtube.com/watch')) {
-      const urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get('v') || 'unknown';
-    } else if (url.includes('netflix.com/watch')) {
-      const matches = url.match(/watch\/(\d+)/);
-      return matches ? matches[1] : 'unknown';
-    }
-    return 'unknown';
-  }
-
-  // התאמת סגנון של ממשק Gemini דומה יותר לגרסה של גוגל
-  function applyGeminiStyles() {
-    const styleElement = document.createElement('style');
-    styleElement.textContent = `
-      /* עיצוב חלון העוזר */
-      .gemini-panel {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        height: 500px;
-        width: 380px;
-        background-color: #202124;
-        border-color: #5f6368;
-        color: #e8eaed;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-        z-index: 10000;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-        transition: box-shadow 0.3s ease;
-      }
-      
-      /* כשמשנים גודל */
-      .gemini-panel.resizing {
-        box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.5), 0 4px 20px rgba(0, 0, 0, 0.3);
-      }
-      
-      /* Light mode - מצב בהיר מלא*/
-      .gemini-panel.light-mode {
-        background-color: #ffffff;
-        border-color: #dadce0;
-        color: #202124;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-      }
-      
-      /* כותרת הפאנל עם תמיכה בגרירה */
-      .panel-header.draggable {
-        cursor: move;
-        user-select: none;
-      }
-      
-      /* כותרת הפאנל */
-      .panel-title {
-        color: #e8eaed;
-        font-size: 16px;
-        font-weight: 500;
-        margin: 0;
-      }
-      
-      .light-mode .panel-title {
-        color: #202124 !important;
-      }
-      
-      /* תיקון לכותרת הכחולה */
-      .light-mode .panel-header h3,
-      .light-mode h3.panel-title {
-        color: #202124 !important;
-      }
-      
-      /* כותרת כחולה במידה וקיימת */
-      .light-mode [style*="color: rgb(25, 103, 210)"],
-      .light-mode [style*="color:#1967d2"],
-      .light-mode [style*="color: #1967d2"],
-      .light-mode .wordstream-panel h3,
-      .light-mode h3,
-      .gemini-panel.light-mode h3 {
-        color: #202124 !important;
-      }
-      
-      .gemini-panel .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 16px;
-        background-color: #303134;
-        border-color: #5f6368;
-        color: #e8eaed;
-        z-index: 1;
-      }
-      
-      .gemini-panel.light-mode .panel-header {
-        background-color: #f1f3f4;
-        border-color: #dadce0;
-        color: #202124;
-      }
-      
-      /* ידיות שינוי גודל - סגנונות משופרים */
-      .resize-handle {
-        position: absolute;
-        z-index: 10005;
-        background-color: rgba(138, 180, 248, 0.05);
-        transition: background-color 0.2s;
-        box-sizing: border-box;
-        /* Add subtle border to make handles more noticeable */
-        border: 1px solid transparent;
-      }
-      
-      /* Make resize handles more prominent on hover */
-      .resize-handle:hover {
-        background-color: rgba(138, 180, 248, 0.5) !important;
-        border-color: rgba(138, 180, 248, 0.8);
-      }
-      
-      /* Active state for resize handles */
-      .gemini-panel.resizing .resize-handle {
-        background-color: rgba(138, 180, 248, 0.3);
-      }
-      
-      /* ידיות בפינות */
-      .resize-handle.resize-se {
-        bottom: 0;
-        right: 0;
-        width: 20px;
-        height: 20px;
-        cursor: nwse-resize;
-      }
-      
-      .resize-handle.resize-sw {
-        bottom: 0;
-        left: 0;
-        width: 20px;
-        height: 20px;
-        cursor: nesw-resize;
-      }
-      
-      .resize-handle.resize-ne {
-        top: 0;
-        right: 0;
-        width: 20px;
-        height: 20px;
-        cursor: nesw-resize;
-      }
-      
-      .resize-handle.resize-nw {
-        top: 0;
-        left: 0;
-        width: 20px;
-        height: 20px;
-        cursor: nwse-resize;
-      }
-      
-      /* ידיות בצדדים */
-      .resize-handle.resize-n {
-        top: 0;
-        left: 20px;
-        right: 20px;
-        height: 10px;
-        cursor: ns-resize;
-      }
-      
-      .resize-handle.resize-s {
-        bottom: 0;
-        left: 20px;
-        right: 20px;
-        height: 10px;
-        cursor: ns-resize;
-      }
-      
-      .resize-handle.resize-e {
-        right: 0;
-        top: 20px;
-        bottom: 20px;
-        width: 10px;
-        cursor: ew-resize;
-      }
-      
-      .resize-handle.resize-w {
-        left: 0;
-        top: 20px;
-        bottom: 20px;
-        width: 10px;
-        cursor: ew-resize;
-      }
-      
-      /* Add visual cue for bottom-right corner resize handle */
-      .resize-handle.resize-se::after {
-        content: '';
-        position: absolute;
-        right: 4px;
-        bottom: 4px;
-        width: 12px;
-        height: 12px;
-        border-right: 3px solid rgba(255, 255, 255, 0.6);
-        border-bottom: 3px solid rgba(255, 255, 255, 0.6);
-        transition: all 0.2s ease;
-      }
-      
-      .light-mode .resize-handle.resize-se::after {
-        border-right: 3px solid rgba(0, 0, 0, 0.3);
-        border-bottom: 3px solid rgba(0, 0, 0, 0.3);
-      }
-      
-      /* Enhance visual cue on hover */
-      .resize-handle.resize-se:hover::after {
-        border-right-width: 4px;
-        border-bottom-width: 4px;
-        border-right-color: rgba(138, 180, 248, 0.9);
-        border-bottom-color: rgba(138, 180, 248, 0.9);
-      }
-      
-      /* אזור בקרה */
-      .panel-controls {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      /* כפתור החלפת ערכת נושא */
-      .theme-toggle-button {
-        background: none;
-        border: none;
-        color: #e8eaed;
-        cursor: pointer;
-        padding: 4px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .light-mode .theme-toggle-button {
-        color: #202124;
-      }
-
-      .theme-toggle-button:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-      }
-
-      .light-mode .theme-toggle-button:hover {
-        background-color: rgba(0, 0, 0, 0.05);
-      }
-      
-      /* כפתור סגירה */
-      .close-button {
-        background: none;
-        border: none;
-        color: #e8eaed;
-        font-size: 20px;
-        cursor: pointer;
-        padding: 4px;
-        line-height: 1;
-      }
-      
-      .light-mode .close-button {
-        color: #202124;
-      }
-      
-      /* אזור תוכן */
-      .gemini-panel .panel-content {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        background-color: #202124;
-        overflow: hidden;
-      }
-      
-      .gemini-panel.light-mode .panel-content {
-        background-color: #ffffff;
-      }
-      
-      /* אזור שיחה */
-      .conversation-area {
-        padding: 16px;
-        gap: 16px;
-        display: flex;
-        flex-direction: column;
-        overflow-y: auto;
-        height: calc(100% - 90px);
-        flex: 1;
-        background-color: #202124;
-      }
-      
-      .light-mode .conversation-area {
-        background-color: #ffffff;
-      }
-      
-      /* אזור קלט */
-      .input-container {
-        padding: 12px 16px;
-        background-color: #303134;
-        border-top: 1px solid #5f6368;
-        display: flex;
-        align-items: center;
-      }
-      
-      .light-mode .input-container {
-        background-color: #f1f3f4;
-        border-top: 1px solid #dadce0;
-      }
-      
-      /* שדה קלט */
-      #gemini-input {
-        min-height: 24px;
-        max-height: 120px;
-        border-radius: 20px;
-        background-color: #3c4043;
-        border: 1px solid #5f6368;
-        color: #e8eaed;
-        padding: 10px 16px;
-        font-size: 14px;
-        font-family: 'Roboto', Arial, sans-serif;
-        resize: none;
-        width: calc(100% - 50px);
-        overflow-y: auto;
-      }
-      
-      .light-mode #gemini-input {
-        background-color: #ffffff;
-        border: 1px solid #dadce0;
-        color: #202124;
-      }
-      
-      #gemini-input:focus {
-        outline: none;
-        border-color: #8ab4f8;
-      }
-      
-      /* כפתור שליחה */
-      .send-button {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background-color: #8ab4f8;
-        color: #202124;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-left: 8px;
-        border: none;
-        cursor: pointer;
-      }
-      
-      .send-button:disabled {
-        background-color: #3c4043;
-        color: #9aa0a6;
-        cursor: not-allowed;
-      }
-      
-      .light-mode .send-button:disabled {
-        background-color: #e8eaed;
-        color: #9aa0a6;
-      }
-      
-      .send-button:not(:disabled):hover {
-        background-color: #aecbfa;
-      }
-      
-      /* הודעות */
-      .welcome-message {
-        color: #e8eaed;
-        background-color: #303134;
-        border-radius: 12px;
-        padding: 12px 16px;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-      
-      .light-mode .welcome-message {
-        color: #202124;
-        background-color: #f1f3f4;
-      }
-      
-      .gemini-message {
-        max-width: 85%;
-        padding: 12px 16px;
-        border-radius: 12px;
-        font-size: 14px;
-        line-height: 1.5;
-        font-family: 'Roboto', Arial, sans-serif;
-        margin-bottom: 10px;
-      }
-      
-      .user-message {
-        background-color: #8ab4f8;
-        color: #202124;
-        align-self: flex-end;
-        border-bottom-right-radius: 4px;
-      }
-      
-      .assistant-message {
-        background-color: #303134;
-        color: #e8eaed;
-        align-self: flex-start;
-        border-bottom-left-radius: 4px;
-      }
-      
-      .light-mode .assistant-message {
-        background-color: #f1f3f4;
-        color: #202124;
-      }
-      
-      .assistant-message.thinking {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        opacity: 0.8;
-      }
-      
-      .assistant-message.simulated {
-        border-left: 2px solid #aecbfa;
-      }
-      
-      /* הודעות שגיאה */
-      .error-message {
-        background-color: rgba(234, 67, 53, 0.1);
-        border: 1px solid rgba(234, 67, 53, 0.3);
-        color: #ea4335;
-        margin: 8px 16px;
-        padding: 8px;
-        border-radius: 4px;
-        font-size: 14px;
-      }
-      
-      /* אנימציה */
-      .spinner {
-        width: 16px;
-        height: 16px;
-        border: 2px solid rgba(232, 234, 237, 0.3);
-        border-top-color: #e8eaed;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-      
-      .light-mode .spinner {
-        border: 2px solid rgba(32, 33, 36, 0.1);
-        border-top-color: #202124;
-      }
-      
-      /* אנימציות */
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-    `;
-    document.head.appendChild(styleElement);
+    const urlParams = new URLSearchParams(new URL(url).search);
+    return urlParams.get('v') || '';
   }
   
-  // קבלת הודעות מדומות בסגנון של Gemini
-  function getSimulatedResponse(userMessage: string): string {
-    // תבניות תשובה מבוססות על שאילתות נפוצות
-    const lowercaseQuery = userMessage.toLowerCase();
-    
-    // בדיקה אם נשאלה שאלה בעברית
-    const isHebrew = /[\u0590-\u05FF]/.test(userMessage);
-    
-    // תגובות כלליות לברכות
-    if (lowercaseQuery.includes('hello') || lowercaseQuery.includes('hi') || lowercaseQuery.includes('hey') ||
-        lowercaseQuery.includes('שלום') || lowercaseQuery.includes('היי')) {
-      return isHebrew ? 
-        'שלום! אני כאן כדי לעזור לך. במה אוכל לסייע היום?' : 
-        'Hello! I\'m here to help. How can I assist you today?';
-    }
-    
-    if (lowercaseQuery.includes('how are you') || lowercaseQuery.includes('מה שלומך') || 
-        lowercaseQuery.includes('מה נשמע')) {
-      return isHebrew ? 
-        "אני מצוין, תודה ששאלת! במה אוכל לעזור לך?" : 
-        "I'm doing well, thanks for asking! How can I help you?";
-    }
-    
-    if (lowercaseQuery.includes('thank') || lowercaseQuery.includes('thanks') || 
-        lowercaseQuery.includes('תודה')) {
-      return isHebrew ? 
-        "בשמחה! אשמח לעזור לך בכל דבר נוסף." : 
-        "You're welcome! Let me know if you need anything else.";
-    }
-    
-    // שאלות על הסרטון
-    if (lowercaseQuery.includes('this video') || lowercaseQuery.includes('הסרטון') || 
-        lowercaseQuery.includes('הוידאו')) {
-      const videoTitle = document.title.split(' - YouTube')[0] || 'Untitled';
-      return isHebrew ? 
-        `הסרטון "${videoTitle}" נראה מעניין. במה אוכל לעזור לך בהקשר לתוכן זה?` : 
-        `The video "${videoTitle}" looks interesting. How can I help you with this content?`;
-    }
-    
-    if (lowercaseQuery.includes('מה קורה') || lowercaseQuery.includes('איך אתה מרגיש')) {
-      return isHebrew ?
-        "אני פה בשבילך! אשמח לעזור בכל מה שתצטרך בקשר לסרטון או בכל נושא אחר." :
-        "I'm here for you! How can I help with the video or any other topic?";
-    }
-    
-    // שאלות מזג אוויר
-    if (lowercaseQuery.includes('weather') || lowercaseQuery.includes('מזג אוויר') || 
-        lowercaseQuery.includes('temperature') || lowercaseQuery.includes('טמפרטורה')) {
-      return isHebrew ?
-        "אני לא יכול לגשת למידע עדכני על מזג האוויר ללא חיבור לאינטרנט. אם היה לי חיבור, הייתי יכול לספק לך תחזית מדויקת." :
-        "I don't have access to real-time weather information without an internet connection. With connectivity, I could provide you with an accurate forecast.";
-    }
-    
-    // שאלות חדשות
-    if (lowercaseQuery.includes('news') || lowercaseQuery.includes('current events') || 
-        lowercaseQuery.includes('חדשות') || lowercaseQuery.includes('אירועים')) {
-      return isHebrew ?
-        "אין לי גישה לחדשות עדכניות ללא חיבור לאינטרנט. עם חיבור, אוכל לספק לך עדכונים על אירועים נוכחיים ממקורות אמינים." :
-        "I don't have access to the latest news without an internet connection. With connectivity, I could provide updates on current events from reliable sources.";
-    }
-    
-    // אם אין התאמה ספציפית, החזר תשובה כללית לפי השפה
-    return isHebrew ?
-      "אני מבין שאתה שואל על \"" + userMessage + "\". אשמח לעזור לך בנושא זה. מה בדיוק מעניין אותך לדעת?" :
-      "I understand you're asking about \"" + userMessage + "\". I'd be happy to help with this topic. What specifically would you like to know?";
-  }
-  
-  // מיישם את הסגנונות המותאמים של Gemini
-  applyGeminiStyles();
-
-  // הגדרת אירועים לשדה הקלט
-  const inputField = document.getElementById('gemini-input') as HTMLTextAreaElement;
-  if (inputField) {
-    // אירוע להתאמת גובה שדה הטקסט והפעלת/ביטול כפתור השליחה
-    inputField.addEventListener('input', () => {
-      adjustTextareaHeight(inputField);
-      toggleSendButton();
-    });
-    
-    // אירוע להתמודדות עם מקש Enter
-    inputField.addEventListener('keydown', (e: Event) => {
-      const keyboardEvent = e as KeyboardEvent;
-      // שליחה רק אם לוחצים על Enter ללא Shift
-      if (keyboardEvent.key === 'Enter' && !keyboardEvent.shiftKey) {
-        keyboardEvent.preventDefault(); // מניעת שורה חדשה
-        // שולח הודעה רק אם יש טקסט וכפתור השליחה מופעל
-        const sendButton = document.getElementById('gemini-send-button') as HTMLButtonElement;
-        if (inputField.value.trim() && !sendButton?.disabled) {
-          sendMessage();
-        }
-      }
-    });
-    
-    // מקד בשדה הטקסט כשהפאנל נפתח
-    setTimeout(() => inputField.focus(), 100);
-  }
-  
-  // הוספת אירוע לחיצה לכפתור השליחה
-  const sendButton = document.getElementById('gemini-send-button') as HTMLButtonElement;
-  if (sendButton) {
-    sendButton.addEventListener('click', sendMessage);
-  }
-  
-  // Add fix for initial positioning to ensure panel is in viewport
+  // Function to make sure panel stays within viewport
   function ensurePanelInViewport() {
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const panelWidth = panel.offsetWidth;
-    const panelHeight = panel.offsetHeight;
+    const panelRect = panel.getBoundingClientRect();
     
-    let panelLeft = parseInt(panel.style.left || '0', 10);
-    let panelTop = parseInt(panel.style.top || '0', 10);
-    
-    // Adjust if panel extends beyond right edge
-    if (panelLeft + panelWidth > viewportWidth) {
-      panelLeft = Math.max(0, viewportWidth - panelWidth);
+    // Check right edge
+    if (panelRect.right > viewportWidth) {
+      panel.style.left = (viewportWidth - panelRect.width) + 'px';
     }
     
-    // Adjust if panel extends beyond bottom edge
-    if (panelTop + panelHeight > viewportHeight) {
-      panelTop = Math.max(0, viewportHeight - panelHeight);
+    // Check bottom edge
+    if (panelRect.bottom > viewportHeight) {
+      panel.style.top = (viewportHeight - panelRect.height) + 'px';
     }
     
-    // Adjust if panel extends beyond left edge
-    if (panelLeft < 0) {
-      panelLeft = 0;
+    // Check left edge
+    if (panelRect.left < 0) {
+      panel.style.left = '0px';
     }
     
-    // Adjust if panel extends beyond top edge
-    if (panelTop < 0) {
-      panelTop = 0;
+    // Check top edge
+    if (panelRect.top < 0) {
+      panel.style.top = '0px';
     }
-    
-    panel.style.left = `${panelLeft}px`;
-    panel.style.top = `${panelTop}px`;
   }
   
-  // Call this when panel is first created
-  ensurePanelInViewport();
+  // Add window resize handler to keep panel in viewport
+  window.addEventListener('resize', ensurePanelInViewport);
   
-  // Also ensure panel stays in viewport when window is resized
-  window.addEventListener('resize', () => {
+  return panel;
+}
+
+// Nueva implementación del panel Gemini con diseño estilo Grok
+function createGeminiPanel2() {
+  // Predefined sizes
+  const SIZES = {
+    small: { width: 350, height: 500 },
+    medium: { width: 480, height: 550 },
+    large: { width: 640, height: 600 }
+  };
+  
+  // Current size and theme state
+  let currentSize = 'medium';
+  let isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  
+  // Create main panel container
+  const panel = document.createElement('div');
+  panel.className = `wordstream-panel gemini-panel ${isDarkMode ? 'dark' : 'light'}`;
+  panel.id = 'wordstream-gemini-panel';
+  
+  // Apply initial size
+  panel.style.width = `${SIZES[currentSize as keyof typeof SIZES].width}px`;
+  panel.style.height = `${SIZES[currentSize as keyof typeof SIZES].height}px`;
+  
+  // Set panel base styles
+  panel.style.position = 'fixed';
+  panel.style.top = '80px';
+  panel.style.right = '20px';
+  panel.style.zIndex = '9999999';
+  panel.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.2)';
+  panel.style.borderRadius = '12px';
+  panel.style.overflow = 'hidden';
+  panel.style.display = 'flex';
+  panel.style.flexDirection = 'column';
+  panel.style.backgroundColor = isDarkMode ? '#121212' : '#F7F9FC';
+  panel.style.border = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+  panel.style.fontFamily = 'Inter, Roboto, "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif';
+  panel.style.fontSize = currentSize === 'small' ? '13px' : (currentSize === 'medium' ? '14px' : '16px');
+  panel.style.fontWeight = '400';
+  panel.style.transition = 'all 0.3s ease-in-out';
+  
+  // Create panel HTML structure
+  panel.innerHTML = `
+    <div class="panel-header">
+      <h3>AI Assistant</h3>
+      <div class="header-controls">
+        <div class="size-controls">
+          <button class="size-button size-small" title="Small size">S</button>
+          <button class="size-button size-medium active" title="Medium size">M</button>
+          <button class="size-button size-large" title="Large size">L</button>
+        </div>
+        <button class="toggle-theme" title="Toggle dark/light mode">
+          ${isDarkMode ? 
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>' : 
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>'
+          }
+        </button>
+        <button class="close-button" title="Close">&times;</button>
+      </div>
+    </div>
+    <div class="panel-content">
+      <div class="messages-container" id="messages-container">
+        <div class="welcome-message">
+          <div class="welcome-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+          </div>
+          <h3>Ask about the video content</h3>
+          <p>Example: "What does this expression mean?" or "Explain the historical context"</p>
+        </div>
+      </div>
+    </div>
+    <div class="panel-footer">
+      <textarea id="user-input" placeholder="Type your question..."></textarea>
+      <button id="send-button" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path>
+        </svg>
+      </button>
+    </div>
+  `;
+  
+  // Apply styles to panel components
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = `
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 16px;
+      border-bottom: 1px solid ${isDarkMode ? '#333333' : '#E0E0E0'};
+      background-color: ${isDarkMode ? '#121212' : '#F7F9FC'};
+      cursor: move;
+      transition: all 0.3s ease;
+    }
+    
+    .panel-header h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+    }
+    
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .size-controls {
+      display: flex;
+      border: 1px solid ${isDarkMode ? '#444' : '#ddd'};
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    
+    .size-button {
+      background: ${isDarkMode ? '#333' : '#eee'};
+      border: none;
+      color: ${isDarkMode ? '#B0B0B0' : '#555555'};
+      width: 24px;
+      height: 24px;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+      transition: all 0.2s ease;
+    }
+    
+    .size-button.active {
+      background: ${isDarkMode ? '#3B82F6' : '#2563EB'};
+      color: white;
+    }
+    
+    .size-button:hover:not(.active) {
+      background: ${isDarkMode ? '#444' : '#ddd'};
+    }
+    
+    .toggle-theme, .close-button {
+      background: transparent;
+      border: none;
+      color: ${isDarkMode ? '#B0B0B0' : '#555555'};
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      transition: all 0.2s ease;
+    }
+    
+    .toggle-theme:hover, .close-button:hover {
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      transform: scale(1.1);
+    }
+    
+    .close-button {
+      font-size: 20px;
+      font-weight: bold;
+    }
+    
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      position: relative;
+      padding-bottom: 120px; /* גובה מספק לחשיפת ההודעה האחרונה במלואה */
+      background-color: var(--bg-color-dark);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .messages-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding-bottom: 30px; /* מרווח נוסף בתחתית */
+    }
+    
+    .welcome-message {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 24px 16px;
+      color: ${isDarkMode ? '#CCCCCC' : '#555555'};
+    }
+    
+    .welcome-icon {
+      margin-bottom: 16px;
+      color: ${isDarkMode ? '#B0B0B0' : '#555555'};
+    }
+    
+    .welcome-message h3 {
+      margin: 0 0 8px 0;
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      font-weight: 500;
+    }
+    
+    .welcome-message p {
+      margin: 0;
+      font-size: 14px;
+    }
+    
+    .message {
+      padding: 8px 12px;
+      border-radius: 12px;
+      max-width: 80%;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+    
+    .message.user {
+      align-self: flex-end;
+      background-color: ${isDarkMode ? '#3B82F6' : '#E0F2FE'};
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      margin-left: auto;
+    }
+    
+    .message.ai {
+      align-self: flex-start;
+      background-color: ${isDarkMode ? '#1E1E1E' : '#FFFFFF'};
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      margin-right: auto;
+    }
+    
+    .panel-footer {
+      padding: 10px 12px;
+      border-top: 1px solid ${isDarkMode ? '#333333' : '#E0E0E0'};
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background-color: ${isDarkMode ? '#1E1E1E' : '#F7F9FC'};
+      z-index: 2;
+      box-sizing: border-box;
+      transition: all 0.3s ease;
+      height: auto; /* Ensure height is calculated based on content */
+      min-height: 60px; /* Minimum height for the footer */
+    }
+    
+    #user-input {
+      flex-grow: 1;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid ${isDarkMode ? '#444' : '#ddd'};
+      background-color: ${isDarkMode ? '#2C2C2C' : '#FFFFFF'};
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      resize: none;
+      font-family: inherit;
+      font-size: 14px;
+      min-height: 20px;
+      max-height: 120px;
+      transition: all 0.2s ease;
+    }
+    
+    #user-input:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+      border-color: ${isDarkMode ? '#3B82F6' : '#2563EB'};
+    }
+    
+    #user-input::placeholder {
+      color: ${isDarkMode ? '#888888' : '#999999'};
+    }
+    
+    #send-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: none;
+      background-color: ${isDarkMode ? '#3B82F6' : '#2563EB'};
+      color: white;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    #send-button:hover:not(:disabled) {
+      transform: scale(1.05);
+      background-color: ${isDarkMode ? '#2563EB' : '#1D4ED8'};
+    }
+    
+    #send-button:disabled {
+      background-color: ${isDarkMode ? '#444' : '#ddd'};
+      color: ${isDarkMode ? '#888' : '#aaa'};
+      cursor: not-allowed;
+    }
+    
+    .loading-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      background-color: ${isDarkMode ? '#1E1E1E' : '#FFFFFF'};
+      color: ${isDarkMode ? '#FFFFFF' : '#222222'};
+      align-self: flex-start;
+      max-width: 80%;
+    }
+    
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(${isDarkMode ? '255,255,255,0.1' : '0,0,0,0.1'});
+      border-top-color: ${isDarkMode ? '#3B82F6' : '#2563EB'};
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  `;
+  panel.appendChild(styleSheet);
+  
+  // Set event handlers
+  
+  // 1. Make the panel draggable
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+  
+  const header = panel.querySelector('.panel-header') as HTMLElement;
+  
+  if (header) {
+    header.addEventListener('mousedown', (e) => {
+      // Only initiate drag if not clicking on a control
+      if (!(e.target as HTMLElement).closest('button')) {
+        isDragging = true;
+        offsetX = e.clientX - panel.getBoundingClientRect().left;
+        offsetY = e.clientY - panel.getBoundingClientRect().top;
+      }
+    });
+  }
+  
+  document.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+      panel.style.left = (e.clientX - offsetX) + 'px';
+      panel.style.top = (e.clientY - offsetY) + 'px';
+    }
+  });
+  
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
     ensurePanelInViewport();
   });
+  
+  // 2. Theme toggling
+  const themeToggle = panel.querySelector('.toggle-theme');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      isDarkMode = !isDarkMode;
+      panel.className = `wordstream-panel gemini-panel ${isDarkMode ? 'dark' : 'light'}`;
+      updateThemeStyles();
+    });
+  }
+  
+  // 3. Size controls
+  const sizeButtons = panel.querySelectorAll('.size-button');
+  sizeButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      if (button.classList.contains('size-small')) {
+        updateSize('small');
+      } else if (button.classList.contains('size-medium')) {
+        updateSize('medium');
+      } else if (button.classList.contains('size-large')) {
+        updateSize('large');
+      }
+      
+      // Update active state for buttons
+      sizeButtons.forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+    });
+  });
+  
+  // 4. Close button handler
+  const closeButton = panel.querySelector('.close-button');
+  if (closeButton) {
+    closeButton.addEventListener('click', () => {
+      panel.style.display = 'none';
+      const event = new CustomEvent('geminiPanelClosed');
+      document.dispatchEvent(event);
+    });
+  }
+  
+  // 5. Text input handling
+  const textInput = panel.querySelector('#user-input') as HTMLTextAreaElement;
+  const sendButton = panel.querySelector('#send-button') as HTMLButtonElement;
+  
+  if (textInput && sendButton) {
+    // Enable/disable send button based on input
+    textInput.addEventListener('input', () => {
+      sendButton.disabled = textInput.value.trim() === '';
+      adjustTextareaHeight(textInput);
+    });
+    
+    // Auto-adjust height of textarea
+    function adjustTextareaHeight(textarea: HTMLTextAreaElement) {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }
+    
+    // Handle sending message
+    sendButton.addEventListener('click', sendMessage);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  }
+  
+  // Function to handle sending messages
+  async function sendMessage() {
+    if (!textInput || textInput.value.trim() === '') return;
+    
+    const userMessage = textInput.value.trim();
+    textInput.value = '';
+    textInput.style.height = 'auto';
+    sendButton.disabled = true;
+    
+    // Add user message to UI
+    addMessage(userMessage, 'user');
+    
+    // Add loading indicator
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'loading-indicator';
+    loadingIndicator.innerHTML = `
+      <div class="spinner"></div>
+      <div>Processing...</div>
+    `;
+    const messagesContainer = panel.querySelector('.messages-container');
+    if (messagesContainer) {
+      messagesContainer.appendChild(loadingIndicator);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    
+    try {
+      // Get video information
+      const videoId = getVideoId();
+      const videoTitle = document.title;
+      
+      // Call to Gemini API via background script
+      const response = await chrome.runtime.sendMessage({
+        action: 'gemini',
+        message: userMessage,
+        videoId,
+        videoTitle
+      });
+      
+      // Remove loading indicator
+      if (messagesContainer && loadingIndicator.parentNode === messagesContainer) {
+        messagesContainer.removeChild(loadingIndicator);
+      }
+      
+      if (response && response.success) {
+        addMessage(response.answer, 'ai');
+        
+        // שמירת הצ'אט גם בפורמט אחיד עבור SavedChats
+        saveChatForUnifiedStorage(userMessage, response.answer, videoId, videoTitle);
+      } else {
+        throw new Error(response?.error || 'Failed to get response');
+      }
+    } catch (error) {
+      console.error('Error sending message to Gemini:', error);
+      
+      // Get video information again since it's inside the catch block
+      const videoId = getVideoId();
+      const videoTitle = document.title;
+      
+      // Remove loading indicator
+      if (messagesContainer && loadingIndicator.parentNode === messagesContainer) {
+        messagesContainer.removeChild(loadingIndicator);
+      }
+      
+      // Show error message
+      const errorMessage = 'Sorry, there was an error processing your request. Please try again.';
+      addMessage(errorMessage, 'ai');
+      
+      // שמירת שגיאה גם בפורמט האחיד
+      saveChatForUnifiedStorage(userMessage, errorMessage, videoId, videoTitle);
+    }
+  }
+  
+  // Helper function to save chats in the unified format for SavedChats
+  function saveChatForUnifiedStorage(userMessage: string, aiResponse: string, videoId: string, videoTitle: string) {
+    try {
+      // Check if chrome.storage.local is available
+      if (!chrome || !chrome.storage || !chrome.storage.local) {
+        console.error('[WordStream] chrome.storage.local is not available');
+        return;
+      }
+      
+      // Get video URL
+      const videoURL = window.location.href;
+      
+      // יצירת מזהה ייחודי לשיחה
+      // בפאנל הבסיסי אנחנו לא יכולים להשתמש בסטייט, אז נשמור את המזהה באלמנט נסתר בפאנל
+      let conversationId = panel.getAttribute('data-conversation-id');
+      if (!conversationId) {
+        conversationId = `chat_${videoId}_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+        panel.setAttribute('data-conversation-id', conversationId);
+      }
+      
+      // Get current chat messages from DOM
+      const messagesContainer = panel.querySelector('.messages-container');
+      let messages: Array<{role: 'user' | 'assistant', content: string}> = [];
+      
+      if (messagesContainer) {
+        // Extract messages from DOM (as a fallback)
+        const messageElements = messagesContainer.querySelectorAll('.message');
+        messageElements.forEach(el => {
+          if (el.classList.contains('user')) {
+            messages.push({ role: 'user', content: el.textContent || '' });
+          } else if (el.classList.contains('ai')) {
+            messages.push({ role: 'assistant', content: el.textContent || '' });
+          }
+        });
+      } else {
+        // Or just add the current messages if we can't extract from DOM
+        messages = [
+          { role: 'user', content: userMessage },
+          { role: 'assistant', content: aiResponse }
+        ];
+      }
+      
+      // Save to legacy format
+      chrome.storage.local.set({ [`chat-${videoId}`]: messages }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('[WordStream] Error saving chat (legacy format):', chrome.runtime.lastError);
+        } else {
+          console.log('[WordStream] Chat saved in legacy format successfully');
+        }
+      });
+      
+      // Get current chats storage
+      chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
+        if (chrome.runtime.lastError) {
+          console.error('[WordStream] Error accessing chats storage:', chrome.runtime.lastError);
+                return;
+              }
+
+        const chatsStorage = result.chats_storage || {};
+        const videoChatsMap = result.video_chats_map || {};
+        
+        // עדכון נתוני השיחה
+        chatsStorage[conversationId] = {
+          conversationId,
+          videoId,
+          videoTitle,
+          videoURL,
+          lastUpdated: new Date().toISOString(),
+          messages: messages
+        };
+        
+        // עדכון מיפוי סרטון לשיחות
+        if (!videoChatsMap[videoId]) {
+          videoChatsMap[videoId] = [];
+        }
+        
+        // וודא שה-conversationId נמצא במיפוי
+        if (!videoChatsMap[videoId].includes(conversationId)) {
+          videoChatsMap[videoId].push(conversationId);
+        }
+        
+        // Save back to storage
+        chrome.storage.local.set({ 
+          chats_storage: chatsStorage,
+          video_chats_map: videoChatsMap
+        }, () => {
+              if (chrome.runtime.lastError) {
+            console.error('[WordStream] Error saving unified chat storage:', chrome.runtime.lastError);
+              } else {
+            console.log('[WordStream] Chat saved to unified storage successfully, conversationId:', conversationId);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('[WordStream] Error in saveChatForUnifiedStorage:', error);
+    }
+  }
+  
+  // Function to add a message to the UI
+  function addMessage(content: string, type: 'user' | 'ai') {
+    // Create message element
+    const message = document.createElement('div');
+    message.className = `message ${type}`;
+    message.textContent = content;
+    
+    // Add to container
+    const welcomeMessage = panel.querySelector('.welcome-message');
+    const messagesContainer = panel.querySelector('.messages-container');
+    
+    if (messagesContainer) {
+      // Remove welcome message if this is the first message
+      if (welcomeMessage && welcomeMessage.parentNode === messagesContainer) {
+        messagesContainer.removeChild(welcomeMessage);
+      }
+      
+      messagesContainer.appendChild(message);
+      
+      // Use the dedicated scroll function with enhanced features
+      scrollToLatestMessage();
+    }
+  }
+  
+  // Helper function to scroll to the latest message
+  function scrollToLatestMessage() {
+    const messagesContainer = panel.querySelector('.messages-container');
+    const panelContent = panel.querySelector('.panel-content');
+    
+    if (messagesContainer) {
+      // גלילה מיידית
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      
+      if (panelContent) {
+        panelContent.scrollTop = panelContent.scrollHeight;
+      }
+      
+      // גלילה שנייה לאחר השהייה קצרה לתת לתוכן להתרנדר
+      setTimeout(() => {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        
+        if (panelContent) {
+          panelContent.scrollTop = panelContent.scrollHeight;
+        }
+      }, 100);
+    }
+  }
+  
+  // Function to update the size of the panel
+  function updateSize(size: 'small' | 'medium' | 'large') {
+    currentSize = size;
+    panel.style.width = `${SIZES[size].width}px`;
+    panel.style.height = `${SIZES[size].height}px`;
+    ensurePanelInViewport();
+  }
+  
+  // Function to update theme-related styles
+  function updateThemeStyles() {
+    // This would be better with CSS variables, but for simplicity we'll update the inline styles
+    const header = panel.querySelector('.panel-header') as HTMLElement;
+    const content = panel.querySelector('.panel-content') as HTMLElement;
+    const footer = panel.querySelector('.panel-footer') as HTMLElement;
+    const input = panel.querySelector('#user-input') as HTMLTextAreaElement;
+    
+    if (header && content && footer && input) {
+      // Update base panel styles
+      panel.style.backgroundColor = isDarkMode ? '#121212' : '#FFFFFF';
+      panel.style.border = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      
+      // Update header styles
+      header.style.borderBottom = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      header.style.backgroundColor = isDarkMode ? '#1E1E1E' : '#F0F2F5';
+      
+      // Update header title
+      const title = header.querySelector('h3');
+      if (title) {
+        title.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      }
+      
+      // Update content area
+      content.style.backgroundColor = isDarkMode ? '#121212' : '#FFFFFF';
+      content.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      
+      // Update footer
+      footer.style.borderTop = `1px solid ${isDarkMode ? '#333333' : '#E0E0E0'}`;
+      footer.style.backgroundColor = isDarkMode ? '#1E1E1E' : '#F0F2F5';
+      
+      // Update input
+      input.style.borderColor = isDarkMode ? '#444' : '#ddd';
+      input.style.backgroundColor = isDarkMode ? '#2D2D2D' : '#FFFFFF';
+      input.style.color = isDarkMode ? '#FFFFFF' : '#050505';
+      
+      // Update all AI messages - improved background for better contrast
+      const aiMessages = panel.querySelectorAll('.message.ai');
+      aiMessages.forEach(msg => {
+        (msg as HTMLElement).style.backgroundColor = isDarkMode ? '#2a2a30' : '#eff1f5';
+        (msg as HTMLElement).style.color = isDarkMode ? '#e8e8e8' : '#333333';
+        (msg as HTMLElement).style.border = `1px solid ${isDarkMode ? '#444444' : '#e0e0e0'}`;
+      });
+      
+      // Update all user messages - use stronger blue for better contrast
+      const userMessages = panel.querySelectorAll('.message.user');
+      userMessages.forEach(msg => {
+        (msg as HTMLElement).style.backgroundColor = isDarkMode ? '#4c6ef5' : '#4b8df8';
+        (msg as HTMLElement).style.color = '#FFFFFF';
+        (msg as HTMLElement).style.border = 'none';
+      });
+      
+      // Update size buttons for better contrast in light mode
+      const sizeButtons = panel.querySelectorAll('.size-button:not(.active)');
+      sizeButtons.forEach(btn => {
+        (btn as HTMLElement).style.backgroundColor = isDarkMode ? '#333' : '#e8e8e8';
+        (btn as HTMLElement).style.color = isDarkMode ? '#ccc' : '#555';
+      });
+      
+      // Update theme toggle icon
+      const themeToggle = panel.querySelector('.toggle-theme');
+      if (themeToggle) {
+        // עיצוב מינימליסטי ברור לכפתור החלפת התאורה
+        (themeToggle as HTMLElement).style.background = 'transparent';
+        (themeToggle as HTMLElement).style.border = 'none';
+        (themeToggle as HTMLElement).style.borderRadius = '50%';
+        (themeToggle as HTMLElement).style.padding = '6px';
+        (themeToggle as HTMLElement).style.color = isDarkMode ? '#ffd700' : '#7c3aed';
+        (themeToggle as HTMLElement).style.boxShadow = 'none';
+        (themeToggle as HTMLElement).style.display = 'flex';
+        (themeToggle as HTMLElement).style.alignItems = 'center';
+        (themeToggle as HTMLElement).style.justifyContent = 'center';
+        (themeToggle as HTMLElement).style.gap = '0';
+        (themeToggle as HTMLElement).style.width = '32px';
+        (themeToggle as HTMLElement).style.height = '32px';
+        (themeToggle as HTMLElement).title = isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode";
+        
+        // רק אייקון גדול וברור, ללא טקסט
+        themeToggle.innerHTML = isDarkMode ? 
+          '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>' : 
+          '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>';
+      }
+    }
+  }
+  
+  // Function to help get video ID
+  function getVideoId(): string {
+    const url = window.location.href;
+    const urlParams = new URLSearchParams(new URL(url).search);
+    return urlParams.get('v') || '';
+  }
+  
+  // Function to make sure panel stays within viewport
+  function ensurePanelInViewport() {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const panelRect = panel.getBoundingClientRect();
+    
+    // Check right edge
+    if (panelRect.right > viewportWidth) {
+      panel.style.left = (viewportWidth - panelRect.width) + 'px';
+    }
+    
+    // Check bottom edge
+    if (panelRect.bottom > viewportHeight) {
+      panel.style.top = (viewportHeight - panelRect.height) + 'px';
+    }
+    
+    // Check left edge
+    if (panelRect.left < 0) {
+      panel.style.left = '0px';
+    }
+    
+    // Check top edge
+    if (panelRect.top < 0) {
+      panel.style.top = '0px';
+    }
+  }
+  
+  // Add window resize handler to keep panel in viewport
+  window.addEventListener('resize', ensurePanelInViewport);
   
   return panel;
 }
 
 function createNotesPanel() {
+  // Create main panel element
   const panel = document.createElement('div');
-  panel.className = 'wordstream-panel notes-panel';
+  panel.className = 'wordstream-panel notes-panel medium';
   panel.id = 'wordstream-notes-panel';
+  
+  // Panel sizes
+  const PANEL_SIZES = {
+    small: { width: '350px', height: '500px' },
+    medium: { width: '480px', height: '400px' },
+    large: { width: '640px', height: '600px' }
+  };
+  
+  // Dark mode detection
+  const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (isDarkMode) {
+    panel.classList.add('dark-mode');
+  } else {
+    panel.classList.add('light-mode');
+  }
+  
+  // Set initial position and size
+  panel.style.position = 'fixed';
+  panel.style.width = '480px';
+  panel.style.height = '550px';
+  panel.style.top = '80px';
+  panel.style.left = '20px';
+  panel.style.zIndex = '9999999';
+  panel.style.backgroundColor = isDarkMode ? '#121212' : '#F7F8FA';
+  panel.style.color = isDarkMode ? '#ffffff' : '#333333';
+  panel.style.border = `1px solid ${isDarkMode ? '#333333' : '#e0e0e0'}`;
+  panel.style.borderRadius = '12px';
+  panel.style.overflow = 'hidden';
+  panel.style.display = 'flex';
+  panel.style.flexDirection = 'column';
+  panel.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+  panel.style.fontFamily = 'Inter, Roboto, Arial, sans-serif';
+  panel.style.transition = 'width 0.3s, height 0.3s';
+  panel.style.resize = 'both'; // Allow resizing
+  panel.style.maxWidth = '90vw';
+  panel.style.maxHeight = '90vh';
+  panel.style.minWidth = '250px';
+  panel.style.minHeight = '200px';
+  
+  // חלק חדש: פיתרון ישיר לבעיית הפס השחור
+  // קוד זה מבטיח שה-panel-footer יקבל את הצבע הנכון גם במצב בהיר
+  const applyFooterStyle = () => {
+    setTimeout(() => {
+      const footer = panel.querySelector('.panel-footer');
+      if (footer && !isDarkMode) {
+        (footer as HTMLElement).style.backgroundColor = '#F0F2F7';
+      }
+    }, 100);
+  };
+  
+  // HTML structure
   panel.innerHTML = `
+    <style>
+      :root {
+        --bg-color-light: #F7F8FA;
+        --text-color-light: #222222;
+        --border-color-light: #D9D9D9;
+        --header-bg-light: #F0F2F7;
+        --footer-bg-light: #F0F2F7;
+        --button-primary-light: #2563eb;
+        --button-hover-light: #1d4ed8;
+        --button-text-light: #ffffff;
+        --input-border-light: #D9D9D9;
+        --secondary-bg-light: #F0F2F7;
+        --note-bg-light: #FFFFFF;
+        --text-dark-light: #222222;
+        --text-muted-light: #444444;
+        --font-family: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+        --font-size-normal: 15px;
+        --font-weight-normal: 400;
+        
+        --bg-color-dark: #121212;
+        --text-color-dark: #ffffff;
+        --border-color-dark: #333333;
+        --header-bg-dark: #1e1e1e;
+        --footer-bg-dark: #1e1e1e;
+        --button-primary-dark: #3b82f6;
+        --button-hover-dark: #2563eb;
+        --button-text-dark: #ffffff;
+        --input-border-dark: #444;
+        --secondary-bg-dark: #1e1e1e;
+      }
+      
+      .notes-panel.dark-mode {
+        background-color: var(--bg-color-dark);
+        color: var(--text-color-dark);
+        border-color: var(--border-color-dark);
+      }
+      
+      .notes-panel.light-mode {
+        background-color: var(--bg-color-light);
+        color: var(--text-color-light);
+        border-color: var(--border-color-light);
+      }
+      
+      .notes-panel * {
+        font-family: var(--font-family);
+        font-size: var(--font-size-normal);
+        font-weight: var(--font-weight-normal);
+      }
+      
+      .panel-header {
+        padding: 12px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--border-color-light);
+        cursor: move;
+        user-select: none;
+        font-weight: 600;
+        font-size: 16px;
+      }
+      
+      .dark-mode .panel-header {
+        background-color: var(--header-bg-dark);
+        border-bottom-color: var(--border-color-dark);
+        color: var(--text-color-dark);
+      }
+      
+      .light-mode .panel-header {
+        background-color: var(--header-bg-light);
+        border-bottom-color: var(--border-color-light);
+        color: var(--text-dark-light);
+      }
+      
+      .size-controls {
+        display: flex;
+        border: 1px solid var(--input-border-light);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      
+      .dark-mode .size-controls {
+        border-color: var(--input-border-dark);
+      }
+      
+      .size-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        font-size: 12px;
+        border: none;
+        background-color: transparent;
+        cursor: pointer;
+      }
+      
+      .size-button.active {
+        background-color: var(--button-primary-light);
+        color: var(--button-text-light);
+        font-weight: bold;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+      }
+      
+      .dark-mode .size-button {
+        color: #ccc;
+        background-color: #333;
+      }
+      
+      .dark-mode .size-button.active {
+        background-color: var(--button-primary-dark);
+        color: var(--button-text-dark);
+      }
+      
+      .light-mode .size-button {
+        color: #666;
+        background-color: #f0f0f0;
+      }
+      
+      .light-mode .size-button.active {
+        background-color: var(--button-primary-light);
+        color: var(--button-text-light);
+      }
+      
+      .close-button {
+        background: transparent;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        color: inherit;
+      }
+      
+      .header-controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      
+      .theme-button {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        padding: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        transition: all 0.2s ease;
+      }
+      
+      .panel-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        position: relative;
+        padding-bottom: 120px; /* גובה מספק לחשיפת ההודעה האחרונה במלואה */
+        background-color: var(--bg-color-dark);
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .light-mode .panel-content {
+        background-color: var(--bg-color-light);
+      }
+      
+      .panel-content::-webkit-scrollbar {
+        width: 6px;
+      }
+      
+      .panel-content::-webkit-scrollbar-thumb {
+        background-color: rgba(128, 128, 128, 0.5);
+        border-radius: 4px;
+      }
+      
+      .dark-mode .panel-content::-webkit-scrollbar-thumb {
+        background-color: rgba(200, 200, 200, 0.3);
+      }
+      
+      .panel-footer {
+        padding: 12px 16px;
+        border-top: 1px solid var(--border-color-dark);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: var(--footer-bg-dark);
+        z-index: 10; /* Ensure it's above content */
+        height: auto; /* Ensure height is calculated based on content */
+        min-height: 70px; /* Minimum height for the footer */
+      }
+      
+      .light-mode .panel-footer {
+        background-color: var(--footer-bg-light);
+        border-top-color: var(--border-color-light);
+      }
+      
+      .current-timestamp {
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      
+      .dark-mode .current-timestamp {
+        color: #aaaaaa;
+      }
+      
+      .light-mode .current-timestamp {
+        color: #666666;
+      }
+      
+      #note-input {
+        resize: none;
+        height: 60px;
+        padding: 12px 16px;
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid var(--input-border-dark);
+        font-family: inherit;
+        font-size: 14px;
+        transition: border-color 0.2s;
+      }
+      
+      #note-input:focus {
+        outline: none;
+        border-color: var(--button-primary-dark);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      }
+      
+      .dark-mode #note-input:focus {
+        border-color: var(--button-primary-dark);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      }
+      
+      .dark-mode #note-input {
+        background-color: #2d2d2d;
+        color: #ffffff;
+        border-color: var(--input-border-dark);
+      }
+      
+      .light-mode #note-input {
+        background-color: #ffffff;
+        color: #333333;
+        border-color: var(--input-border-light);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      }
+      
+      #add-timestamp-button {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        border: none;
+        cursor: pointer;
+        font-size: 12px;
+        margin-left: auto;
+        transition: background-color 0.2s, transform 0.1s;
+      }
+      
+      .dark-mode #add-timestamp-button {
+        background-color: #2d2d2d;
+        color: #aaaaaa;
+      }
+      
+      .light-mode #add-timestamp-button {
+        background-color: #f0f0f0;
+        color: #666666;
+      }
+      
+      #add-timestamp-button:hover {
+        background-color: var(--button-primary-light);
+        color: white;
+        transform: translateY(-1px);
+      }
+      
+      .dark-mode #add-timestamp-button:hover {
+        background-color: var(--button-primary-dark);
+      }
+      
+      #save-note-button {
+        padding: 8px 16px;
+        background-color: var(--button-primary-dark);
+        color: var(--button-text-dark);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 500;
+        font-size: 14px;
+        align-self: flex-end;
+        transition: background-color 0.2s, transform 0.1s;
+      }
+      
+      #save-note-button:hover {
+        background-color: var(--button-hover-dark);
+        transform: translateY(-1px);
+      }
+      
+      .dark-mode #save-note-button {
+        background-color: var(--button-primary-dark);
+      }
+      
+      .light-mode #save-note-button {
+        background-color: var(--button-primary-light);
+        color: var(--button-text-light);
+      }
+      
+      .dark-mode #save-note-button:hover {
+        background-color: var(--button-hover-dark);
+      }
+      
+      .light-mode #save-note-button:hover {
+        background-color: var(--button-hover-light);
+      }
+      
+      /* גלילה אוטומטית להודעה האחרונה */
+      .notes-container {
+        overflow-y: auto;
+        max-height: calc(100% - 120px);
+        padding-bottom: 120px; /* מונע שהודעות ייחתכו ע"י אזור הקלט */
+      }
+      
+      /* תצוגה של הודעות ארוכות */
+      .note-item {
+        padding: 10px;
+        overflow-wrap: break-word; 
+        white-space: pre-wrap;
+        word-wrap: break-word; 
+      }
+      
+      .note-item .note-content {
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        max-width: 100%;
+      }
+      
+      /* Adjusted container heights for different sizes */
+      .notes-panel.small .notes-container {
+        max-height: calc(100% - 150px); /* Adjust based on header/footer heights */
+      }
+      
+      .notes-panel.medium .notes-container {
+        max-height: calc(100% - 150px);
+      }
+      
+      .notes-panel.large .notes-container {
+        max-height: calc(100% - 150px);
+      }
+      
+      .light-mode .notes-container {
+        color: var(--text-dark-light);
+        background-color: transparent; /* Explicitly transparent to adopt parent bg */
+      }
+
+      .dark-mode .notes-container {
+        background-color: transparent;
+      }
+      
+      .no-notes {
+        text-align: center;
+        padding: 40px 0;
+        color: #888;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      
+      .dark-mode .no-notes {
+        color: #aaa;
+      }
+      
+      .light-mode .no-notes {
+        color: #888;
+      }
+      
+      .note-item {
+        border: 1px solid var(--border-color-dark);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      
+      .dark-mode .note-item {
+        border-color: var(--border-color-dark);
+        background-color: var(--bg-color-dark);
+      }
+      
+      .light-mode .note-item {
+        border-color: var(--border-color-light);
+        background-color: var(--note-bg-light);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        color: var(--text-dark-light);
+      }
+      
+      .note-header {
+        padding: 8px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background-color: var(--header-bg-dark);
+        border-bottom: 1px solid var(--border-color-dark);
+        font-size: 12px;
+      }
+      
+      .dark-mode .note-header {
+        background-color: var(--header-bg-dark);
+        border-bottom-color: var(--border-color-dark);
+      }
+      
+      .light-mode .note-header {
+        background-color: var(--secondary-bg-light);
+        border-bottom-color: var(--border-color-light);
+        color: var(--text-dark-light);
+      }
+      
+      .timestamp {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      
+      .dark-mode .timestamp {
+        color: #aaaaaa;
+      }
+      
+      .light-mode .timestamp {
+        color: var(--text-muted-light);
+      }
+      
+      .timestamp-icon {
+        width: 14px;
+        height: 14px;
+      }
+      
+      .note-actions {
+        display: flex;
+        gap: 8px;
+      }
+      
+      .jump-button, .delete-button {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        padding: 4px;
+        font-size: 12px;
+        transition: color 0.2s, transform 0.1s;
+      }
+      
+      .dark-mode .jump-button {
+        color: #aaaaaa;
+      }
+      
+      .light-mode .jump-button {
+        color: var(--text-muted-light);
+      }
+      
+      .jump-button:hover {
+        transform: translateY(-1px);
+      }
+      
+      .dark-mode .jump-button:hover {
+        color: #ffffff;
+      }
+      
+      .light-mode .jump-button:hover {
+        color: var(--button-primary-light);
+      }
+      
+      .delete-button {
+        color: #ef4444;
+      }
+      
+      .note-content {
+        padding: 12px;
+        white-space: pre-line;
+      }
+      
+      .dark-mode .note-content {
+        background-color: var(--bg-color-dark);
+      }
+      
+      .light-mode .note-content {
+        background-color: var(--note-bg-light);
+        color: var(--text-dark-light);
+      }
+      
+      .empty-notes-icon {
+        margin-bottom: 16px;
+      }
+      
+      .dark-mode .empty-notes-icon svg {
+        stroke: #aaaaaa;
+      }
+      
+      .light-mode .empty-notes-icon svg {
+        stroke: #888888;
+      }
+      
+      /* מדיה קוורי לגודל SMALL */
+      .notes-panel.small .panel-header {
+        padding: 8px 12px;
+        font-size: 14px;
+      }
+      
+      .notes-panel.small .panel-content {
+        padding: 10px;
+        padding-bottom: 110px;
+      }
+      
+      .notes-panel.small .panel-footer {
+        padding: 8px 12px;
+      }
+      
+      .notes-panel.small #note-input {
+        padding: 8px 12px;
+        height: 50px;
+        font-size: 13px;
+      }
+      
+      .notes-panel.small .size-button {
+        width: 20px;
+        height: 20px;
+      }
+      
+      .notes-panel.small .note-item {
+        font-size: 13px;
+      }
+      
+      .notes-panel.small .note-content {
+        padding: 8px;
+      }
+      
+      .notes-panel.small .note-header {
+        padding: 6px 10px;
+        font-size: 11px;
+      }
+      
+      .notes-panel.small #save-note-button {
+        padding: 6px 12px;
+        font-size: 13px;
+      }
+
+      /* גדלים נוספים */
+      .notes-panel.medium .panel-content {
+        padding-bottom: 130px;
+      }
+      
+      .notes-panel.large .panel-content {
+        padding-bottom: 140px;
+      }
+      
+      .notes-panel.large .panel-header {
+        padding: 14px 20px;
+        font-size: 18px;
+      }
+      
+      .notes-panel.large #note-input {
+        padding: 14px 20px;
+        height: 70px;
+        font-size: 15px;
+      }
+      
+      /* Ensure smooth transition between dark and light */
+      .notes-panel * {
+        transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+      }
+      
+      /* Additional explicit background colors for all internal containers */
+      .light-mode .timestamp, 
+      .light-mode .note-actions,
+      .light-mode .jump-button {
+        background-color: transparent;
+      }
+      
+      .light-mode .note-header {
+        background-color: var(--secondary-bg-light);
+      }
+      
+      .light-mode .current-timestamp,
+      .light-mode #add-timestamp-button {
+        background-color: transparent;
+      }
+
+      /* אלמנטים נוספים שייתכן שצריכים תיקון במצב בהיר */
+      .light-mode .no-notes,
+      .light-mode .empty-notes-icon,
+      .light-mode #notes-container {
+        background-color: var(--bg-color-light);
+      }
+
+      /* כדי לוודא שאין פס שחור בכל מצב, נוסיף כלל גורף למצב בהיר */
+      .light-mode.notes-panel *:not(.size-button, .size-button.active, #save-note-button, button.theme-button, .panel-header, .panel-footer, .note-header) {
+        background-color: var(--bg-color-light);
+      }
+
+      /* תיקון שורשי של בעיית הפס השחור - מחיקת panel-footer מרשימת החריגים */
+      .light-mode.notes-panel *:not(.size-button, .size-button.active, #save-note-button, button.theme-button, .panel-header, .note-header) {
+        background-color: var(--bg-color-light);
+      }
+      
+      /* כלל מפורש מאוד לפאנל פוטר ולכל התוכן שלו */
+      .light-mode.notes-panel .panel-footer {
+        background-color: var(--footer-bg-light) !important;
+        border-top-color: var(--border-color-light) !important;
+        color: var(--text-dark-light) !important;
+      }
+      
+      /* נוודא שגם ב-HTML ישיר של panel-footer יש צבע רקע מפורש */
+      .light-mode.notes-panel div.panel-footer {
+        background-color: var(--footer-bg-light) !important;
+      }
+      
+      /* פותר את הבעיה של כפתור התזמון ושל הערכים */
+      .light-mode.notes-panel .panel-footer .current-timestamp {
+        background-color: transparent !important;
+        color: var(--text-muted-light) !important;
+      }
+      
+      /* וידוא שאזור הטקסט מקבל רקע נכון */
+      .light-mode.notes-panel .panel-footer #note-input {
+        background-color: #FFFFFF !important;
+        color: var(--text-dark-light) !important;
+        border: 1px solid var(--border-color-light) !important;
+      }
+    </style>
+    
     <div class="panel-header">
-      <h3>Video Notes</h3>
-      <button class="close-button">&times;</button>
-    </div>
-    <div class="panel-content">
-      <p class="helper-text">Take notes while watching this video. Notes are saved automatically.</p>
-      <div class="notes-container" id="notes-container">
-        <div class="no-notes">No saved notes for this video</div>
+      <div>Notes & Summary</div>
+      <div class="header-controls">
+        <div class="size-controls">
+          <button class="size-button" data-size="small">S</button>
+          <button class="size-button active" data-size="medium">M</button>
+          <button class="size-button" data-size="large">L</button>
+        </div>
+        <button class="theme-button">
+          ${isDarkMode ? 
+            `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>` : 
+            `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>`
+          }
+        </button>
+        <button class="close-button">✕</button>
       </div>
     </div>
+    
+    <div class="panel-content">
+      <div class="notes-container" id="notes-container">
+        <div class="no-notes">
+          <div class="empty-notes-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <h3 style="margin-bottom: 8px; color: ${isDarkMode ? '#ffffff' : '#222222'}; font-family: var(--font-family); font-size: 16px; font-weight: 500;">Take notes while watching</h3>
+          <p style="max-width: 280px; margin-bottom: 24px; font-size: 15px; color: ${isDarkMode ? '#aaaaaa' : '#555555'}; font-family: var(--font-family);">
+            Add your notes below to capture important moments
+          </p>
+        </div>
+      </div>
+    </div>
+    
     <div class="panel-footer">
-      <div class="current-timestamp" id="current-timestamp"></div>
-      <textarea id="note-input" placeholder="Enter your note here..."></textarea>
+      <div class="current-timestamp" id="current-timestamp">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        Current time: <span id="timestamp-value">--:--</span>
+        <button id="add-timestamp-button" style="
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 6px 8px;
+          border-radius: 4px;
+          border: none;
+          background-color: ${isDarkMode ? '#2d2d2d' : '#F0F2F7'};
+          color: ${isDarkMode ? '#aaaaaa' : '#444444'};
+          cursor: pointer;
+          font-size: 12px;
+          margin-left: auto;
+          transition: background-color 0.2s, color 0.2s, transform 0.1s;
+        ">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v10l5 5"></path>
+            <circle cx="12" cy="12" r="10"></circle>
+          </svg>
+          Add timestamp
+        </button>
+      </div>
+      
+      <textarea id="note-input" placeholder="Write your note about this video..."></textarea>
       <button id="save-note-button">Save Note</button>
     </div>
   `;
 
-  // Add event listener for the close button
-  panel.querySelector('.close-button')?.addEventListener('click', () => {
-    panel.style.display = 'none';
-    if (timestampInterval) {
-      clearInterval(timestampInterval);
-      timestampInterval = null;
-    }
-  });
-
+  // Add to document
+  document.body.appendChild(panel);
+  
+  // קריאה לפונקציה שפותרת את בעיית הפס השחור
+  applyFooterStyle();
+  
+  // Create variables for dragging functionality
+  let isDragging = false;
+  let initialX: number = 0;
+  let initialY: number = 0;
+  let initialTop: number = 0;
+  let initialLeft: number = 0;
+  
+  // פונקציה לעדכון כפתורי הגודל בהתאם למצב הנוכחי של הפאנל
+  const updateSizeButtons = () => {
+    const sizeButtons = panel.querySelectorAll('.size-button');
+    const isDark = panel.classList.contains('dark-mode');
+    
+    sizeButtons.forEach(button => {
+      if ((button as HTMLElement).classList.contains('active')) {
+        (button as HTMLElement).style.backgroundColor = isDark ? '#3b82f6' : '#3b82f6';
+        (button as HTMLElement).style.color = 'white';
+      } else {
+        (button as HTMLElement).style.backgroundColor = isDark ? '#333' : '#f0f0f0';
+        (button as HTMLElement).style.color = isDark ? '#ccc' : '#666';
+      }
+    });
+  };
+  
   // Get current page/video information
   const videoTitle = document.title || "YouTube Video";
   const url = window.location.href;
@@ -3080,259 +3267,425 @@ function createNotesPanel() {
     videoId = pathParts[pathParts.length - 1] || 'unknown';
   }
   
-  // Function to display notes in the panel
+  // Display functionality for notes
   function displayNotes(notes: any[]) {
-    const notesContainer = document.getElementById('notes-container');
+    const notesContainer = panel.querySelector('#notes-container') as HTMLElement;
     if (!notesContainer) return;
     
-    if (!notes || notes.length === 0) {
-      notesContainer.innerHTML = '<div class="no-notes">No saved notes for this video</div>';
-                return;
-              }
-
-    notesContainer.innerHTML = '';
-    notes.forEach((note, index) => {
-      const noteElement = document.createElement('div');
-      noteElement.className = 'note-item';
-      
-      const formattedDate = note.timestamp ? new Date(note.timestamp).toLocaleString() : 'Unknown date';
-      const videoTimeFormatted = note.videoTime ? formatVideoTime(note.videoTime) : '';
-      
-      noteElement.innerHTML = `
-        <div class="note-timestamp">
-          ${formattedDate}
-          ${videoTimeFormatted ? ` - ${videoTimeFormatted}` : ''}
+    const wasEmpty = notesContainer.querySelector('.no-notes') !== null;
+    
+    if (notes.length === 0) {
+      notesContainer.innerHTML = `
+        <div class="no-notes">
+          <div class="empty-notes-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <h3 style="margin-bottom: 8px; color: ${isDarkMode ? '#ffffff' : '#222222'}; font-family: var(--font-family); font-size: 16px; font-weight: 500;">Take notes while watching</h3>
+          <p style="max-width: 280px; margin-bottom: 24px; font-size: 15px; color: ${isDarkMode ? '#aaaaaa' : '#555555'}; font-family: var(--font-family);">
+            Add your notes below to capture important moments
+          </p>
         </div>
-        <div class="note-content">${note.content}</div>
-        <button class="note-delete" data-index="${index}">&times;</button>
       `;
+      return;
+    }
+    
+    // Display notes
+    let notesHtml = '';
+    notes.forEach((note, index) => {
+      notesHtml += `
+        <div class="note-item">
+          <div class="note-header">
+            <div class="timestamp">
+              <svg class="timestamp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <span>${note.videoTime ? formatVideoTime(note.videoTime) : 'No timestamp'}</span>
+            </div>
+            <div class="note-actions">
+              ${note.videoTime ? `
+                <button class="jump-button" data-time="${note.videoTime}">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  Jump
+                </button>
+              ` : ''}
+              <button class="delete-button" data-index="${index}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 6h18"></path>
+                  <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="note-content">${note.content}</div>
+        </div>
+      `;
+    });
+    
+    notesContainer.innerHTML = notesHtml;
+    
+    // Add event listeners for jump buttons
+    const jumpButtons = notesContainer.querySelectorAll('.jump-button');
+    jumpButtons.forEach(button => {
+      button.addEventListener('click', function(this: HTMLElement) {
+        const time = parseFloat(this.getAttribute('data-time') || '0');
+        handleJumpToTime(time);
+      });
+    });
+    
+    // Add event listeners for delete buttons
+    const deleteButtons = notesContainer.querySelectorAll('.delete-button');
+    deleteButtons.forEach(button => {
+      button.addEventListener('click', function(this: HTMLElement) {
+        const index = parseInt(this.getAttribute('data-index') || '0');
+        deleteNote(index);
+      });
+    });
+    
+    // Always scroll to bottom after adding notes - ensure with a short delay
+    setTimeout(() => {
+      notesContainer.scrollTop = notesContainer.scrollHeight;
+    }, 50);
+  }
+  
+  // Load saved notes
+  function loadSavedNotes() {
+    chrome.storage.local.get([`notes-${videoId}`], (result) => {
+      const notes = result[`notes-${videoId}`] || [];
+      displayNotes(notes);
       
-      notesContainer.appendChild(noteElement);
+      // גלילה אוטומטית להודעה האחרונה
+      const notesContainer = panel.querySelector('#notes-container') as HTMLElement;
+      if (notesContainer) {
+        notesContainer.scrollTop = notesContainer.scrollHeight;
+      }
       
-      // Add delete functionality
-      const deleteButton = noteElement.querySelector('.note-delete');
-      if (deleteButton) {
-        deleteButton.addEventListener('click', () => {
-          deleteNote(index);
+      // Check if we need to migrate these notes to the new format
+      if (notes.length > 0) {
+        migrateNotesToNewFormat(notes);
+      }
+    });
+  }
+  
+  // Function to migrate notes to the new format if needed
+  function migrateNotesToNewFormat(notes: any[]) {
+    chrome.storage.local.get(['notes_storage'], (result) => {
+      const notesStorage = result.notes_storage || {};
+      
+      // Check if we already have this video in the new format
+      if (!notesStorage[videoId] || !notesStorage[videoId].notes) {
+        // Get video information
+        const videoTitle = document.title.replace(' - YouTube', '').trim();
+        const videoURL = window.location.href;
+        
+        // Create new entry for this video
+        notesStorage[videoId] = {
+          videoId,
+          videoTitle,
+          videoURL,
+          lastUpdated: new Date().toISOString(),
+          notes: notes.map(note => {
+            // Make sure each note has formattedTime
+            if (!note.formattedTime && note.videoTime) {
+              note.formattedTime = formatVideoTime(note.videoTime);
+            }
+            return note;
+          })
+        };
+        
+        // Save back to storage
+        chrome.storage.local.set({ notes_storage: notesStorage }, () => {
+          console.log('[WordStream] Notes migrated to unified storage');
         });
       }
     });
   }
   
-  // Load saved notes when the panel is opened
-  function loadSavedNotes() {
-    if (!videoId) return;
-    
-    try {
-      if (isChromeAPIAvailable()) {
-        chrome.storage.local.get(['videoNotes'], (result) => {
-              if (chrome.runtime.lastError) {
-            console.warn('[WordStream] Error loading notes:', chrome.runtime.lastError);
-            displayNotes([]);
-        return;
-      }
-      
-          const allNotes = result.videoNotes || {};
-          displayNotes(allNotes[videoId] || []);
-        });
-              } else {
-        console.warn('[WordStream] Chrome storage API not available, using local fallback');
-        // Try to use localStorage as fallback
-        try {
-          const notesJson = localStorage.getItem('wordstream_notes');
-          const allNotes = notesJson ? JSON.parse(notesJson) : {};
-          displayNotes(allNotes[videoId] || []);
-        } catch (error) {
-          console.error('[WordStream] Error accessing localStorage:', error);
-          displayNotes([]);
-        }
-      }
-    } catch (error) {
-      console.error('[WordStream] Error loading notes:', error);
-      displayNotes([]);
-    }
-  }
-  
-  // Format video time (seconds) to MM:SS format
+  // Format video time from seconds to MM:SS
   function formatVideoTime(seconds: number): string {
-    if (!seconds && seconds !== 0) return '';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   
-  // Delete a note by index
+  // Delete note
   function deleteNote(index: number): void {
-    if (!videoId) return;
-    
-    try {
-      if (isChromeAPIAvailable() && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get(['videoNotes'], (result) => {
-          if (chrome.runtime.lastError) {
-            console.warn('[WordStream] Error retrieving notes for deletion:', chrome.runtime.lastError);
-            return;
-          }
-
-          const allNotes = result.videoNotes || {};
-          const videoNotes = allNotes[videoId] || [];
-          
-          if (index >= 0 && index < videoNotes.length) {
-            videoNotes.splice(index, 1);
-            allNotes[videoId] = videoNotes;
-            
-            chrome.storage.local.set({ videoNotes: allNotes }, () => {
-          if (chrome.runtime.lastError) {
-                console.warn('[WordStream] Error saving notes after deletion:', chrome.runtime.lastError);
-            return;
-          }
-
-              console.log('[WordStream] Note deleted successfully');
-              loadSavedNotes();
-            });
-          }
-        });
-      } else {
-        // Try localStorage fallback
-        try {
-          const notesJson = localStorage.getItem('wordstream_notes');
-          const allNotes = notesJson ? JSON.parse(notesJson) : {};
-          const videoNotes = allNotes[videoId] || [];
-          
-          if (index >= 0 && index < videoNotes.length) {
-            videoNotes.splice(index, 1);
-            allNotes[videoId] = videoNotes;
-            
-            localStorage.setItem('wordstream_notes', JSON.stringify(allNotes));
-            loadSavedNotes();
-          }
-        } catch (error) {
-          console.error('[WordStream] Error using localStorage for note deletion:', error);
-        }
-      }
-    } catch (error) {
-      console.error('[WordStream] Error deleting note:', error);
-    }
+    chrome.storage.local.get([`notes-${videoId}`], (result) => {
+      const notes = result[`notes-${videoId}`] || [];
+      notes.splice(index, 1);
+      
+      chrome.storage.local.set({
+        [`notes-${videoId}`]: notes
+      }, () => {
+        displayNotes(notes);
+      });
+    });
   }
   
-  // Update the timestamp every second while the notes panel is open
-  let timestampInterval: ReturnType<typeof setInterval> | null = null;
-  
-  function updateCurrentTimestamp() {
-    const timestampElement = document.getElementById('current-timestamp');
-    if (!timestampElement) return;
-    
-    let currentTime = 0;
-    
-    // Try to get the video player
+  // Handle jump to time
+  function handleJumpToTime(time: number) {
     const videoElement = document.querySelector('video');
     if (videoElement) {
-      currentTime = videoElement.currentTime;
+      videoElement.currentTime = time;
+      videoElement.play().catch(() => {
+        console.log('WordStream: Could not play video automatically');
+      });
     }
-    
-    timestampElement.textContent = currentTime ? `Current Video Time: ${formatVideoTime(currentTime)}` : '';
   }
   
-  // Start updating timestamp
-  updateCurrentTimestamp();
-  
-  // Add Note functionality
-  setTimeout(() => {
-    const saveButton = document.getElementById('save-note-button');
-    const noteInput = document.getElementById('note-input') as HTMLTextAreaElement;
+  // Update current timestamp
+  let timestampInterval: any = null;
+  function updateCurrentTimestamp() {
+    const videoElement = document.querySelector('video');
+    const timestampEl = panel.querySelector('#timestamp-value');
     
-    if (saveButton && noteInput) {
-      console.log('[WordStream] Save note button found and event listener attached');
-      
-      saveButton.addEventListener('click', function() {
-        const noteContent = noteInput.value.trim();
-        if (!noteContent) return;
-        
-        let currentTime = 0;
-        const videoElement = document.querySelector('video');
-        if (videoElement) {
-          currentTime = videoElement.currentTime;
-        }
-        
-        const note = {
-          content: noteContent,
-          timestamp: new Date().toISOString(),
-          videoTime: currentTime || null
-        };
-        
-        console.log('[WordStream] Saving note:', note);
-        
-        // Save note to storage with safer API checks
-        try {
-          if (isChromeAPIAvailable() && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.get(['videoNotes'], (result) => {
-              if (chrome.runtime.lastError) {
-                console.warn('[WordStream] Error retrieving notes for saving:', chrome.runtime.lastError);
-                // Fall back to localStorage
-                saveToLocalStorage();
-                return;
-              }
-
-              const allNotes = result.videoNotes || {};
-              const videoNotes = allNotes[videoId] || [];
-              
-              videoNotes.push(note);
-              allNotes[videoId] = videoNotes;
-              
-              chrome.storage.local.set({ videoNotes: allNotes }, () => {
-              if (chrome.runtime.lastError) {
-                  console.warn('[WordStream] Error saving note:', chrome.runtime.lastError);
-                  saveToLocalStorage();
-                  return;
-                }
-                
-                console.log('[WordStream] Note saved successfully to Chrome storage');
-                noteInput.value = ''; // Clear input
-                loadSavedNotes(); // Refresh notes list
-              });
-            });
-              } else {
-            saveToLocalStorage();
-          }
-  } catch (error) {
-          console.error('[WordStream] Error in note saving process:', error);
-          saveToLocalStorage();
-        }
-        
-        // Fallback to localStorage
-        function saveToLocalStorage() {
-          try {
-            const notesJson = localStorage.getItem('wordstream_notes');
-            const allNotes = notesJson ? JSON.parse(notesJson) : {};
-            const videoNotes = allNotes[videoId] || [];
-            
-            videoNotes.push(note);
-            allNotes[videoId] = videoNotes;
-            
-            localStorage.setItem('wordstream_notes', JSON.stringify(allNotes));
-            console.log('[WordStream] Note saved successfully to localStorage');
-            noteInput.value = ''; // Clear input
-            loadSavedNotes(); // Refresh notes list
-          } catch (localError) {
-            console.error('[WordStream] Failed to save to localStorage:', localError);
-            alert('Failed to save note. Please try again.');
-          }
-        }
-      });
-      
-      // Also allow pressing Enter in the textarea to save
-      noteInput.addEventListener('keydown', function(event) {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
-          saveButton.click();
-        }
-      });
-      
-      // Load any existing notes
-      loadSavedNotes();
-    } else {
-      console.error('[WordStream] Could not find save button or note input');
+    if (videoElement && timestampEl) {
+      const currentTime = videoElement.currentTime;
+      timestampEl.textContent = formatVideoTime(currentTime);
     }
-  }, 100);
+  }
+  
+  // Initialize timestamp update interval
+  timestampInterval = setInterval(updateCurrentTimestamp, 1000);
+  
+  // Setup draggable functionality
+  const header = panel.querySelector('.panel-header') as HTMLElement;
+  if (header) {
+    header.addEventListener('mousedown', (e) => {
+      // Avoid dragging when clicking buttons in header
+      if ((e.target as HTMLElement).closest('button')) return;
+      
+      isDragging = true;
+      initialX = e.clientX;
+      initialY = e.clientY;
+      initialTop = parseInt(panel.style.top) || 0;
+      initialLeft = parseInt(panel.style.left) || 0;
+      
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = e.clientX - initialX;
+        const dy = e.clientY - initialY;
+        
+        panel.style.top = `${initialTop + dy}px`;
+        panel.style.left = `${initialLeft + dx}px`;
+      }
+    });
+    
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+  
+  // Setup size buttons
+  const sizeButtons = panel.querySelectorAll('.size-button');
+  sizeButtons.forEach(button => {
+    button.addEventListener('click', function(this: HTMLElement) {
+      const size = this.getAttribute('data-size') as keyof typeof PANEL_SIZES;
+      if (size && PANEL_SIZES[size]) {
+        // Update active button
+        sizeButtons.forEach(btn => btn.classList.remove('active'));
+        this.classList.add('active');
+        
+        // Update panel size
+        panel.style.width = PANEL_SIZES[size].width;
+        panel.style.height = PANEL_SIZES[size].height;
+        
+        // Update class for styling
+        panel.classList.remove('small', 'medium', 'large');
+        panel.classList.add(size);
+        
+        // Apply matching styles to buttons
+        updateSizeButtons();
+      }
+    });
+  });
+  
+  // Handle theme button click
+  const themeButton = panel.querySelector('.theme-button');
+  if (themeButton) {
+    // Update theme toggle appearance to match Gemini panel
+    (themeButton as HTMLElement).style.background = 'transparent';
+    (themeButton as HTMLElement).style.border = 'none';
+    (themeButton as HTMLElement).style.borderRadius = '50%';
+    (themeButton as HTMLElement).style.padding = '6px';
+    (themeButton as HTMLElement).style.color = isDarkMode ? '#ffd700' : '#7c3aed';
+    (themeButton as HTMLElement).style.boxShadow = 'none';
+    (themeButton as HTMLElement).style.display = 'flex';
+    (themeButton as HTMLElement).style.alignItems = 'center';
+    (themeButton as HTMLElement).style.justifyContent = 'center';
+    (themeButton as HTMLElement).style.gap = '0';
+    (themeButton as HTMLElement).style.width = '32px';
+    (themeButton as HTMLElement).style.height = '32px';
+    (themeButton as HTMLElement).title = isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode";
+    
+    // Update icon to match Gemini panel
+    themeButton.innerHTML = isDarkMode ? 
+      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>' : 
+      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>';
+    
+    themeButton.addEventListener('click', function() {
+      // Toggle dark mode
+      const isDarkMode = panel.classList.contains('dark-mode');
+      if (isDarkMode) {
+        panel.classList.remove('dark-mode');
+        panel.classList.add('light-mode');
+        panel.style.backgroundColor = '#F7F8FA';
+        panel.style.color = '#333333';
+        panel.style.border = '1px solid #e0e0e0';
+        applyFooterStyle(); // פתרון לפס השחור כשעוברים למצב בהיר
+        
+        // עדכון כפתור בסגנון מינימליסטי
+        (themeButton as HTMLElement).style.background = 'transparent';
+        (themeButton as HTMLElement).style.border = 'none';
+        (themeButton as HTMLElement).style.color = '#000000';
+        (themeButton as HTMLElement).style.padding = '6px';
+        (themeButton as HTMLElement).style.width = '32px';
+        (themeButton as HTMLElement).style.height = '32px';
+        (themeButton as HTMLElement).title = "Switch to Dark Mode";
+        
+        // אייקון ירח בלבד, ללא טקסט
+        themeButton.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>';
+      } else {
+        panel.classList.remove('light-mode');
+        panel.classList.add('dark-mode');
+        panel.style.backgroundColor = '#121212';
+        panel.style.color = '#ffffff';
+        panel.style.border = '1px solid #333333';
+        applyFooterStyle();
+        
+        // עדכון כפתור בסגנון מינימליסטי
+        (themeButton as HTMLElement).style.background = 'transparent';
+        (themeButton as HTMLElement).style.border = 'none';
+        (themeButton as HTMLElement).style.color = '#ffffff';
+        (themeButton as HTMLElement).style.padding = '6px';
+        (themeButton as HTMLElement).style.width = '32px';
+        (themeButton as HTMLElement).style.height = '32px';
+        (themeButton as HTMLElement).title = "Switch to Light Mode";
+        
+        // אייקון שמש בלבד, ללא טקסט
+        themeButton.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>';
+      }
+      
+      // עדכון כפתורי הגודל לאחר שינוי מצב
+      updateSizeButtons();
+    });
+  }
+  
+  // Close button
+  panel.querySelector('.close-button')?.addEventListener('click', () => {
+    panel.style.display = 'none';
+    if (timestampInterval) {
+      clearInterval(timestampInterval);
+      timestampInterval = null;
+    }
+  });
+  
+  // Add timestamp button
+  const addTimestampButton = panel.querySelector('#add-timestamp-button');
+  const noteInput = panel.querySelector('#note-input') as HTMLTextAreaElement;
+  
+  if (addTimestampButton && noteInput) {
+    addTimestampButton.addEventListener('click', () => {
+      const videoElement = document.querySelector('video');
+      if (videoElement) {
+        const currentTime = videoElement.currentTime;
+        const timeFormatted = formatVideoTime(currentTime);
+        noteInput.value += (noteInput.value ? '\n' : '') + `[${timeFormatted}] `;
+        noteInput.focus();
+      }
+    });
+  }
+  
+  // Save note button
+  const saveButton = panel.querySelector('#save-note-button');
+  if (saveButton && noteInput) {
+    saveButton.addEventListener('click', () => {
+      const content = noteInput.value.trim();
+      if (!content) return;
+      
+      const videoElement = document.querySelector('video');
+      const videoTime = videoElement ? videoElement.currentTime : undefined;
+      const formattedTime = videoTime ? formatVideoTime(videoTime) : undefined;
+      
+      const newNote = {
+        id: Date.now().toString(),
+        content,
+        timestamp: new Date().toISOString(),
+        videoTime,
+        formattedTime
+      };
+      
+      // Save in the old format for backward compatibility
+      chrome.storage.local.get([`notes-${videoId}`], (result) => {
+        const notes = result[`notes-${videoId}`] || [];
+        notes.push(newNote);
+        
+        chrome.storage.local.set({
+          [`notes-${videoId}`]: notes
+        }, () => {
+          noteInput.value = '';
+          displayNotes(notes);
+          
+          // גלילה אוטומטית להודעה האחרונה
+          const notesContainer = panel.querySelector('#notes-container') as HTMLElement;
+          if (notesContainer) {
+            notesContainer.scrollTop = notesContainer.scrollHeight;
+          }
+          
+          // Also save in the new format for Notes & Summaries feature
+          saveNoteForSummaries(newNote);
+        });
+      });
+    });
+  }
+  
+  // Helper function to save notes in the new format for Notes & Summaries
+  function saveNoteForSummaries(note: any) {
+    // Get the video information
+    const videoTitle = document.title.replace(' - YouTube', '').trim();
+    const videoURL = window.location.href;
+    
+    chrome.storage.local.get(['notes_storage'], (result) => {
+      const notesStorage = result.notes_storage || {};
+      
+      // Check if we already have notes for this video
+      if (!notesStorage[videoId]) {
+        // Create new entry for this video
+        notesStorage[videoId] = {
+          videoId,
+          videoTitle,
+          videoURL,
+          lastUpdated: new Date().toISOString(),
+          notes: []
+        };
+      }
+      
+      // Update the last updated timestamp
+      notesStorage[videoId].lastUpdated = new Date().toISOString();
+      
+      // Add the new note
+      notesStorage[videoId].notes.push(note);
+      
+      // Save back to storage
+      chrome.storage.local.set({ notes_storage: notesStorage }, () => {
+        console.log('[WordStream] Note saved to unified storage');
+      });
+    });
+  }
+
+  // Initial load of saved notes
+  loadSavedNotes();
   
   return panel;
 }
@@ -3344,7 +3697,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start the caption detection
   startDetection();
   
-  // שימוש בפונקציה הישירה במקום React
+  // Add direct floating controls
   setTimeout(addDirectFloatingControls, 1000);
   
   // Watch for URL changes (for SPA navigation)
@@ -3354,7 +3707,7 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('[WordStream] URL changed, initializing for new page');
       // Restart caption detection
       startDetection();
-      // שימוש בפונקציה הישירה במקום React
+      // Re-add controls
       setTimeout(addDirectFloatingControls, 1000);
     }
   }).observe(document, {subtree: true, childList: true});
@@ -3365,51 +3718,9 @@ window.addEventListener('load', () => {
   console.log('[WordStream] Window loaded, initializing extension');
   // Ensure detection is running
   startDetection();
-  // שימוש בפונקציה הישירה במקום React
+  // Add controls
   setTimeout(addDirectFloatingControls, 2000);
 });
-
-// הגדרה אחת של renderReactControls במקום הנכון
-function renderReactControls() {
-  try {
-    console.log('[WordStream] Rendering React floating controls');
-    
-    // וודא שאין כבר אלמנט כזה
-    removeAllFloatingControls();
-    
-    // יצירת מיכל עבור רכיבי React
-    const reactContainer = document.createElement('div');
-    reactContainer.id = 'wordstream-react-container';
-    document.body.appendChild(reactContainer);
-    
-    // קבלת זיהוי וכותרת הוידאו
-    let videoId = '';
-    if (window.location.hostname.includes('youtube.com')) {
-      const url = new URL(window.location.href);
-      videoId = url.searchParams.get('v') || '';
-    }
-    
-    const videoTitle = document.title;
-    
-    if (!videoId) {
-      console.error('[WordStream] Could not get video ID for React components');
-      return;
-    }
-    
-    // רינדור רכיב FloatingControls באמצעות React
-    const root = createRoot(reactContainer);
-    root.render(
-      React.createElement(FloatingControls, {
-        videoId,
-        videoTitle
-      })
-    );
-    
-    console.log('[WordStream] React floating controls rendered successfully');
-  } catch (error) {
-    console.error('[WordStream] Error rendering React floating controls:', error);
-  }
-}
 
 // Handle word clicks (called externally from detectors)
 export function handleWordClick(event: MouseEvent) {

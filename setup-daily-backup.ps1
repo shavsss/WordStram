@@ -39,6 +39,6 @@ $hasRemote = git remote -v
 if (-not $hasRemote) {
     Write-Host "`nNOTE: No remote repository is configured yet!" -ForegroundColor Red
     Write-Host "To add a remote repository, use:" -ForegroundColor Yellow
-    Write-Host "git remote add origin https://github.com/yourusername/WordStram2.git" -ForegroundColor Cyan
-    Write-Host "Example for GitHub: git remote add origin https://github.com/yourusername/WordStram2.git" -ForegroundColor Cyan
+    Write-Host "git remote add origin https://github.com/shavsss/WordStram2.git" -ForegroundColor Cyan
+    Write-Host "Example for GitHub: git remote add origin https://github.com/shavsss/WordStram2.git" -ForegroundColor Cyan
 } 
