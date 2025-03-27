@@ -1,23 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "WordStream",
+  "name": "WordStream2",
   "version": "1.0.0",
-  "description": "Learn languages while watching videos",
+  "description": "Learn vocabulary while watching videos with Firebase sync",
   "permissions": [
     "storage",
-    "tabs",
-    "scripting",
     "identity",
-    "webRequest"
+    "tabs",
+    "webNavigation"
   ],
+  "oauth2": {
+    "client_id": "719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
+  },
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.netflix.com/*",
-    "https://*.wordstream-extension.com/*"
+    "*://*.translation.googleapis.com/*"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
@@ -25,14 +30,23 @@
         "*://*.youtube.com/*",
         "*://*.netflix.com/*"
       ],
-      "js": ["content.js"],
-      "css": ["content.css"]
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["popup.html", "popup.js", "popup.css", "welcome.html"],
-      "matches": ["*://*.youtube.com/*", "*://*.netflix.com/*"]
+      "resources": [
+        "icons/*"
+      ],
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.netflix.com/*"
+      ]
     }
   ],
   "action": {
@@ -49,13 +63,6 @@
     "128": "icons/icon128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.wordstream-extension.com https://*.firebaseio.com https://*.googleapis.com;"
-  },
-  "oauth2": {
-    "client_id": "719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile"
-    ]
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 } 

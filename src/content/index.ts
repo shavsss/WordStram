@@ -2178,12 +2178,6 @@ function createGeminiPanel2() {
   // Helper function to save chats in the unified format for SavedChats
   function saveChatForUnifiedStorage(userMessage: string, aiResponse: string, videoId: string, videoTitle: string) {
     try {
-      // Check if chrome.storage.local is available
-      if (!chrome || !chrome.storage || !chrome.storage.local) {
-        console.error('[WordStream] chrome.storage.local is not available');
-        return;
-      }
-      
       // Get video URL
       const videoURL = window.location.href;
       

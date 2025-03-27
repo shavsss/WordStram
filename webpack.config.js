@@ -2,7 +2,6 @@ const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 const webpack = require('webpack');
-const DotenvPlugin = require('dotenv-webpack');
 
 module.exports = {
   entry: {
@@ -61,10 +60,6 @@ module.exports = {
       patterns: [
         { from: 'public' },
       ],
-    }),
-    new DotenvPlugin({
-      path: './src/.env', // Path to .env file
-      systemvars: true,   // Load system environment variables as well
     }),
     new webpack.DefinePlugin({
       'process.env': '{}',

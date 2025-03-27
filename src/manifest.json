@@ -2,39 +2,20 @@
   "manifest_version": 3,
   "name": "WordStream",
   "version": "1.0.0",
-  "description": "Learn languages while watching videos",
+  "description": "Learn languages while watching YouTube and Netflix videos",
   "permissions": [
     "storage",
     "tabs",
-    "scripting",
-    "identity",
-    "webRequest"
+    "scripting"
   ],
   "host_permissions": [
-    "*://*.youtube.com/*",
-    "*://*.netflix.com/*",
-    "https://*.wordstream-extension.com/*"
+    "https://www.youtube.com/*",
+    "https://www.netflix.com/*",
+    "https://translation.googleapis.com/*"
   ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "*://*.youtube.com/*",
-        "*://*.netflix.com/*"
-      ],
-      "js": ["content.js"],
-      "css": ["content.css"]
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["popup.html", "popup.js", "popup.css", "welcome.html"],
-      "matches": ["*://*.youtube.com/*", "*://*.netflix.com/*"]
-    }
-  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -43,19 +24,23 @@
       "128": "icons/icon128.png"
     }
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://www.netflix.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.wordstream-extension.com https://*.firebaseio.com https://*.googleapis.com;"
-  },
-  "oauth2": {
-    "client_id": "719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile"
-    ]
   }
 } 

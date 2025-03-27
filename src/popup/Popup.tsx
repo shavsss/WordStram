@@ -14,9 +14,6 @@ import { NotesAndSummaries } from '@/components/notes/NotesAndSummaries';
 import { SavedChats } from '@/components/chats/SavedChats';
 import { Button } from '@/components/ui/button';
 import * as XLSX from 'xlsx';
-import SignInButton from '@/components/auth/SignInButton';
-import syncService from '@/services/storage/sync-service';
-import WordListSharing from '@/components/words/WordListSharing';
 
 interface Stats {
   totalWords: number;
@@ -170,8 +167,6 @@ export default function Popup() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [currentView, setCurrentView] = useState<'home' | 'stats' | 'games' | 'notes' | 'chats'>('home');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [showWordSharing, setShowWordSharing] = useState(false);
 
   // Add helper function for date handling
   const parseDate = (dateString: string): Date | null => {
@@ -1250,61 +1245,6 @@ export default function Popup() {
     setCurrentView('home');
   };
 
-  // Handle auth state change
-  const handleAuthStateChange = (isSignedIn: boolean) => {
-    setIsAuthenticated(isSignedIn);
-    // If user just signed in, trigger sync of local data to cloud
-    if (isSignedIn) {
-      chrome.runtime.sendMessage({ action: 'syncData' });
-    }
-  };
-
-  // Check initial auth state
-  useEffect(() => {
-    const checkAuthState = () => {
-      const isAuth = syncService.isAuthenticated();
-      setIsAuthenticated(isAuth);
-    };
-    
-    // Check after Chrome API is available
-    waitForChromeAPI().then(() => {
-      checkAuthState();
-    });
-  }, []);
-
-  // Add this function to handle importing word lists
-  const handleImportWordList = (importedWords: any[]) => {
-    // Create new Word objects from imported words
-    const newWords = importedWords.map(importedWord => ({
-      id: importedWord.id || Math.random().toString(36).substring(7),
-      originalWord: importedWord.originalWord || importedWord.text || importedWord.original || '',
-      targetWord: importedWord.targetWord || importedWord.translation || importedWord.translated || '',
-      sourceLanguage: importedWord.sourceLanguage || importedWord.language || 'en',
-      targetLanguage: importedWord.targetLanguage || settings.targetLanguage,
-      context: importedWord.context || null,
-      timestamp: importedWord.timestamp || new Date().toISOString(),
-      source: importedWord.source || 'imported',
-      stats: importedWord.stats || { viewed: 0, correct: 0, incorrect: 0 } // Add stats to match Word type
-    })) as Word[]; // Type assertion to Word[]
-
-    // Add words to the list
-    const combinedWords = [...words, ...newWords];
-    setWords(combinedWords);
-
-    // Update storage
-    chrome.storage.sync.set({ 
-      words: combinedWords,
-      stats: {
-        ...stats,
-        totalWords: combinedWords.length,
-        lastActive: new Date().toISOString()
-      }
-    });
-
-    // Show success message or notification
-    // ... you could add a toast notification here
-  };
-
   // Determine content based on current view
   let content;
   
@@ -1352,10 +1292,6 @@ export default function Popup() {
             <h1 className="text-xl font-bold ml-3">WordStream</h1>
           </div>
           <div className="flex items-center gap-2">
-            <SignInButton 
-              onSignInStateChange={handleAuthStateChange}
-              className="mr-2"
-            />
             <button
               onClick={() => handleSettingsChange('darkMode', !settings.darkMode)}
               className="icon-button"
@@ -1591,33 +1527,6 @@ export default function Popup() {
                   )}
                 </div>
               </div>
-
-              {words.length > 0 && (
-                <div className="mt-6 mb-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="section-title flex items-center gap-2">
-                      <Globe size={18} className="text-primary" />
-                      <span>Word Lists</span>
-                    </h2>
-                    <button
-                      onClick={() => setShowWordSharing(!showWordSharing)}
-                      className="text-sm text-blue-500 hover:text-blue-700 flex items-center gap-1"
-                    >
-                      {showWordSharing ? 'Hide Sharing' : 'Share & Discover Lists'}
-                      <ChevronDown className={`transition-transform ${showWordSharing ? 'rotate-180' : ''}`} size={16} />
-                    </button>
-                  </div>
-
-                  {showWordSharing && (
-                    <div className="mt-4 mb-6">
-                      <WordListSharing 
-                        currentWords={words} 
-                        onImportList={handleImportWordList} 
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
             </>
           )}
         </main>

@@ -1,1 +1,722 @@
-(()=>{"use strict";function e(e){return"iw"===e||"he-IL"===e?"he":"in"===e?"id":"jw"===e?"jv":e||"auto"}const t="AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM",r="gemini-pro-latest",n="gemini-1.5-pro",o="gemini-1.5-flash";var i=function(e,t,r,n){return new(r||(r=Promise))((function(o,i){function s(e){try{c(n.next(e))}catch(e){i(e)}}function a(e){try{c(n.throw(e))}catch(e){i(e)}}function c(e){var t;e.done?o(e.value):(t=e.value,t instanceof r?t:new r((function(e){e(t)}))).then(s,a)}c((n=n.apply(e,t||[])).next())}))};const s="undefined"==typeof window,a=(...e)=>{try{console.log("[WordStream:Firebase]",...e)}catch(e){}},c=(...e)=>{try{console.error("[WordStream:Firebase]",...e)}catch(e){}};"undefined"!=typeof chrome&&chrome.runtime&&chrome.runtime.id;let u=null;if(!s)try{setTimeout((()=>{document.dispatchEvent(new CustomEvent("wordstream-auth-changed",{detail:{isAuthenticated:!1,isOfflineMode:!0}}))}),0)}catch(e){c("Error dispatching initial offline mode event:",e)}const l={signInWithGoogle:function(){return i(this,void 0,void 0,(function*(){throw c("Cannot sign in - operating in offline mode only"),new Error("Cannot sign in - this extension works in offline mode only")}))},signOut:function(){return i(this,void 0,void 0,(function*(){a("Offline mode - simulating sign out"),u=null,s||document.dispatchEvent(new CustomEvent("wordstream-auth-changed",{detail:{isAuthenticated:!1,isOfflineMode:!0}}))}))},getCurrentUser:function(){return u},saveWords:function(e){return i(this,void 0,void 0,(function*(){a("Saving words locally only (offline mode)")}))},getWords:function(){return i(this,void 0,void 0,(function*(){return a("Using local data in offline mode"),[]}))},subscribeToWords:function(e){return e([]),()=>{}},saveNotes:function(e,t){return i(this,void 0,void 0,(function*(){a("Saving notes locally only (offline mode)")}))},getNotes:function(e){return i(this,void 0,void 0,(function*(){return a("Using local data in offline mode"),[]}))},subscribeToNotes:function(e,t){return t([]),()=>{}},shareWordList:function(e,t){return i(this,arguments,void 0,(function*(e,t,r=!0){throw new Error("Cannot share lists in offline mode")}))},getPublicWordLists:function(e){return i(this,void 0,void 0,(function*(){return a("Cannot fetch public lists in offline mode"),[]}))},isInOfflineMode:function(){return true},checkConnectivity:function(){return i(this,void 0,void 0,(function*(){return!1}))}};var d=function(e,t,r,n){return new(r||(r=Promise))((function(o,i){function s(e){try{c(n.next(e))}catch(e){i(e)}}function a(e){try{c(n.throw(e))}catch(e){i(e)}}function c(e){var t;e.done?o(e.value):(t=e.value,t instanceof r?t:new r((function(e){e(t)}))).then(s,a)}c((n=n.apply(e,t||[])).next())}))};const h="undefined"==typeof window||"undefined"==typeof document,g={init(){if(h)console.log("[WordStream] Sync service initialized in Service Worker environment (no event listeners)");else try{document.addEventListener("wordstream-auth-changed",(e=>d(this,void 0,void 0,(function*(){var t;(null===(t=e.detail)||void 0===t?void 0:t.isAuthenticated)&&(yield this.syncLocalToCloud())})))),console.log("[WordStream] Sync service initialized with event listener")}catch(e){console.error("[WordStream] Error initializing sync service event listeners:",e)}},isAuthenticated:()=>!!l.getCurrentUser(),isInOfflineMode:()=>!!l.isInOfflineMode&&l.isInOfflineMode(),checkConnectivity(){return d(this,void 0,void 0,(function*(){return!!l.checkConnectivity&&(yield l.checkConnectivity())}))},signIn(){return d(this,void 0,void 0,(function*(){if(h)return console.error("[WordStream] Cannot sign in from Service Worker environment"),!1;try{return!!(yield l.signInWithGoogle())}catch(e){return console.error("[WordStream] Error during sign-in:",e),!1}}))},signOut(){return d(this,void 0,void 0,(function*(){if(h)console.error("[WordStream] Cannot sign out from Service Worker environment");else try{yield l.signOut()}catch(e){throw console.error("[WordStream] Error during sign-out:",e),e}}))},saveWords(e){return d(this,void 0,void 0,(function*(){if(!h)try{localStorage.setItem("wordstream_words",JSON.stringify(e))}catch(e){console.error("[WordStream] Error saving words to local storage:",e)}if(this.isAuthenticated()&&!this.isInOfflineMode())try{yield l.saveWords(e)}catch(e){console.error("[WordStream] Error syncing words to Firebase:",e)}}))},getWords(){return d(this,void 0,void 0,(function*(){if(this.isAuthenticated()&&!this.isInOfflineMode())try{const e=yield l.getWords();if(e&&e.length>0){if(!h)try{localStorage.setItem("wordstream_words",JSON.stringify(e))}catch(e){console.error("[WordStream] Error updating local storage with cloud words:",e)}return e}}catch(e){console.error("[WordStream] Error getting words from Firebase:",e)}if(!h)try{const e=localStorage.getItem("wordstream_words")||"[]";return JSON.parse(e)}catch(e){console.error("[WordStream] Error getting words from local storage:",e)}return[]}))},saveNotes(e,t){return d(this,void 0,void 0,(function*(){if(!h)try{const r=localStorage.getItem("wordstream_notes"),n=r?JSON.parse(r):{};n[e]=t,localStorage.setItem("wordstream_notes",JSON.stringify(n))}catch(e){console.error("[WordStream] Error saving notes to local storage:",e)}if(this.isAuthenticated()&&!this.isInOfflineMode())try{yield l.saveNotes(e,t)}catch(e){console.error("[WordStream] Error syncing notes to Firebase:",e)}}))},getNotes(e){return d(this,void 0,void 0,(function*(){if(this.isAuthenticated()&&!this.isInOfflineMode())try{const t=yield l.getNotes(e);if(t&&t.length>0){if(!h)try{const r=localStorage.getItem("wordstream_notes"),n=r?JSON.parse(r):{};n[e]=t,localStorage.setItem("wordstream_notes",JSON.stringify(n))}catch(e){console.error("[WordStream] Error updating local storage with cloud notes:",e)}return t}}catch(e){console.error("[WordStream] Error getting notes from Firebase:",e)}if(!h)try{const t=localStorage.getItem("wordstream_notes");return(t?JSON.parse(t):{})[e]||[]}catch(e){console.error("[WordStream] Error getting notes from local storage:",e)}return[]}))},subscribeToWords(e){if(!h)try{const t=localStorage.getItem("wordstream_words")||"[]";e(JSON.parse(t))}catch(e){console.error("[WordStream] Error reading words from local storage:",e)}return this.isAuthenticated()&&!this.isInOfflineMode()?l.subscribeToWords((t=>{if(t&&t.length>0&&!h)try{localStorage.setItem("wordstream_words",JSON.stringify(t))}catch(e){console.error("[WordStream] Error updating local storage:",e)}e(t)})):()=>{}},subscribeToNotes(e,t){if(!h)try{const r=localStorage.getItem("wordstream_notes"),n=r?JSON.parse(r):{};t(n[e]||[])}catch(e){console.error("[WordStream] Error reading notes from local storage:",e)}return this.isAuthenticated()&&!this.isInOfflineMode()?l.subscribeToNotes(e,(r=>{if(r&&r.length>0&&!h)try{const t=localStorage.getItem("wordstream_notes"),n=t?JSON.parse(t):{};n[e]=r,localStorage.setItem("wordstream_notes",JSON.stringify(n))}catch(e){console.error("[WordStream] Error updating local storage:",e)}t(r)})):()=>{}},shareWordList(e,t){return d(this,arguments,void 0,(function*(e,t,r=!0){if(h||this.isInOfflineMode())return console.error("[WordStream] Cannot share word list from Service Worker environment or in offline mode"),null;if(!this.isAuthenticated())throw new Error("You must be signed in to share word lists");try{return yield l.shareWordList(e,t,r)}catch(e){throw console.error("[WordStream] Error sharing word list:",e),e}}))},getPublicWordLists(e){return d(this,void 0,void 0,(function*(){if(this.isInOfflineMode())return console.error("[WordStream] Cannot get shared lists in offline mode"),[];try{return yield l.getPublicWordLists(e)}catch(e){return console.error("[WordStream] Error getting public word lists:",e),[]}}))},syncLocalToCloud(){return d(this,void 0,void 0,(function*(){if(this.isAuthenticated()&&!h&&!this.isInOfflineMode())try{const e=localStorage.getItem("wordstream_words");if(e){const t=JSON.parse(e);t&&t.length>0&&(yield l.saveWords(t))}const t=localStorage.getItem("wordstream_notes");if(t){const e=JSON.parse(t);for(const t in e)e[t]&&e[t].length>0&&(yield l.saveNotes(t,e[t]))}console.log("[WordStream] Local data synchronized to cloud")}catch(e){console.error("[WordStream] Error syncing local data to cloud:",e)}}))}};var f=function(e,t,r,n){return new(r||(r=Promise))((function(o,i){function s(e){try{c(n.next(e))}catch(e){i(e)}}function a(e){try{c(n.throw(e))}catch(e){i(e)}}function c(e){var t;e.done?o(e.value):(t=e.value,t instanceof r?t:new r((function(e){e(t)}))).then(s,a)}c((n=n.apply(e,t||[])).next())}))};const m="undefined"==typeof window;if(m)try{self.window=self,self.document={createElement:()=>({}),addEventListener:()=>{},removeEventListener:()=>{},dispatchEvent:()=>!1}}catch(e){console.error("Error setting up service worker environment:",e)}const y=(...e)=>{try{console.log("[WordStream]",...e)}catch(e){}},p=(...e)=>{try{console.error("[WordStream]",...e)}catch(e){}},v={FIREBASE_API_KEY:"AIzaSyAUdTLLJTxIPp_I6Zx9OBlSCOCKsT5f_uw",AUTH_DOMAIN:"wordstream-extension-add3a.firebaseapp.com",PROJECT_ID:"wordstream-extension-add3a",SUBSCRIPTION_API:"https://api.wordstream-extension.com/subscription",REDIRECT_URL:chrome.identity.getRedirectURL(),get OAUTH_CLIENT_ID(){try{const e=chrome.runtime.getManifest();if(e&&e.oauth2&&e.oauth2.client_id){return e.oauth2.client_id.trim()}return"719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com"}catch(e){return console.error("[WordStream] Error retrieving OAuth client ID from manifest"),"719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com"}}};let w=null,E=null,S=!1;function A(){return f(this,void 0,void 0,(function*(){if(!S){y("Initializing extension");try{yield chrome.storage.local.set({devMode:!0}),y("Development mode enabled by default");const{user:e,subscription:t}=yield chrome.storage.local.get(["user","subscription"]);e?(w=e,t?(E=t,I(t)&&(yield k())):yield k()):(y("No user found, using mock authentication"),yield T()),S=!0,y("Extension initialized successfully with fallback authentication")}catch(e){p("Initialization error",e)}}}))}function I(e){if(!e.active)return!0;const t=Date.now();return e.expiresAt<t-864e5}function T(){return f(this,void 0,void 0,(function*(){try{y("Using mock authentication bypass");const e={uid:"mock-user-"+Date.now(),email:"mock-user@wordstream-extension.com",displayName:"Test User",photoURL:"",idToken:"mock-token-"+Date.now(),refreshToken:"mock-refresh-token-"+Date.now()};w=e,yield chrome.storage.local.set({user:e,tokenTime:Date.now()});const t={active:!0,plan:"premium",expiresAt:Date.now()+2592e6,features:["translation","history","sync","premium_content"]};return E=t,yield chrome.storage.local.set({subscription:t}),{success:!0,user:e,subscription:t}}catch(e){return p("Mock authentication error",e),{success:!1,error:"Mock authentication failed: "+(e instanceof Error?e.message:String(e))}}}))}function b(){return f(this,void 0,void 0,(function*(){try{return w?(chrome.identity.clearAllCachedAuthTokens&&(yield new Promise((e=>{chrome.identity.clearAllCachedAuthTokens((()=>{e()}))}))),yield chrome.storage.local.remove(["user","subscription","tokenTime"]),w=null,E=null,{success:!0}):{success:!0}}catch(e){return p("Sign out error",e),{success:!1,error:"Failed to sign out"}}}))}function O(){return f(this,void 0,void 0,(function*(){try{if(!(null==w?void 0:w.refreshToken))return!1;const{tokenTime:e=0}=yield chrome.storage.local.get("tokenTime"),t=Date.now();if(t-e<3e6)return!0;y("Refreshing Firebase token");const r=yield fetch(`https://securetoken.googleapis.com/v1/token?key=${v.FIREBASE_API_KEY}`,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=refresh_token&refresh_token=${w.refreshToken}`}),n=yield r.json();if(n.error)throw new Error(n.error.message||"Token refresh failed");return w=Object.assign(Object.assign({},w),{idToken:n.id_token,refreshToken:n.refresh_token}),yield chrome.storage.local.set({user:w,tokenTime:t}),y("Token refreshed successfully"),!0}catch(e){return p("Token refresh error",e),e instanceof Error&&e.message.includes("TOKEN_EXPIRED")&&(yield b()),!1}}))}function k(){return f(this,void 0,void 0,(function*(){try{if(!w)return{success:!1,error:"Authentication required to verify subscription"};y("Verifying subscription status");const e=yield fetch(`${v.SUBSCRIPTION_API}/verify`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${w.idToken}`}}).catch((()=>(y("Using mock subscription data"),new Response(JSON.stringify({active:!0,plan:"premium",expiresAt:Date.now()+2592e6,features:["translation","history","sync","premium_content"]}))))),t=yield e.json();return E=t,yield chrome.storage.local.set({subscription:t}),{success:!0,subscription:t}}catch(e){return p("Subscription verification error",e),{success:!1,error:"Failed to verify subscription"}}}))}chrome.runtime.onInstalled.addListener((e=>f(void 0,[e],void 0,(function*({reason:e}){y("Extension "+("install"===e?"installed":"updated")),"install"===e&&(yield chrome.storage.local.set({firstRun:!0}),chrome.tabs.create({url:chrome.runtime.getURL("welcome.html")})),yield A()})))),chrome.runtime.onStartup.addListener((()=>f(void 0,void 0,void 0,(function*(){yield A()})))),chrome.runtime.onMessage.addListener(((e,t,r)=>{const n=e=>f(void 0,void 0,void 0,(function*(){try{const t=yield e;r(t)}catch(e){p("Error processing request",e),r({success:!1,error:e instanceof Error?e.message:String(e)})}}));switch(e.action){case"authenticate":return n(function(e){return f(this,void 0,void 0,(function*(){try{y("Authenticating with Firebase");const t=yield fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${v.FIREBASE_API_KEY}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({postBody:`id_token=${e}&providerId=google.com`,requestUri:v.REDIRECT_URL,returnIdpCredential:!0,returnSecureToken:!0})}),r=yield t.json();if(r.error)throw new Error(r.error.message||"Authentication failed");const n={uid:r.localId,email:r.email,displayName:r.displayName||r.email.split("@")[0],photoURL:r.photoUrl,idToken:r.idToken,refreshToken:r.refreshToken};w=n,yield chrome.storage.local.set({user:n,tokenTime:Date.now()});return{success:!0,user:n,subscription:(yield k()).subscription}}catch(e){return p("Authentication error",e),{success:!1,error:"Authentication failed: "+(e instanceof Error?e.message:String(e))}}}))}(e.token)),!0;case"get_auth_status":return n(function(){return f(this,void 0,void 0,(function*(){try{return w?(yield O(),E&&!I(E)||(yield k()),{success:!0,user:w,subscription:E||void 0}):{success:!1,error:"Not authenticated"}}catch(e){return p("Get auth status error",e),{success:!1,error:"Failed to get authentication status"}}}))}()),!0;case"sign_out":return n(b()),!0;case"verify_subscription":return n(k()),!0;case"get_data":return n(function(e){return f(this,void 0,void 0,(function*(){try{if(!w)return{success:!1,error:"Authentication required"};if(!(null==E?void 0:E.active))return{success:!1,error:"Active subscription required"};yield O();const t=yield fetch(`https://${v.PROJECT_ID}.firebaseio.com/${e}.json?auth=${w.idToken}`,{method:"GET"});if(!t.ok)throw new Error(`Firebase request failed: ${t.status}`);const r=yield t.json();return{success:!0,data:null===r?{}:r}}catch(e){return p("Get data error",e),{success:!1,error:"Failed to retrieve data"}}}))}(e.path)),!0;case"save_data":return n(function(e,t){return f(this,void 0,void 0,(function*(){try{if(!w)return{success:!1,error:"Authentication required"};if(!(null==E?void 0:E.active))return{success:!1,error:"Active subscription required"};yield O();const r=yield fetch(`https://${v.PROJECT_ID}.firebaseio.com/${e}.json?auth=${w.idToken}`,{method:"PUT",body:JSON.stringify(t)});if(!r.ok)throw new Error(`Firebase request failed: ${r.status}`);return{success:!0}}catch(e){return p("Save data error",e),{success:!1,error:"Failed to save data"}}}))}(e.path,e.data)),!0;case"initial_auth_check":return n(function(){return f(this,arguments,void 0,(function*(e=!1){try{const{firstRun:e=!1}=yield chrome.storage.local.get("firstRun");return y("Using mock authentication to avoid OAuth issues"),e&&(yield chrome.storage.local.set({firstRun:!1})),w&&(null==E?void 0:E.active)?{success:!0,user:w,subscription:E}:T()}catch(e){return p("Initial auth check error",e),{success:!1,error:"Authentication check failed: "+(e instanceof Error?e.message:String(e))}}}))}(e.interactive)),!0}})),A();function N(e){try{if(e instanceof Error)return e.message;if("string"==typeof e)return e;if(e&&"object"==typeof e)try{return JSON.stringify(e)}catch(e){return"Object error - cannot stringify"}return String(e)}catch(e){return"Unknown error - cannot format"}}chrome.runtime.onConnect.addListener((e=>{y("New connection established",e.name),e.onDisconnect.addListener((()=>{y("Connection disconnected",e.name)}))})),chrome.runtime.onMessage.addListener(((t,r,n)=>{var o;return y("Received message",t.action||t.type),"PING"===t.type?(n({success:!0,message:"Background script is active"}),!0):"TRANSLATE_WORD"===t.type?(function(t){return f(this,void 0,void 0,(function*(){var r,n;try{if(!t.text||"string"!=typeof t.text)return p("Invalid text for translation:",t.text),{success:!1,error:"Invalid or missing text for translation"};y(`Translating text: "${t.text.substring(0,30)}${t.text.length>30?"...":""}"`);const o=yield chrome.storage.sync.get(["settings"]);y("Retrieved settings for translation:",o);const i=o.settings||{targetLanguage:"en"};let s=t.targetLang||i.targetLanguage||"en";s=e(s.toLowerCase().trim()),y("Using target language for translation:",s);const a=`https://translation.googleapis.com/language/translate/v2?key=${C}`;y("Sending translation request to Google API");try{const e=yield fetch(a,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({q:t.text,target:s})});if(y(`Translation API response status: ${e.status} ${e.statusText}`),!e.ok){const t=yield e.text().catch((e=>"Could not read error response"));throw p(`Translation request failed (${e.status}):`,t),new Error(`Translation request failed (${e.status}): ${t}`)}try{const t=yield e.json();if(y("Translation result received"),!(null===(n=null===(r=t.data)||void 0===r?void 0:r.translations)||void 0===n?void 0:n[0]))throw p("Invalid translation response structure:",t),new Error("Invalid translation response structure");return{success:!0,translation:t.data.translations[0].translatedText,detectedSourceLanguage:t.data.translations[0].detectedSourceLanguage}}catch(e){throw p("Error parsing translation response:",N(e)),new Error(`Error parsing translation response: ${N(e)}`)}}catch(e){throw p("Fetch error during translation:",N(e)),new Error(`Fetch error: ${N(e)}`)}}catch(e){return p("Translation error:",N(e)),{success:!1,error:N(e)}}}))}(t.payload).then(n),!0):"gemini"===t.action?(y("Processing Gemini request",{message:t.message,historyLength:null===(o=t.history)||void 0===o?void 0:o.length,videoId:t.videoId}),U(t).then((e=>{y("Gemini response generated successfully"),n(e)})).catch((e=>{p("Error generating Gemini response:",e),n({success:!1,answer:null,error:e instanceof Error?e.message:"Unknown error processing Gemini request"})})),!0):"UPDATE_LANGUAGE_SETTINGS"===t.type?(function(e){return f(this,void 0,void 0,(function*(){var t;try{if(y("Updating language settings",e),!e.targetLanguage)throw new Error("Target language is required");const r=yield chrome.storage.sync.get(["settings"]);y("Current settings",r.settings);const n=r.settings||{},o=e.targetLanguage.toLowerCase().trim();if(!o)throw new Error("Invalid target language format");const i=Object.assign(Object.assign({},n),{targetLanguage:o});yield new Promise(((e,t)=>{chrome.storage.sync.set({settings:i},(()=>{chrome.runtime.lastError?t(new Error(chrome.runtime.lastError.message)):e()}))}));const s=yield chrome.storage.sync.get(["settings"]);if(y("Verified settings after update",s.settings),(null===(t=s.settings)||void 0===t?void 0:t.targetLanguage)!==o)throw new Error("Failed to verify settings update");return{success:!0}}catch(e){return p("Error updating language settings:",e),{success:!1,error:e instanceof Error?e.message:"Unknown error"}}}))}(t.payload).then((e=>{y("Language settings update result",e),n(e)})).catch((e=>{p("Language settings update error",e),n({success:!1,error:e instanceof Error?e.message:"Unknown error updating language settings"})})),!0):"syncData"===t.action?(g.syncLocalToCloud().then((()=>{n({success:!0})})).catch((e=>{p("Error syncing data:",e),n({success:!1,error:e instanceof Error?e.message:"Unknown error"})})),!0):"checkFirebaseStatus"===t.action?(g.isAuthenticated(),n({isServiceWorker:m}),!0):void 0}));const C="AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM";const _=t,L=r,R=n,W=o,x=["v1"];function U(e){return f(this,void 0,void 0,(function*(){const t=_,r=e.model||L,n=R,o=W;if(!t)return p("Gemini API key is missing"),{success:!1,error:"API key is missing"};try{y(`Processing Gemini request with model: ${r}`),y("Checking available models");const i=`https://generativelanguage.googleapis.com/v1/models?key=${t}`,s=yield fetch(i),a=yield s.json();if(a.models){const e=a.models.map((e=>e.name));y("Available models:",e.join(", ")),e.includes(r)||y(`Primary model ${r} not found in available models. Will try fallback model.`)}else y("Could not retrieve models list:",a);const c=`https://generativelanguage.googleapis.com/${x[0]}/models/${r}:generateContent?key=${t}`;let u="You are WordStream's AI Assistant, a versatile, Claude-like educational assistant that helps users learn while watching videos. Follow these important guidelines:\n\n    1. RESPONSE STRUCTURE & ANSWER DEPTH:\n       - ALWAYS ANSWER FIRST, THEN CHECK USER SATISFACTION - Never respond with a question first unless absolutely necessary.\n       - Provide the best possible answer based on available data before asking if further clarification is needed.\n       - Do not shorten responses arbitrarily—answer as completely as possible.\n       - For complex topics, start with a complete answer and offer further depth if needed.\n       - For straightforward factual questions, provide a concise answer first and offer an option to elaborate if the user is interested.\n       - Never skip directly to asking a question without providing substantial information first.\n    \n    2. LANGUAGE & USER ADAPTATION:\n       - AUTOMATICALLY RESPOND IN THE USER'S LANGUAGE - If they write in Hebrew, respond in Hebrew; if English, respond in English.\n       - Never change languages unless explicitly requested by the user.\n       - Maintain awareness of the last 5-7 user messages to prevent redundant explanations.\n       - If the user follows up on a previous topic, understand and continue naturally.\n       - Extend memory retention when the user continues on the same topic, but reset context smoothly when a completely new topic is introduced.\n    \n    3. VIDEO-RELATED QUESTIONS:\n       - Recognize whether a question is about the video or general and respond accordingly.\n       - When answering timestamped video-related questions, analyze transcript context if available and provide specific insights rather than generic explanations.\n       - If direct video content is unavailable, infer meaning based on related context without speculating. Offer an educated guess only if clearly indicated as such.\n    \n    4. STRUCTURED RESPONSES & FORMATTING:\n       - Use clean, easy-to-read formatting with clear paragraphs or bullet points.\n       - Break down complex topics with headings for longer explanations.\n       - Highlight important keywords to make scanning easier.\n       - Provide full, structured responses by default unless the user requests a summary.\n    \n    5. HANDLING UNCERTAINTY & EDGE CASES:\n       - Never give false information—if you don't have enough data, offer related insights instead.\n       - Minimize \"I don't know\" responses by attempting to infer meaning and offer the most relevant answer possible.\n       - If uncertain, ask clarifying questions instead of giving vague responses.\n    \n    6. CONVERSATIONAL FLOW & ENGAGEMENT:\n       - Never drop topics abruptly.\n       - If a user moves between subjects, acknowledge the transition while keeping responses fluid.\n       - Limit follow-up prompts to once per conversation unless the user actively engages. If the user ignores a follow-up twice, stop prompting for further engagement.\n    \n    7. LANGUAGE LEARNING FOCUS:\n       - Adapt response complexity based on user proficiency. For beginners, simplify explanations; for advanced users, offer in-depth linguistic details.\n       - Provide educational insights like usage examples, synonyms, or pronunciation notes.\n       - Relate explanations to real-world usage scenarios to make learning practical.\n    \n    8. INTEGRATION WITH EXTENSION FEATURES:\n       - Only mention WordStream features when relevant to the conversation—avoid forcing feature suggestions unless they directly benefit the user's current request.\n       - Offer learning tips that complement the extension's capabilities.\n    \n    9. PERSONALIZED LEARNING GUIDANCE:\n       - Recognize repeated topics from the same user and build upon previous explanations.\n       - Provide encouragement that motivates continued learning.\n    \n    Remember: Always answer first, then check satisfaction. Respond in the user's language. Maintain context with short responses. Structure information clearly. Handle uncertainty gracefully. Keep conversations flowing naturally. Focus on language learning value.";e.videoTitle&&(u+=`\n\nThe user is watching the following video: "${e.videoTitle}"`),e.videoContext&&(e.videoContext.description&&(u+=`\nVideo description: ${e.videoContext.description}`),e.videoContext.channelName&&(u+=`\nChannel: ${e.videoContext.channelName}`),e.videoContext.url&&(u+=`\nURL: ${e.videoContext.url}`));let l=[];e.history&&e.history.length>0&&(l=e.history.map((e=>({role:e.role,parts:[{text:e.content}]})))),l.push({role:"user",parts:[{text:e.message}]});const d={contents:[{role:"user",parts:[{text:u}]},...l.slice(-30)],generationConfig:{temperature:.75,topK:40,topP:.92,maxOutputTokens:8192,stopSequences:[]},safetySettings:[{category:"HARM_CATEGORY_HARASSMENT",threshold:"BLOCK_MEDIUM_AND_ABOVE"},{category:"HARM_CATEGORY_HATE_SPEECH",threshold:"BLOCK_MEDIUM_AND_ABOVE"},{category:"HARM_CATEGORY_SEXUALLY_EXPLICIT",threshold:"BLOCK_MEDIUM_AND_ABOVE"},{category:"HARM_CATEGORY_DANGEROUS_CONTENT",threshold:"BLOCK_MEDIUM_AND_ABOVE"}]};y(`Sending request to Gemini API: ${c}`),y("Gemini payload (first 500 chars):",JSON.stringify(d,null,2).substring(0,500)+"...");const h=yield fetch(c,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});if(!h.ok){const t=yield h.text();if(p(`Gemini API error (${h.status}):`,t),404===h.status&&r!==n){y(`Trying primary fallback model: ${n}`);return U(Object.assign(Object.assign({},e),{model:n}))}if(404===h.status&&r===n&&n!==o){y(`Trying secondary fallback model: ${o}`);return U(Object.assign(Object.assign({},e),{model:o}))}return{success:!1,error:`Gemini API error (${h.status}): ${t}`}}const g=yield h.json();if(y("Gemini API response received"),!g.candidates||0===g.candidates.length||!g.candidates[0].content)return{success:!1,error:"Empty response from Gemini API"};return{success:!0,answer:g.candidates[0].content.parts[0].text}}catch(e){return p("Error in Gemini request:",e),{success:!1,error:`Error processing request: ${e instanceof Error?e.message:"Unknown error"}`}}}))}})();
+/******/ (() => { // webpackBootstrap
+/******/ 	"use strict";
+/******/ 	var __webpack_modules__ = ({
+
+/***/ "./src/services/caption-detectors/shared/language-map.ts":
+/*!***************************************************************!*\
+  !*** ./src/services/caption-detectors/shared/language-map.ts ***!
+  \***************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   LANGUAGE_MAP: () => (/* binding */ LANGUAGE_MAP),
+/* harmony export */   getLanguageCode: () => (/* binding */ getLanguageCode),
+/* harmony export */   normalizeLanguageCode: () => (/* binding */ normalizeLanguageCode)
+/* harmony export */ });
+const LANGUAGE_MAP = {
+    'auto': 'Auto Detect',
+    'af': 'Afrikaans',
+    'sq': 'Albanian',
+    'am': 'Amharic',
+    'ar': 'Arabic',
+    'hy': 'Armenian',
+    'az': 'Azerbaijani',
+    'eu': 'Basque',
+    'be': 'Belarusian',
+    'bn': 'Bengali',
+    'bs': 'Bosnian',
+    'bg': 'Bulgarian',
+    'ca': 'Catalan',
+    'ceb': 'Cebuano',
+    'ny': 'Chichewa',
+    'zh-CN': 'Chinese (Simplified)',
+    'zh-TW': 'Chinese (Traditional)',
+    'co': 'Corsican',
+    'hr': 'Croatian',
+    'cs': 'Czech',
+    'da': 'Danish',
+    'nl': 'Dutch',
+    'en': 'English',
+    'eo': 'Esperanto',
+    'et': 'Estonian',
+    'tl': 'Filipino',
+    'fi': 'Finnish',
+    'fr': 'French',
+    'fy': 'Frisian',
+    'gl': 'Galician',
+    'ka': 'Georgian',
+    'de': 'German',
+    'el': 'Greek',
+    'gu': 'Gujarati',
+    'ht': 'Haitian Creole',
+    'ha': 'Hausa',
+    'haw': 'Hawaiian',
+    'he': 'Hebrew',
+    'hi': 'Hindi',
+    'hmn': 'Hmong',
+    'hu': 'Hungarian',
+    'is': 'Icelandic',
+    'ig': 'Igbo',
+    'id': 'Indonesian',
+    'ga': 'Irish',
+    'it': 'Italian',
+    'ja': 'Japanese',
+    'jv': 'Javanese',
+    'kn': 'Kannada',
+    'kk': 'Kazakh',
+    'km': 'Khmer',
+    'ko': 'Korean',
+    'ku': 'Kurdish',
+    'ky': 'Kyrgyz',
+    'lo': 'Lao',
+    'la': 'Latin',
+    'lv': 'Latvian',
+    'lt': 'Lithuanian',
+    'lb': 'Luxembourgish',
+    'mk': 'Macedonian',
+    'mg': 'Malagasy',
+    'ms': 'Malay',
+    'ml': 'Malayalam',
+    'mt': 'Maltese',
+    'mi': 'Maori',
+    'mr': 'Marathi',
+    'mn': 'Mongolian',
+    'my': 'Myanmar (Burmese)',
+    'ne': 'Nepali',
+    'no': 'Norwegian',
+    'ps': 'Pashto',
+    'fa': 'Persian',
+    'pl': 'Polish',
+    'pt': 'Portuguese',
+    'pa': 'Punjabi',
+    'ro': 'Romanian',
+    'ru': 'Russian',
+    'sm': 'Samoan',
+    'gd': 'Scots Gaelic',
+    'sr': 'Serbian',
+    'st': 'Sesotho',
+    'sn': 'Shona',
+    'sd': 'Sindhi',
+    'si': 'Sinhala',
+    'sk': 'Slovak',
+    'sl': 'Slovenian',
+    'so': 'Somali',
+    'es': 'Spanish',
+    'su': 'Sundanese',
+    'sw': 'Swahili',
+    'sv': 'Swedish',
+    'tg': 'Tajik',
+    'ta': 'Tamil',
+    'te': 'Telugu',
+    'th': 'Thai',
+    'tr': 'Turkish',
+    'uk': 'Ukrainian',
+    'ur': 'Urdu',
+    'ug': 'Uyghur',
+    'uz': 'Uzbek',
+    'vi': 'Vietnamese',
+    'cy': 'Welsh',
+    'xh': 'Xhosa',
+    'yi': 'Yiddish',
+    'yo': 'Yoruba',
+    'zu': 'Zulu'
+};
+function normalizeLanguageCode(code) {
+    // Normalize Hebrew language codes - all variants map to 'he'
+    if (code === 'iw' || code === 'he-IL') {
+        return 'he';
+    }
+    // Normalize Indonesian codes
+    if (code === 'in') {
+        return 'id';
+    }
+    // Normalize Javanese codes
+    if (code === 'jw') {
+        return 'jv';
+    }
+    return code || 'auto';
+}
+function getLanguageCode(languageName) {
+    const cleanName = languageName.trim().toLowerCase();
+    const entry = Object.entries(LANGUAGE_MAP).find(([_, name]) => cleanName.includes(name.toLowerCase()));
+    return normalizeLanguageCode(entry === null || entry === void 0 ? void 0 : entry[0]) || 'en';
+}
+
+
+/***/ }),
+
+/***/ "./src/services/gemini/gemini-service.ts":
+/*!***********************************************!*\
+  !*** ./src/services/gemini/gemini-service.ts ***!
+  \***********************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   GEMINI_CONFIG: () => (/* binding */ GEMINI_CONFIG),
+/* harmony export */   sendToGemini: () => (/* binding */ sendToGemini)
+/* harmony export */ });
+/// <reference types="chrome"/>
+var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+// Default configuration for Gemini API
+const GEMINI_CONFIG = {
+    apiKey: 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM', // Using the same API key as Google Translate
+    model: 'gemini-pro-latest', // תמיד מצביע על הגרסה העדכנית ביותר הזמינה
+    fallbackModel: 'gemini-1.5-pro', // המודל העדכני והחזק ביותר הזמין רשמית (2024)
+    secondaryFallbackModel: 'gemini-1.5-flash', // המודל המהיר והעדכני ביותר לתרחישי גיבוי
+    maxTokens: 8192 // הגדלת מספר הטוקנים המקסימלי לתשובות ארוכות ומפורטות יותר
+};
+/**
+ * Send a query to Gemini API with conversation history
+ */
+function sendToGemini(query, history, videoTitle) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // Try to get API key from Chrome Storage or use the same as Google Translate
+            const storageResult = yield chrome.storage.local.get(['geminiApiKey']);
+            const apiKey = storageResult.geminiApiKey || GEMINI_CONFIG.apiKey;
+            console.log("Using API key for Gemini:", apiKey.substring(0, 10) + "...");
+            if (!apiKey) {
+                return "API key not configured. Please set your Gemini API key in the extension settings.";
+            }
+            // Instead of making a direct fetch request, use chrome.runtime.sendMessage to send via background script
+            const response = yield chrome.runtime.sendMessage({
+                action: 'gemini',
+                message: query,
+                history: history,
+                videoTitle: videoTitle
+            });
+            if (!response.success) {
+                throw new Error(response.error || 'Failed to get response from Gemini');
+            }
+            return response.answer || 'No answer received';
+        }
+        catch (error) {
+            console.error('Error calling Gemini API:', error);
+            return "Sorry, I couldn't process your request at this time. Please try again later.";
+        }
+    });
+}
+
+
+/***/ })
+
+/******/ 	});
+/************************************************************************/
+/******/ 	// The module cache
+/******/ 	var __webpack_module_cache__ = {};
+/******/ 	
+/******/ 	// The require function
+/******/ 	function __webpack_require__(moduleId) {
+/******/ 		// Check if module is in cache
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 			// no module.id needed
+/******/ 			// no module.loaded needed
+/******/ 			exports: {}
+/******/ 		};
+/******/ 	
+/******/ 		// Execute the module function
+/******/ 		__webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+/******/ 	
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/ 	
+/************************************************************************/
+/******/ 	/* webpack/runtime/define property getters */
+/******/ 	(() => {
+/******/ 		// define getter functions for harmony exports
+/******/ 		__webpack_require__.d = (exports, definition) => {
+/******/ 			for(var key in definition) {
+/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 				}
+/******/ 			}
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/hasOwnProperty shorthand */
+/******/ 	(() => {
+/******/ 		__webpack_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/make namespace object */
+/******/ 	(() => {
+/******/ 		// define __esModule on exports
+/******/ 		__webpack_require__.r = (exports) => {
+/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+/******/ 			}
+/******/ 			Object.defineProperty(exports, '__esModule', { value: true });
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/************************************************************************/
+var __webpack_exports__ = {};
+// This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
+(() => {
+/*!*********************************!*\
+  !*** ./src/background/index.ts ***!
+  \*********************************/
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _services_caption_detectors_shared_language_map__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! @/services/caption-detectors/shared/language-map */ "./src/services/caption-detectors/shared/language-map.ts");
+/* harmony import */ var _services_gemini_gemini_service__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! @/services/gemini/gemini-service */ "./src/services/gemini/gemini-service.ts");
+/// <reference types="chrome"/>
+var __awaiter = (undefined && undefined.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+
+
+// Initialize extension
+chrome.runtime.onInstalled.addListener(() => {
+    console.log('WordStream: Background script installed and running');
+    // Initialize default settings if they don't exist
+    chrome.storage.sync.get(['settings'], (result) => {
+        if (!result.settings) {
+            const defaultSettings = {
+                targetLanguage: 'en',
+                autoTranslate: true,
+                notifications: true,
+                darkMode: false
+            };
+            chrome.storage.sync.set({ settings: defaultSettings }, () => {
+                console.log('WordStream: Default settings initialized');
+            });
+        }
+    });
+});
+// Add persistent connection check
+let isBackgroundActive = true;
+chrome.runtime.onConnect.addListener((port) => {
+    console.log('WordStream: New connection established', port.name);
+    port.onDisconnect.addListener(() => {
+        console.log('WordStream: Connection disconnected', port.name);
+    });
+});
+// Handle messages from content scripts
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    var _a;
+    console.log('WordStream: Received message', request.action || request.type);
+    if (!isBackgroundActive) {
+        console.error('WordStream: Background script is not active');
+        sendResponse({ success: false, error: 'Background script is not active' });
+        return false;
+    }
+    if (request.type === 'PING') {
+        sendResponse({ success: true, message: 'Background script is active' });
+        return true; // Will respond asynchronously
+    }
+    if (request.type === 'TRANSLATE_WORD') {
+        handleTranslation(request.payload).then(sendResponse);
+        return true; // Will respond asynchronously
+    }
+    if (request.action === 'gemini') {
+        console.log('WordStream: Processing Gemini request', {
+            message: request.message,
+            historyLength: (_a = request.history) === null || _a === void 0 ? void 0 : _a.length,
+            videoId: request.videoId
+        });
+        handleGeminiRequest(request)
+            .then((result) => {
+            console.log('WordStream: Gemini response generated successfully');
+            sendResponse(result);
+        })
+            .catch(error => {
+            console.error('WordStream: Error generating Gemini response:', error);
+            sendResponse({
+                success: false,
+                answer: null,
+                error: error instanceof Error ? error.message : 'Unknown error processing Gemini request'
+            });
+        });
+        return true; // Will respond asynchronously
+    }
+    if (request.type === 'UPDATE_LANGUAGE_SETTINGS') {
+        handleLanguageSettingsUpdate(request.payload)
+            .then((result) => {
+            console.log('WordStream: Language settings update result', result);
+            sendResponse(result);
+        })
+            .catch(error => {
+            console.error('WordStream: Language settings update error', error);
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error updating language settings'
+            });
+        });
+        return true;
+    }
+});
+// פונקציית עזר לטיפול בשגיאות
+function safeStringifyError(error) {
+    try {
+        if (error instanceof Error) {
+            return error.message;
+        }
+        if (typeof error === 'string') {
+            return error;
+        }
+        if (error && typeof error === 'object') {
+            try {
+                return JSON.stringify(error);
+            }
+            catch (e) {
+                return 'Object error - cannot stringify';
+            }
+        }
+        return String(error);
+    }
+    catch (e) {
+        return 'Unknown error - cannot format';
+    }
+}
+// Use a constant API key
+const GOOGLE_TRANSLATE_API_KEY = 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM';
+function handleTranslation(data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
+        try {
+            // Validate input
+            if (!data.text || typeof data.text !== 'string') {
+                console.error('WordStream: Invalid text for translation:', data.text);
+                return {
+                    success: false,
+                    error: 'Invalid or missing text for translation'
+                };
+            }
+            // Log text to translate
+            console.log(`WordStream: Translating text: "${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}"`);
+            // Get settings and ensure we have a valid target language
+            const settingsResult = yield chrome.storage.sync.get(['settings']);
+            console.log('WordStream: Retrieved settings for translation:', settingsResult);
+            const settings = settingsResult.settings || { targetLanguage: 'en' };
+            let targetLang = data.targetLang || settings.targetLanguage || 'en';
+            // Ensure target language is in correct format and normalized
+            targetLang = (0,_services_caption_detectors_shared_language_map__WEBPACK_IMPORTED_MODULE_0__.normalizeLanguageCode)(targetLang.toLowerCase().trim());
+            console.log('WordStream: Using target language for translation:', targetLang);
+            // Construct request URL
+            const requestUrl = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_TRANSLATE_API_KEY}`;
+            console.log('WordStream: Sending translation request to Google API');
+            // הבקשה הבסיסית שעבדה
+            try {
+                const response = yield fetch(requestUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        q: data.text,
+                        target: targetLang
+                    }),
+                });
+                // Log response status
+                console.log(`WordStream: Translation API response status: ${response.status} ${response.statusText}`);
+                if (!response.ok) {
+                    const errorText = yield response.text().catch(e => 'Could not read error response');
+                    console.error(`WordStream: Translation request failed (${response.status}):`, errorText);
+                    throw new Error(`Translation request failed (${response.status}): ${errorText}`);
+                }
+                // Parse response
+                try {
+                    const translationResult = yield response.json();
+                    console.log('WordStream: Translation result received');
+                    if (!((_b = (_a = translationResult.data) === null || _a === void 0 ? void 0 : _a.translations) === null || _b === void 0 ? void 0 : _b[0])) {
+                        console.error('WordStream: Invalid translation response structure:', translationResult);
+                        throw new Error('Invalid translation response structure');
+                    }
+                    // Return successful translation
+                    return {
+                        success: true,
+                        translation: translationResult.data.translations[0].translatedText,
+                        detectedSourceLanguage: translationResult.data.translations[0].detectedSourceLanguage
+                    };
+                }
+                catch (parseError) {
+                    console.error('WordStream: Error parsing translation response:', safeStringifyError(parseError));
+                    throw new Error(`Error parsing translation response: ${safeStringifyError(parseError)}`);
+                }
+            }
+            catch (fetchError) {
+                console.error('WordStream: Fetch error during translation:', safeStringifyError(fetchError));
+                throw new Error(`Fetch error: ${safeStringifyError(fetchError)}`);
+            }
+        }
+        catch (error) {
+            console.error('WordStream: Translation error:', safeStringifyError(error));
+            return {
+                success: false,
+                error: safeStringifyError(error)
+            };
+        }
+    });
+}
+function handleLanguageSettingsUpdate(settings) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        try {
+            console.log('WordStream: Updating language settings', settings);
+            if (!settings.targetLanguage) {
+                throw new Error('Target language is required');
+            }
+            const result = yield chrome.storage.sync.get(['settings']);
+            console.log('WordStream: Current settings', result.settings);
+            const currentSettings = result.settings || {};
+            const targetLanguage = settings.targetLanguage.toLowerCase().trim();
+            if (!targetLanguage) {
+                throw new Error('Invalid target language format');
+            }
+            const newSettings = Object.assign(Object.assign({}, currentSettings), { targetLanguage });
+            yield new Promise((resolve, reject) => {
+                chrome.storage.sync.set({ settings: newSettings }, () => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    }
+                    else {
+                        resolve();
+                    }
+                });
+            });
+            // Verify the update
+            const verifyResult = yield chrome.storage.sync.get(['settings']);
+            console.log('WordStream: Verified settings after update', verifyResult.settings);
+            if (((_a = verifyResult.settings) === null || _a === void 0 ? void 0 : _a.targetLanguage) !== targetLanguage) {
+                throw new Error('Failed to verify settings update');
+            }
+            return { success: true };
+        }
+        catch (error) {
+            console.error('WordStream: Error updating language settings:', error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error'
+            };
+        }
+    });
+}
+// הגדרת קבועים לשימוש ב-API
+const GEMINI_API_KEY = _services_gemini_gemini_service__WEBPACK_IMPORTED_MODULE_1__.GEMINI_CONFIG.apiKey;
+// הוספת קבועים למודלים
+const GEMINI_MODEL_PRIMARY = _services_gemini_gemini_service__WEBPACK_IMPORTED_MODULE_1__.GEMINI_CONFIG.model;
+const GEMINI_MODEL_FALLBACK = _services_gemini_gemini_service__WEBPACK_IMPORTED_MODULE_1__.GEMINI_CONFIG.fallbackModel;
+const GEMINI_MODEL_SECONDARY_FALLBACK = _services_gemini_gemini_service__WEBPACK_IMPORTED_MODULE_1__.GEMINI_CONFIG.secondaryFallbackModel;
+// שימוש באינדקס API הסטנדרטי
+const API_VERSIONS = ['v1'];
+function handleGeminiRequest(request) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const apiKey = GEMINI_API_KEY;
+        const GEMINI_MODEL = request.model || GEMINI_MODEL_PRIMARY;
+        const FALLBACK_MODEL = GEMINI_MODEL_FALLBACK;
+        const SECONDARY_FALLBACK_MODEL = GEMINI_MODEL_SECONDARY_FALLBACK;
+        if (!apiKey) {
+            console.error('[WordStream] Gemini API key is missing');
+            return { success: false, error: 'API key is missing' };
+        }
+        try {
+            console.log(`[WordStream] Processing Gemini request with model: ${GEMINI_MODEL}`);
+            // בדיקת API קיים ונגיש - נסיון לקבל את רשימת המודלים הזמינים
+            console.log('[WordStream] Checking available models');
+            const listModelsEndpoint = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
+            const listModelsResponse = yield fetch(listModelsEndpoint);
+            const modelsData = yield listModelsResponse.json();
+            // רשימת מודלים זמינים עבור הדיבוג
+            if (modelsData.models) {
+                const availableModels = modelsData.models.map((m) => m.name);
+                console.log('[WordStream] Available models:', availableModels.join(', '));
+                // בדוק אם המודל העיקרי זמין
+                if (!availableModels.includes(GEMINI_MODEL)) {
+                    console.warn(`[WordStream] Primary model ${GEMINI_MODEL} not found in available models. Will try fallback model.`);
+                }
+            }
+            else {
+                console.warn('[WordStream] Could not retrieve models list:', modelsData);
+            }
+            // יצירת endpoint דינמי לפי המודל הנבחר
+            // נשתמש ב-endpoint סטנדרטי של gemini במקום הגרסה הישנה
+            const apiVersion = API_VERSIONS[0];
+            const endpoint = `https://generativelanguage.googleapis.com/${apiVersion}/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+            // ייצור ההקשר משופר עם פרטי הסרטון
+            let contextPrompt = `You are WordStream's AI Assistant, a versatile, Claude-like educational assistant that helps users learn while watching videos. Follow these important guidelines:
+
+    1. RESPONSE STRUCTURE & ANSWER DEPTH:
+       - ALWAYS ANSWER FIRST, THEN CHECK USER SATISFACTION - Never respond with a question first unless absolutely necessary.
+       - Provide the best possible answer based on available data before asking if further clarification is needed.
+       - Do not shorten responses arbitrarily—answer as completely as possible.
+       - For complex topics, start with a complete answer and offer further depth if needed.
+       - For straightforward factual questions, provide a concise answer first and offer an option to elaborate if the user is interested.
+       - Never skip directly to asking a question without providing substantial information first.
+    
+    2. LANGUAGE & USER ADAPTATION:
+       - AUTOMATICALLY RESPOND IN THE USER'S LANGUAGE - If they write in Hebrew, respond in Hebrew; if English, respond in English.
+       - Never change languages unless explicitly requested by the user.
+       - Maintain awareness of the last 5-7 user messages to prevent redundant explanations.
+       - If the user follows up on a previous topic, understand and continue naturally.
+       - Extend memory retention when the user continues on the same topic, but reset context smoothly when a completely new topic is introduced.
+    
+    3. VIDEO-RELATED QUESTIONS:
+       - Recognize whether a question is about the video or general and respond accordingly.
+       - When answering timestamped video-related questions, analyze transcript context if available and provide specific insights rather than generic explanations.
+       - If direct video content is unavailable, infer meaning based on related context without speculating. Offer an educated guess only if clearly indicated as such.
+    
+    4. STRUCTURED RESPONSES & FORMATTING:
+       - Use clean, easy-to-read formatting with clear paragraphs or bullet points.
+       - Break down complex topics with headings for longer explanations.
+       - Highlight important keywords to make scanning easier.
+       - Provide full, structured responses by default unless the user requests a summary.
+    
+    5. HANDLING UNCERTAINTY & EDGE CASES:
+       - Never give false information—if you don't have enough data, offer related insights instead.
+       - Minimize "I don't know" responses by attempting to infer meaning and offer the most relevant answer possible.
+       - If uncertain, ask clarifying questions instead of giving vague responses.
+    
+    6. CONVERSATIONAL FLOW & ENGAGEMENT:
+       - Never drop topics abruptly.
+       - If a user moves between subjects, acknowledge the transition while keeping responses fluid.
+       - Limit follow-up prompts to once per conversation unless the user actively engages. If the user ignores a follow-up twice, stop prompting for further engagement.
+    
+    7. LANGUAGE LEARNING FOCUS:
+       - Adapt response complexity based on user proficiency. For beginners, simplify explanations; for advanced users, offer in-depth linguistic details.
+       - Provide educational insights like usage examples, synonyms, or pronunciation notes.
+       - Relate explanations to real-world usage scenarios to make learning practical.
+    
+    8. INTEGRATION WITH EXTENSION FEATURES:
+       - Only mention WordStream features when relevant to the conversation—avoid forcing feature suggestions unless they directly benefit the user’s current request.
+       - Offer learning tips that complement the extension's capabilities.
+    
+    9. PERSONALIZED LEARNING GUIDANCE:
+       - Recognize repeated topics from the same user and build upon previous explanations.
+       - Provide encouragement that motivates continued learning.
+    
+    Remember: Always answer first, then check satisfaction. Respond in the user's language. Maintain context with short responses. Structure information clearly. Handle uncertainty gracefully. Keep conversations flowing naturally. Focus on language learning value.`;
+            // הוסף פרטי הסרטון להקשר
+            if (request.videoTitle) {
+                contextPrompt += `\n\nThe user is watching the following video: "${request.videoTitle}"`;
+            }
+            if (request.videoContext) {
+                if (request.videoContext.description) {
+                    contextPrompt += `\nVideo description: ${request.videoContext.description}`;
+                }
+                if (request.videoContext.channelName) {
+                    contextPrompt += `\nChannel: ${request.videoContext.channelName}`;
+                }
+                if (request.videoContext.url) {
+                    contextPrompt += `\nURL: ${request.videoContext.url}`;
+                }
+            }
+            // יצירת payload עם ההיסטוריה אם היא קיימת
+            let messages = [];
+            // הוסף הודעות מההיסטוריה
+            if (request.history && request.history.length > 0) {
+                messages = request.history.map(msg => ({
+                    role: msg.role,
+                    parts: [{ text: msg.content }]
+                }));
+            }
+            // הוסף את ההודעה הנוכחית של המשתמש
+            messages.push({
+                role: "user",
+                parts: [{ text: request.message }]
+            });
+            const payload = {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [{ text: contextPrompt }]
+                    },
+                    ...messages.slice(-30) // הגדלנו את מספר ההודעות מ-20 ל-30 לזיכרון משופר של שיחות ארוכות
+                ],
+                generationConfig: {
+                    temperature: 0.75, // איזון בין יצירתיות לדיוק
+                    topK: 40,
+                    topP: 0.92,
+                    maxOutputTokens: 8192, // הגדלת אורך התשובה המקסימלי לתשובות ארוכות ומפורטות יותר
+                    stopSequences: [] // מאפשר לסיים תשובות בצורה טבעית יותר
+                },
+                safetySettings: [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
+                ]
+            };
+            console.log(`[WordStream] Sending request to Gemini API: ${endpoint}`);
+            // לוגים מורחבים לצורך דיבוג
+            console.log('[WordStream] Gemini payload:', JSON.stringify(payload, null, 2).substring(0, 500) + '...');
+            const response = yield fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                const errorData = yield response.text();
+                console.error(`[WordStream] Gemini API error (${response.status}):`, errorData);
+                // בדוק אם זו שגיאת 404 ונסה ליפול חזרה למודל הראשון
+                if (response.status === 404 && GEMINI_MODEL !== FALLBACK_MODEL) {
+                    console.log(`[WordStream] Trying primary fallback model: ${FALLBACK_MODEL}`);
+                    // קרא שוב לפונקציה עם מודל אחר
+                    const fallbackRequest = Object.assign(Object.assign({}, request), { model: FALLBACK_MODEL });
+                    return handleGeminiRequest(fallbackRequest);
+                }
+                // בדוק אם זו שגיאת 404 עם מודל הגיבוי הראשון ונסה ליפול חזרה למודל הגיבוי השני
+                if (response.status === 404 && GEMINI_MODEL === FALLBACK_MODEL && FALLBACK_MODEL !== SECONDARY_FALLBACK_MODEL) {
+                    console.log(`[WordStream] Trying secondary fallback model: ${SECONDARY_FALLBACK_MODEL}`);
+                    // קרא שוב לפונקציה עם מודל הגיבוי השני
+                    const secondaryFallbackRequest = Object.assign(Object.assign({}, request), { model: SECONDARY_FALLBACK_MODEL });
+                    return handleGeminiRequest(secondaryFallbackRequest);
+                }
+                return {
+                    success: false,
+                    error: `Gemini API error (${response.status}): ${errorData}`
+                };
+            }
+            const data = yield response.json();
+            console.log('[WordStream] Gemini API response:', data);
+            if (!data.candidates || data.candidates.length === 0 || !data.candidates[0].content) {
+                return {
+                    success: false,
+                    error: 'Empty response from Gemini API'
+                };
+            }
+            // חלץ את התשובה מהמודל
+            const answer = data.candidates[0].content.parts[0].text;
+            return {
+                success: true,
+                answer
+            };
+        }
+        catch (error) {
+            console.error('[WordStream] Error in Gemini request:', error);
+            return {
+                success: false,
+                error: `Error processing request: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
+        }
+    });
+}
+
+})();
+
+/******/ })()
+;
+//# sourceMappingURL=background.js.map
