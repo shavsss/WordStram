@@ -7,6 +7,18 @@ import { ArrowLeft, Star, Trophy, Volume2, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
+// ייבוא פונקציות משותפות מספריית game-utils
+import { 
+  cleanContext,
+  playAudio,
+  triggerConfetti,
+  formatTime,
+  addNumericInputStyles
+} from '@/lib/game-utils';
+
+// ייבוא ההוק useGameTimer אם יש צורך בטיימר
+import { useGameTimer } from '@/hooks/useGameTimer';
+
 interface FlashCardsProps {
   words: Array<{
     word: string;
@@ -40,6 +52,12 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
     lastPlayed: new Date().toISOString()
   });
 
+  // השתמש בפונקציה המשותפת להוספת סגנונות קלט מספרי
+  useEffect(() => {
+    const cleanup = addNumericInputStyles();
+    return cleanup;
+  }, []);
+
   // Global style to hide number input spinners
   useEffect(() => {
     const style = document.createElement('style');
@@ -62,24 +80,6 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
       document.head.removeChild(style);
     };
   }, []);
-
-  // Process context to remove "From youtube" mentions
-  const cleanContext = (context?: string): string | undefined => {
-    if (!context) return undefined;
-    
-    // Remove any variation of "From youtube" text
-    return context
-      .replace(/["']?From youtube["']?/gi, '')
-      .replace(/["']?From YouTube["']?/gi, '')
-      .trim();
-  };
-
-  // Add text-to-speech function
-  const playAudio = (text: string) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US'; // You can adjust this based on the word's language
-    window.speechSynthesis.speak(utterance);
-  };
 
   // Load high score on mount
   useEffect(() => {
@@ -143,7 +143,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
   const initializeGame = () => {
     const shuffled = [...words].sort(() => Math.random() - 0.5).slice(0, wordCount);
     
-    // Process all contexts to remove "From youtube" mentions
+    // Process all contexts to remove "From youtube" mentions using the shared function
     const processedCards = shuffled.map(card => ({
       ...card,
       context: cleanContext(card.context)
@@ -163,15 +163,6 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
 
   const handleFlip = () => {
     setIsFlipped(!isFlipped);
-  };
-
-  const triggerConfetti = () => {
-    confetti({
-      particleCount: 150,
-      spread: 80,
-      origin: { y: 0.6 },
-      colors: ['#FF7E5F', '#FEB47B', '#FF3366', '#FFAF40']
-    });
   };
 
   const handleResponse = (knew: boolean) => {
@@ -228,7 +219,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
             exit={{ opacity: 0 }}
           >
             <motion.div
-              className="glass-card gradient-border p-8 rounded-2xl shadow-xl max-w-md w-full"
+              className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
@@ -248,7 +239,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
                 <div className="w-10"></div> {/* Spacer for alignment */}
               </div>
               
-              <div className="glass-card p-4 rounded-xl text-center w-full mb-6">
+              <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl text-center w-full mb-6">
                 <p className="text-3xl font-bold gradient-text floating">
                   {highScore.bestScore || 0}%
                 </p>
@@ -259,7 +250,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
                 <p className="text-sm text-white/80 mb-2">Number of words to practice:</p>
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center glass-card border-white/20 flex-1 p-1 rounded-md">
+                    <div className="flex items-center bg-white/10 backdrop-blur-sm border border-white/20 flex-1 p-1 rounded-md">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -328,7 +319,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
               
               <Button
                 onClick={initializeGame}
-                className="w-full py-6 glass-button gradient-border font-bold"
+                className="w-full py-6 bg-white/10 backdrop-blur-sm border border-white/20 font-bold"
               >
                 Start Game
               </Button>
@@ -349,16 +340,16 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
             variant="ghost"
             size="sm"
             onClick={onBack}
-            className="glass-button"
+            className="bg-white/10 backdrop-blur-sm border border-white/20"
           >
             <ArrowLeft size={24} />
           </Button>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+            <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
               <Trophy className="text-amber-400" size={20} />
               <span className="font-bold vibrant-text">{highScore.bestScore || 0}%</span>
             </div>
-            <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+            <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
               <Star className="text-amber-400" size={20} />
               <span className="font-bold vibrant-text">{currentSuccessRate}%</span>
             </div>
@@ -368,7 +359,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
         <div className="flex items-center gap-4 mb-4">
           <Progress 
             value={progress} 
-            className="flex-1 h-3 glass-card" 
+            className="flex-1 h-3 bg-white/10 backdrop-blur-sm border border-white/20" 
           />
           <div className="text-sm font-medium text-white">
             {currentIndex + 1} / {cards.length}
@@ -377,7 +368,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
 
         <div className="flex-1 flex flex-col items-center justify-center">
           <Card 
-            className={`w-full max-w-lg aspect-[4/3] glass-card border-0 p-4 sm:p-6 flex flex-col items-center justify-center cursor-pointer rounded-xl relative hover:shadow-xl transition-all duration-300 ${
+            className={`w-full max-w-lg aspect-[4/3] bg-white/10 backdrop-blur-sm border border-white/20 p-4 sm:p-6 flex flex-col items-center justify-center cursor-pointer rounded-xl relative hover:shadow-xl transition-all duration-300 ${
               lastResponse === 'correct' ? 'gradient-border-success bg-emerald-500/20' :
               lastResponse === 'incorrect' ? 'gradient-border-error bg-rose-500/20' :
               'gradient-border'
@@ -406,7 +397,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
                   e.stopPropagation();
                   playAudio(isFlipped ? currentCard?.translation : currentCard?.word);
                 }}
-                className="glass-button w-10 h-10 rounded-full p-0 flex items-center justify-center"
+                className="bg-white/10 backdrop-blur-sm border border-white/20 w-10 h-10 rounded-full p-0 flex items-center justify-center"
               >
                 <Volume2 size={20} />
               </Button>
@@ -419,7 +410,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
           <div className="flex gap-4 mt-6">
             <Button
               onClick={() => handleResponse(false)}
-              className={`glass-button px-8 py-4 rounded-xl font-medium text-lg ${
+              className={`bg-white/10 backdrop-blur-sm border border-white/20 px-8 py-4 rounded-xl font-medium text-lg ${
                 isFlipped 
                   ? lastResponse === 'incorrect' 
                     ? 'bg-rose-500/20 border-rose-400 text-rose-400 gradient-border-error' 
@@ -453,7 +444,7 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
               exit={{ opacity: 0 }}
             >
               <motion.div
-                className="glass-card p-8 rounded-2xl shadow-xl max-w-md w-full"
+                className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -485,14 +476,14 @@ export function FlashCards({ words, onBack }: FlashCardsProps) {
                       onClick={() => {
                         setGameStarted(false);
                       }}
-                      className="glass-button gradient-border px-8 py-4 font-bold text-white"
+                      className="bg-white/10 backdrop-blur-sm border border-white/20 px-8 py-4 font-bold text-white"
                     >
                       New Game
                     </Button>
                     <Button
                       variant="outline"
                       onClick={onBack}
-                      className="glass-button px-8 py-4 text-white"
+                      className="bg-white/10 backdrop-blur-sm border border-white/20 px-8 py-4 text-white"
                     >
                       Exit
                     </Button>

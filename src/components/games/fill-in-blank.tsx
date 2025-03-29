@@ -7,6 +7,19 @@ import { ArrowLeft, Timer, Star, Zap, Volume2, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
+// ייבוא פונקציות משותפות מספריית game-utils
+import { 
+  cleanContext,
+  playAudio,
+  triggerConfetti,
+  formatTime,
+  checkTextSimilarity,
+  addNumericInputStyles
+} from '@/lib/game-utils';
+
+// ייבוא ההוק לניהול טיימר
+import { useGameTimer } from '@/hooks/useGameTimer';
+
 interface FillInBlankProps {
   words: Array<{
     word: string;
@@ -32,8 +45,6 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
   const [score, setScore] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
   const [bestStreak, setBestStreak] = useState<number>(0);
-  const [timeLeft, setTimeLeft] = useState<number>(30);
-  const [gameStarted, setGameStarted] = useState<boolean>(false);
   const [showHint, setShowHint] = useState<boolean>(false);
   const [showAnswer, setShowAnswer] = useState<boolean>(false);
   const [comboMultiplier, setComboMultiplier] = useState<number>(1);
@@ -41,9 +52,22 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
   const [correctAnswers, setCorrectAnswers] = useState<number>(0);
   const [bestPercentage, setBestPercentage] = useState<number | null>(null);
   const lastAnswerCorrect = useRef<boolean | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const gameStartTime = useRef<number | null>(null);
   const [totalTime, setTotalTime] = useState<number>(0);
+  const [gameStarted, setGameStarted] = useState<boolean>(false);
+
+  // שימוש בהוק הטיימר
+  const timer = useGameTimer({
+    initialTime: 30,
+    onTimeEnd: () => checkAnswer(),
+    countUp: false
+  });
+
+  // הוספת סגנונות להסתרת חצי קלט מספריים
+  useEffect(() => {
+    const cleanup = addNumericInputStyles();
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     // Load best percentage from Chrome storage
@@ -58,31 +82,6 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
       initializeGame();
     }
   }, [gameStarted, words]);
-
-  useEffect(() => {
-    if (gameStarted && timeLeft > 0) {
-      const timer = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            checkAnswer();
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [gameStarted, timeLeft]);
-
-  // Clean context to remove "From youtube" mentions
-  const cleanContext = (context?: string): string | undefined => {
-    if (!context) return undefined;
-    
-    // Remove any variation of "From youtube" text
-    return context
-      .replace(/["']?From youtube["']?/gi, '')
-      .replace(/["']?From YouTube["']?/gi, '')
-      .trim();
-  };
 
   const initializeGame = () => {
     const shuffledWords = [...words]
@@ -100,11 +99,14 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
     setAnswer('');
     setScore(0);
     setStreak(0);
-    setTimeLeft(30);
     setShowHint(false);
     setShowAnswer(false);
     setComboMultiplier(1);
     setCorrectAnswers(0);
+    
+    // איפוס והפעלת הטיימר
+    timer.resetTimer();
+    timer.startTimer();
     
     // Start tracking game time
     gameStartTime.current = Date.now();
@@ -114,15 +116,15 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
     if (!questions[currentQuestionIndex]) return;
 
     const currentQuestion = questions[currentQuestionIndex];
-    const normalizedUserAnswer = answer.trim().toLowerCase();
-    const normalizedCorrectAnswer = currentQuestion.answer.trim().toLowerCase();
     
-    // Check for exact match or close match (allowing for small typos)
-    const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer ||
-      levenshteinDistance(normalizedUserAnswer, normalizedCorrectAnswer) <= 2;
+    // בדיקת דמיון בין התשובה של המשתמש לתשובה הנכונה
+    const isCorrect = checkTextSimilarity(
+      answer.trim(),
+      currentQuestion.answer.trim()
+    );
 
     if (isCorrect) {
-      const timeBonus = Math.floor(timeLeft / 3);
+      const timeBonus = Math.floor(timer.time / 3);
       const points = (currentQuestion.points + timeBonus) * comboMultiplier;
       setScore(prev => prev + points);
       setStreak(prev => prev + 1);
@@ -176,49 +178,14 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
     }
 
     setAnswer('');
-    setTimeLeft(30);
+    timer.resetTimer();
     setShowHint(false);
   };
 
   const nextQuestion = () => {
     setCurrentQuestionIndex(prev => prev + 1);
     setAnswer('');
-    setTimeLeft(30);
     setShowHint(false);
-  };
-
-  const triggerConfetti = () => {
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 }
-    });
-  };
-
-  // Helper function to calculate Levenshtein distance for typo tolerance
-  const levenshteinDistance = (a: string, b: string): number => {
-    if (a.length === 0) return b.length;
-    if (b.length === 0) return a.length;
-
-    const matrix = Array(a.length + 1).fill(null).map(() => 
-      Array(b.length + 1).fill(null)
-    );
-
-    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j - 1] + cost
-        );
-      }
-    }
-
-    return matrix[a.length][b.length];
   };
 
   const playAudio = (text: string) => {
@@ -252,12 +219,6 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
     });
   };
 
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
   // Calculate progress
   const progressValue = ((currentQuestionIndex) / questions.length) * 100;
 
@@ -265,7 +226,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
   const wordCountOptions = [5, 10, 15, 20];
 
   return (
-    <div className="fixed inset-0 animated-gradient-bg text-white overflow-hidden">
+    <div className="fixed inset-0 bg-background text-foreground animated-gradient-bg overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.15)_1px,transparent_0)] bg-[size:24px_24px] opacity-30" />
       
       <div className="relative h-full flex flex-col p-6 max-w-4xl mx-auto">
@@ -275,17 +236,17 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
               variant="ghost"
               size="sm"
               onClick={onBack}
-              className="glass-button"
+              className="bg-white/10 backdrop-blur-sm border border-white/20"
             >
               <ArrowLeft size={24} />
             </Button>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+              <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
                 <Star className="text-amber-400" size={20} />
                 <span className="font-bold text-lg vibrant-text">{score}</span>
               </div>
               {streak > 0 && (
-                <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+                <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
                   <Zap className="text-amber-400" size={20} />
                   <span className="font-medium vibrant-text">{streak}x</span>
                 </div>
@@ -299,11 +260,11 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
             <div className="flex items-center gap-4">
               <Progress 
                 value={progressValue} 
-                className="flex-1 h-3 glass-card" 
+                className="flex-1 h-3 bg-white/10 backdrop-blur-sm border border-white/20" 
               />
-              <div className="flex items-center gap-2 glass-card px-3 py-1 rounded-full text-sm">
+              <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-3 py-1 rounded-full text-sm">
                 <Timer size={16} />
-                {timeLeft}s
+                {timer.time}s
               </div>
             </div>
           )}
@@ -323,7 +284,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                 exit={{ opacity: 0 }}
               >
                 <motion.div
-                  className="glass-card gradient-border p-8 rounded-2xl shadow-xl max-w-md w-full"
+                  className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
                   initial={{ scale: 0.9, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   exit={{ scale: 0.9, opacity: 0 }}
@@ -343,7 +304,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                     <div className="w-10"></div> {/* Spacer for alignment */}
                   </div>
                   
-                  <div className="glass-card p-4 rounded-xl text-center w-full mb-6">
+                  <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl text-center w-full mb-6">
                     <p className="text-3xl font-bold gradient-text floating">
                       {bestPercentage !== null ? `${bestPercentage}%` : "0%"}
                     </p>
@@ -372,14 +333,14 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                   
                   <Button
                     onClick={() => setGameStarted(true)}
-                    className="w-full py-6 glass-button gradient-border font-bold"
+                    className="w-full py-6 bg-white/10 backdrop-blur-sm border border-white/20 font-bold"
                   >
                     Start Game
                   </Button>
                 </motion.div>
               </motion.div>
             ) : (
-              <Card className="flex-1 glass-card border-0 p-8">
+              <Card className="flex-1 bg-white/10 backdrop-blur-sm border border-white/20 p-8">
                 {questions[currentQuestionIndex] && (
                   <div className="space-y-8">
                     <div>
@@ -389,7 +350,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                           variant="ghost"
                           size="sm"
                           onClick={() => playAudio(questions[currentQuestionIndex].word)}
-                          className="h-10 w-10 rounded-full flex items-center justify-center p-0 bg-purple-900"
+                          className="bg-white/10 backdrop-blur-sm border border-white/20 w-10 h-10 rounded-full p-0 flex items-center justify-center"
                         >
                           <Volume2 size={18} className="text-white" />
                         </Button>
@@ -410,7 +371,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                           onKeyPress={(e) => e.key === 'Enter' && checkAnswer()}
                           placeholder="Type the translation..."
                           disabled={questions[currentQuestionIndex].userAnswer !== undefined}
-                          className="w-full p-4 text-lg glass-card border-white/20 text-white placeholder-white/50"
+                          className="w-full p-4 text-lg bg-white/10 backdrop-blur-sm border border-white/20 text-white placeholder-white/50"
                         />
                       </div>
 
@@ -448,7 +409,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                           <Button
                             onClick={checkAnswer}
                             disabled={!answer.trim()}
-                            className="flex-1 glass-button"
+                            className="flex-1 bg-white/10 backdrop-blur-sm border border-white/20"
                           >
                             Check Answer
                           </Button>
@@ -456,7 +417,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                             variant="outline"
                             onClick={() => setShowHint(true)}
                             disabled={showHint}
-                            className="flex-1 glass-button"
+                            className="flex-1 bg-white/10 backdrop-blur-sm border border-white/20"
                           >
                             Show Hint
                           </Button>
@@ -467,7 +428,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                         <motion.p
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
-                          className="text-white/70 text-center glass-card p-3 rounded-lg"
+                          className="text-white/70 text-center bg-white/10 backdrop-blur-sm border border-white/20 p-3 rounded-lg"
                         >
                           First letter: <span className="text-amber-300 font-bold">{questions[currentQuestionIndex].answer[0]}</span>
                           <br />
@@ -491,7 +452,7 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
               exit={{ opacity: 0 }}
             >
               <motion.div
-                className="glass-card gradient-border p-8 rounded-2xl shadow-xl max-w-md w-full"
+                className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -500,19 +461,19 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                   Challenge Complete!
                 </h3>
                 <div className="grid grid-cols-2 gap-6 text-center mb-6">
-                  <div className="glass-card p-4 rounded-xl">
+                  <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl">
                     <p className="text-3xl font-bold gradient-text floating">{score}</p>
                     <p className="text-sm text-white/80">Score</p>
                   </div>
-                  <div className="glass-card p-4 rounded-xl">
+                  <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl">
                     <p className="text-3xl font-bold gradient-text floating">{formatTime(totalTime)}</p>
                     <p className="text-sm text-white/80">Time</p>
                   </div>
-                  <div className="glass-card p-4 rounded-xl">
+                  <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl">
                     <p className="text-3xl font-bold gradient-text floating">{streak}</p>
                     <p className="text-sm text-white/80">Best Streak</p>
                   </div>
-                  <div className="glass-card p-4 rounded-xl">
+                  <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl">
                     <p className="text-3xl font-bold gradient-text floating">
                       {Math.round((correctAnswers / questions.length) * 100)}%
                     </p>
@@ -523,13 +484,13 @@ export function FillInBlank({ words, onBack }: FillInBlankProps) {
                 <div className="flex gap-3">
                   <Button
                     onClick={initializeGame}
-                    className="w-1/2 glass-button gradient-border font-medium"
+                    className="w-1/2 bg-white/10 backdrop-blur-sm border border-white/20 font-medium"
                   >
                     Play Again
                   </Button>
                   <Button
                     onClick={onBack}
-                    className="w-1/2 glass-button gradient-border font-medium"
+                    className="w-1/2 bg-white/10 backdrop-blur-sm border border-white/20 font-medium"
                   >
                     Exit
                   </Button>

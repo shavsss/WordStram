@@ -10,7 +10,6 @@ import { Select } from '@/components/ui/select';
 import { Word } from '@/types/word';
 import { Games } from '@/components/games';
 import { StatisticsPage } from '@/components/statistics/StatisticsPage';
-import { NotesAndSummaries } from '@/components/notes/NotesAndSummaries';
 import { SavedChats } from '@/components/chats/SavedChats';
 import { Button } from '@/components/ui/button';
 import * as XLSX from 'xlsx';
@@ -167,6 +166,7 @@ export default function Popup() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [currentView, setCurrentView] = useState<'home' | 'stats' | 'games' | 'notes' | 'chats'>('home');
+  const [currentUser, setCurrentUser] = useState<{ email: string | null } | null>(null);
 
   // Add helper function for date handling
   const parseDate = (dateString: string): Date | null => {
@@ -466,6 +466,20 @@ export default function Popup() {
           setError('Chrome API not available. Please try reloading the extension.');
           setIsLoading(false);
           return;
+        }
+
+        // Load current user information
+        try {
+          const { auth } = await import('@/firebase/config');
+          const user = auth.currentUser;
+          if (user) {
+            setCurrentUser({
+              email: user.email
+            });
+            console.log('WordStream: Current user loaded:', user.email);
+          }
+        } catch (authError) {
+          console.error('WordStream: Error loading user information:', authError);
         }
 
         // Load saved settings
@@ -1245,6 +1259,33 @@ export default function Popup() {
     setCurrentView('home');
   };
 
+  // הוספת פונקציית התנתקות
+  const handleSignOut = async () => {
+    try {
+      console.log('WordStream: Signing out user');
+      
+      // בדיקה ש-Chrome API זמין
+      if (!await waitForChromeAPI()) {
+        setError('Chrome API not available. Cannot sign out.');
+        return;
+      }
+      
+      // שליחת הודעת התנתקות ל-background script
+      const response = await chrome.runtime.sendMessage({ action: 'SIGN_OUT' });
+      
+      if (response?.success) {
+        console.log('WordStream: User signed out successfully');
+        // אפשר להוסיף הודעה למשתמש או פעולות נוספות לאחר ההתנתקות
+      } else {
+        console.error('WordStream: Error signing out:', response?.error);
+        setError(`Failed to sign out: ${response?.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('WordStream: Error signing out:', error);
+      setError(`Failed to sign out: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   // Determine content based on current view
   let content;
   
@@ -1271,9 +1312,18 @@ export default function Popup() {
   } else if (currentView === 'notes') {
     // Notes & Summaries view
     content = (
-      <NotesAndSummaries 
-        onBack={handleBackFromNotes} 
-      />
+      <div className="flex flex-col items-center justify-center py-8">
+        <div className="text-center p-6 bg-slate-100 dark:bg-slate-800 rounded-lg max-w-md">
+          <FileText size={48} className="mx-auto mb-4 text-blue-500" />
+          <h2 className="text-xl font-bold mb-2">Notes Coming Soon</h2>
+          <p className="text-slate-600 dark:text-slate-400 mb-4">
+            The Notes & Summaries feature is currently in development and will be available soon.
+          </p>
+          <Button onClick={handleBackFromNotes} className="mt-2">
+            Go Back
+          </Button>
+        </div>
+      </div>
     );
   } else if (currentView === 'chats') {
     // Saved Chats view with the new component
@@ -1291,11 +1341,11 @@ export default function Popup() {
             <img src="icons/icon48.png" alt="WordStream Logo" className="w-10 h-10" />
             <h1 className="text-xl font-bold ml-3">WordStream</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center space-x-1">
             <button
               onClick={() => handleSettingsChange('darkMode', !settings.darkMode)}
               className="icon-button"
-              aria-label={settings.darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={settings.darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {settings.darkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
@@ -1305,6 +1355,18 @@ export default function Popup() {
               aria-label="Settings"
             >
               <Settings size={20} />
+            </button>
+            <button
+              onClick={handleSignOut}
+              className="icon-button text-red-500"
+              aria-label="Sign Out"
+              title="Sign Out"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
             </button>
           </div>
         </header>
@@ -1371,6 +1433,20 @@ export default function Popup() {
             </div>
           ) : (
             <>
+              {currentUser?.email && (
+                <div className="user-info-card flex items-center gap-2 p-2 mb-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                  <div className="bg-blue-100 dark:bg-blue-900/30 p-1.5 rounded-full">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 dark:text-blue-400">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                  </div>
+                  <div className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    {currentUser.email}
+                  </div>
+                </div>
+              )}
+              
               {renderStatistics()}
               
               <div className="practice-section">

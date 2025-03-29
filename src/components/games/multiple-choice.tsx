@@ -7,6 +7,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { Input } from '@/components/ui/input';
 
+// ייבוא פונקציות משותפות מספריית game-utils
+import { 
+  cleanContext,
+  playAudio,
+  triggerConfetti,
+  formatTime,
+  addNumericInputStyles
+} from '@/lib/game-utils';
+
+// ייבוא ההוק useGameTimer למדידת זמן
+import { useGameTimer } from '@/hooks/useGameTimer';
+
 interface MultipleChoiceProps {
   words: Array<{
     word: string;
@@ -40,54 +52,23 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
   const [progress, setProgress] = useState(0);
   const [gameComplete, setGameComplete] = useState(false);
   const [consecutiveCorrect, setConsecutiveCorrect] = useState(0);
-  const [timer, setTimer] = useState(0);
-  const [timerActive, setTimerActive] = useState(false);
   const [highScore, setHighScore] = useState<GameStats>({
     bestScore: 0,
     totalGames: 0,
     lastPlayed: new Date().toISOString()
   });
 
-  // Global style to hide number input spinners
+  // שימוש בטיימר לניהול זמן המשחק
+  const gameTimer = useGameTimer({
+    countUp: true,
+    autoStart: gameStarted && !gameComplete
+  });
+
+  // הסתרת חצי הקלט המספריים
   useEffect(() => {
-    const style = document.createElement('style');
-    style.textContent = `
-      /* Hide number input spinners - WebKit browsers */
-      input[type=number]::-webkit-inner-spin-button, 
-      input[type=number]::-webkit-outer-spin-button { 
-        -webkit-appearance: none;
-        margin: 0; 
-      }
-      /* Firefox */
-      input[type=number] {
-        -moz-appearance: textfield;
-        appearance: textfield;
-      }
-    `;
-    document.head.appendChild(style);
-    
-    return () => {
-      document.head.removeChild(style);
-    };
+    const cleanup = addNumericInputStyles();
+    return cleanup;
   }, []);
-
-  // Process context to remove "From youtube" mentions
-  const cleanContext = (context?: string): string | undefined => {
-    if (!context) return undefined;
-    
-    // Remove any variation of "From youtube" text
-    return context
-      .replace(/["']?From youtube["']?/gi, '')
-      .replace(/["']?From YouTube["']?/gi, '')
-      .trim();
-  };
-
-  // Voice synthesis function
-  const playAudio = (text: string) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US'; // You can adjust based on language
-    window.speechSynthesis.speak(utterance);
-  };
 
   // Load high score on mount
   useEffect(() => {
@@ -123,15 +104,6 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(e.target.value) || 0;
     setQuestionCount(Math.min(Math.max(1, value), words.length));
-  };
-
-  const triggerConfetti = () => {
-    confetti({
-      particleCount: 150,
-      spread: 80,
-      origin: { y: 0.6 },
-      colors: ['#FF7E5F', '#FEB47B', '#FF3366', '#FFAF40']
-    });
   };
 
   const generateQuestions = () => {
@@ -172,6 +144,10 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
     setConsecutiveCorrect(0);
     setGameComplete(false);
     setGameStarted(true);
+    
+    // איפוס והתחלה של הטיימר
+    gameTimer.resetTimer();
+    gameTimer.startTimer();
   };
 
   const handleOptionSelect = (index: number) => {
@@ -225,7 +201,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
             exit={{ opacity: 0 }}
           >
             <motion.div
-              className="glass-card gradient-border p-8 rounded-2xl shadow-xl max-w-md w-full"
+              className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
@@ -245,7 +221,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
                 <div className="w-10"></div> {/* Spacer for alignment */}
               </div>
               
-              <div className="glass-card p-4 rounded-xl text-center w-full mb-6">
+              <div className="bg-white/10 backdrop-blur-sm border border-white/20 p-4 rounded-xl text-center w-full mb-6">
                 <p className="text-3xl font-bold gradient-text floating">
                   {highScore.bestScore || 0}%
                 </p>
@@ -256,7 +232,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
                 <p className="text-sm text-white/80 mb-2">Number of words to practice:</p>
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center glass-card border-white/20 flex-1 p-1 rounded-md">
+                    <div className="flex items-center bg-white/10 backdrop-blur-sm border border-white/20 flex-1 p-1 rounded-md">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -325,7 +301,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
               
               <Button
                 onClick={generateQuestions}
-                className="w-full py-6 glass-button gradient-border font-bold"
+                className="w-full py-6 bg-white/10 backdrop-blur-sm border border-white/20 font-bold"
               >
                 Start Game
               </Button>
@@ -346,16 +322,16 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
             variant="ghost"
             size="sm"
             onClick={onBack}
-            className="glass-button"
+            className="bg-white/10 backdrop-blur-sm border border-white/20"
           >
             <ArrowLeft size={24} />
           </Button>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+            <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
               <Trophy className="text-amber-400" size={20} />
               <span className="font-bold vibrant-text">{highScore.bestScore || 0}%</span>
             </div>
-            <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full">
+            <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 rounded-full">
               <Star className="text-amber-400" size={20} />
               <span className="font-bold vibrant-text">{successPercentage}%</span>
             </div>
@@ -365,7 +341,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
         <div className="flex items-center gap-4 mb-4">
           <Progress 
             value={progress} 
-            className="flex-1 h-3 glass-card" 
+            className="flex-1 h-3 bg-white/10 backdrop-blur-sm border border-white/20" 
           />
           <div className="text-sm font-medium text-white">
             {currentIndex + 1} / {questions.length}
@@ -373,14 +349,14 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
         </div>
 
         <div className="flex-1 flex flex-col items-center overflow-hidden">
-          <Card className="w-full max-w-lg glass-card border-0 p-4 sm:p-6 mb-4 sm:mb-6 rounded-xl">
+          <Card className="bg-white/10 backdrop-blur-sm border border-white/20 w-full rounded-xl p-6 md:p-8 mx-auto mb-6 max-w-2xl shadow-xl">
             <div className="text-center">
               <div className="flex justify-center mb-2">
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => playAudio(currentQuestion?.word)}
-                  className="glass-button w-10 h-10 rounded-full p-0 flex items-center justify-center"
+                  className="bg-white/10 backdrop-blur-sm border border-white/20 w-10 h-10 rounded-full p-0 flex items-center justify-center"
                 >
                   <Volume2 size={20} />
                 </Button>
@@ -432,7 +408,7 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
               exit={{ opacity: 0 }}
             >
               <motion.div
-                className="glass-card p-8 rounded-2xl shadow-xl max-w-md w-full"
+                className="bg-white/10 backdrop-blur-sm border border-white/20 p-8 rounded-2xl shadow-xl max-w-md w-full"
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -466,14 +442,14 @@ export function MultipleChoice({ words, onBack }: MultipleChoiceProps) {
                       onClick={() => {
                         setGameStarted(false);
                       }}
-                      className="glass-button gradient-border px-8 py-4 font-bold text-white"
+                      className="bg-white/10 backdrop-blur-sm border border-white/20 px-8 py-4 font-bold text-white"
                     >
                       New Game
                     </Button>
                     <Button
                       variant="outline"
                       onClick={onBack}
-                      className="glass-button px-8 py-4 text-white"
+                      className="bg-white/10 backdrop-blur-sm border border-white/20 px-8 py-4 text-white"
                     >
                       Exit
                     </Button>

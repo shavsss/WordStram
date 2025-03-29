@@ -188,11 +188,11 @@ export function Games({ words, onBack }: GamesProps) {
             {games.map((game) => (
               <Card
                 key={game.id}
-                className="group relative overflow-hidden glass-card hover-scale border-transparent hover:shadow-xl transition-all duration-300 rounded-xl"
+                className="group relative overflow-hidden bg-white/10 backdrop-blur-sm border border-white/20 hover:shadow-xl transition-all duration-300 rounded-xl hover:scale-[1.02]"
                 onClick={() => setSelectedGame(game.id)}
               >
-                <div className={`absolute inset-0 ${game.bgColor} opacity-20 group-hover:opacity-40 transition-opacity duration-500 ease-out rounded-xl`} />
-                <div className="absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-20 transition-opacity duration-500 ease-out rounded-xl"
+                <div className={`absolute inset-0 ${game.bgColor} opacity-10 group-hover:opacity-20 transition-opacity duration-500 ease-out rounded-xl`} />
+                <div className="absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-10 transition-opacity duration-500 ease-out rounded-xl"
                      style={{
                        background: `radial-gradient(circle at center, ${game.color.split(' ')[0]} 0%, transparent 70%)`
                      }}

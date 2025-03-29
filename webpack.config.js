@@ -59,6 +59,7 @@ module.exports = {
     new CopyPlugin({
       patterns: [
         { from: 'public' },
+        { from: 'src/firebase-cors-override.js', to: 'firebase-cors-override.js' },
       ],
     }),
     new webpack.DefinePlugin({

@@ -3,10 +3,148 @@
 import { LanguageCode } from '@/config/supported-languages';
 import { normalizeLanguageCode } from '@/services/caption-detectors/shared/language-map';
 import { GEMINI_CONFIG } from '@/services/gemini/gemini-service';
+import { onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { auth } from '../firebase/config';
+
+// Authentication State Manager - מנגנון מרכזי לניהול מצב האימות
+interface AuthState {
+  isAuthenticated: boolean;
+  userEmail: string | null;
+  userDisplayName: string | null;
+  userId: string | null;
+  lastUpdated: number;
+  expiresAt: number | null;
+}
+
+// מצב האימות הגלובלי
+const globalAuthState: AuthState = {
+  isAuthenticated: false,
+  userEmail: null,
+  userDisplayName: null,
+  userId: null,
+  lastUpdated: Date.now(),
+  expiresAt: null
+};
+
+// Track authentication state
+let isAuthenticated = false;
+
+// שימוש ב-Firebase Persistence כדי לשמור על האימות בין סשנים
+try {
+  setPersistence(auth, browserLocalPersistence)
+    .then(() => {
+      console.log('WordStream Background: Firebase persistence set to browserLocalPersistence');
+    })
+    .catch(error => {
+      console.error('WordStream Background: Error setting persistence:', error);
+    });
+} catch (error) {
+  console.error('WordStream Background: Error setting persistence:', error);
+}
+
+// טעינת מצב האימות מהאחסון בהפעלה
+function loadAuthState() {
+  chrome.storage.local.get(['authState'], (result) => {
+    if (result.authState) {
+      // בדוק אם המידע לא ישן מדי (פחות מ-24 שעות)
+      const isRecent = Date.now() - result.authState.lastUpdated < 24 * 60 * 60 * 1000;
+      
+      if (isRecent) {
+        console.log('WordStream Background: Loading stored auth state', result.authState);
+        Object.assign(globalAuthState, result.authState);
+        isAuthenticated = globalAuthState.isAuthenticated;
+        
+        // בדיקת תפוגת הטוקן מייד בטעינה
+        if (globalAuthState.expiresAt && Date.now() > globalAuthState.expiresAt) {
+          console.log('WordStream Background: Auth token expired on load, signing out');
+          auth.signOut().catch(err => console.error('Error signing out:', err));
+        } else if (isAuthenticated) {
+          console.log('WordStream Background: User is authenticated from stored state');
+          
+          // שידור לטאבים שהמשתמש מחובר
+          setTimeout(() => {
+            broadcastAuthStateChange();
+          }, 1000); // דחייה קטנה כדי לוודא שהכל טעון
+        }
+      } else {
+        console.log('WordStream Background: Stored auth state is too old, ignoring');
+      }
+    } else {
+      console.log('WordStream Background: No stored auth state found');
+    }
+  });
+}
+
+// שמירת מצב האימות לאחסון מקומי - שיפור עם בקרת שגיאות
+function saveAuthState() {
+  globalAuthState.lastUpdated = Date.now();
+  chrome.storage.local.set({ authState: globalAuthState }, () => {
+    if (chrome.runtime.lastError) {
+      console.error('WordStream Background: Error saving auth state:', chrome.runtime.lastError);
+    } else {
+      console.log('WordStream Background: Auth state saved to storage');
+    }
+  });
+}
+
+// עדכון מצב האימות מ-Firebase ושידור לטאבים
+function updateAuthState(user: any | null) {
+  const newAuthState = !!user;
+  
+  // עדכן רק אם המצב אכן השתנה
+  if (isAuthenticated !== newAuthState || globalAuthState.userId !== (user?.uid || null)) {
+    console.log(`WordStream Background: Auth state changed - ${newAuthState ? 'Authenticated' : 'Not authenticated'}`);
+    
+    isAuthenticated = newAuthState;
+    
+    // עדכן את המצב הגלובלי
+    globalAuthState.isAuthenticated = newAuthState;
+    
+    if (user) {
+      globalAuthState.userEmail = user.email || null;
+      globalAuthState.userDisplayName = user.displayName || null;
+      globalAuthState.userId = user.uid || null;
+      
+      // שמירת מידע על תפוגת הטוקן אם קיים
+      if (user.stsTokenManager?.expirationTime) {
+        globalAuthState.expiresAt = user.stsTokenManager.expirationTime;
+      }
+      
+      console.log('WordStream Background: User authenticated:', {
+        email: globalAuthState.userEmail,
+        displayName: globalAuthState.userDisplayName,
+        userId: globalAuthState.userId,
+        expiresAt: globalAuthState.expiresAt ? new Date(globalAuthState.expiresAt).toISOString() : null
+      });
+    } else {
+      globalAuthState.userEmail = null;
+      globalAuthState.userDisplayName = null;
+      globalAuthState.userId = null;
+      globalAuthState.expiresAt = null;
+    }
+    
+    // שמור לאחסון
+    saveAuthState();
+    
+    // שדר לכל הטאבים
+    broadcastAuthStateChange();
+  } else {
+    console.log('WordStream Background: Auth state unchanged, skipping broadcast');
+  }
+}
+
+// טעינת מצב האימות בעמבלת סקריפט הרקע, ולא רק בעת התקנה
+// זה חשוב מאוד ב-MV3 כאשר ה-Service Worker עשוי להיטען מחדש
+loadAuthState();
+
+// Authentication support - removed onSignInChanged as it's not available in chrome.identity
 
 // Initialize extension
 chrome.runtime.onInstalled.addListener(() => {
   console.log('WordStream: Background script installed and running');
+  
+  // טעינת מצב האימות הקיים (אמנם כבר טענו, אבל טוב לעשות גם פה למקרה של התקנה ראשונית)
+  loadAuthState();
   
   // Initialize default settings if they don't exist
   chrome.storage.sync.get(['settings'], (result) => {
@@ -25,6 +163,12 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// הוספת מאזין ל-onStartup כדי לטעון את מצב האימות גם בפתיחה מחדש של הדפדפן
+chrome.runtime.onStartup.addListener(() => {
+  console.log('WordStream: Background script started up');
+  loadAuthState();
+});
+
 // Add persistent connection check
 let isBackgroundActive = true;
 
@@ -36,9 +180,238 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-// Handle messages from content scripts
+// Listen for auth state changes
+onAuthStateChanged(auth, (user) => {
+  console.log('WordStream Background: Auth state changed from Firebase');
+  updateAuthState(user);
+});
+
+// בדיקת תוקף האימות כל דקה - שיפור עם טיפול בשגיאות
+setInterval(() => {
+  try {
+    // אם יש זמן תפוגה ועבר הזמן, נקה את האימות
+    if (globalAuthState.expiresAt && Date.now() > globalAuthState.expiresAt) {
+      console.log('WordStream Background: Auth token expired, signing out');
+      auth.signOut()
+        .then(() => {
+          console.log('WordStream Background: User signed out due to token expiration');
+        })
+        .catch(err => {
+          console.error('WordStream Background: Error signing out:', err);
+        });
+    }
+  } catch (error) {
+    console.error('WordStream Background: Error in token expiration check:', error);
+  }
+}, 60000);
+
+// Broadcast auth state change to all tabs with content scripts - שיפור עם טיפול בשגיאות
+async function broadcastAuthStateChange() {
+  try {
+    // Find all tabs where our content script might be running (YouTube and Netflix)
+    const tabs = await chrome.tabs.query({
+      url: [
+        "*://*.youtube.com/*",
+        "*://*.netflix.com/*"
+      ]
+    });
+    
+    console.log(`WordStream Background: Broadcasting auth state to ${tabs.length} tabs`);
+    
+    if (tabs.length === 0) {
+      console.log('WordStream Background: No matching tabs found to broadcast to');
+      return;
+    }
+    
+    // Send message to each tab
+    const broadcastPromises = tabs.map(async (tab) => {
+      if (!tab.id) {
+        console.log('WordStream Background: Tab has no ID, skipping');
+        return;
+      }
+      
+      try {
+        await chrome.tabs.sendMessage(
+          tab.id, 
+          { 
+            action: 'AUTH_STATE_CHANGED', 
+            isAuthenticated,
+            authDetails: {
+              email: globalAuthState.userEmail,
+              displayName: globalAuthState.userDisplayName,
+              userId: globalAuthState.userId,
+              timestamp: Date.now()
+            }
+          }
+        );
+        console.log(`WordStream Background: Auth state sent to tab ${tab.id}`);
+      } catch (err) {
+        // מתעלמים משגיאות - ה-content script עשוי לא להיות טעון בכל הטאבים המתאימים
+        console.log(`WordStream Background: Failed to send auth state to tab ${tab.id}:`, err);
+      }
+    });
+    
+    // חכה לכל השידורים להסתיים
+    await Promise.allSettled(broadcastPromises);
+    console.log('WordStream Background: Completed broadcasting auth state');
+    
+  } catch (error) {
+    console.error('WordStream Background: Error broadcasting auth state:', error);
+  }
+}
+
+// Handle messages from content scripts and popup - שיפור טיפול בשגיאות
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('WordStream: Received message', request.action || request.type);
+  try {
+    console.log('WordStream: Background script received message:', request?.action || request?.type || 'unknown');
+    
+    // Handler for direct authentication check (for content scripts)
+    if (request?.action === 'IS_AUTHENTICATED') {
+      console.log('WordStream Background: Authentication check requested, current state:', isAuthenticated);
+      sendResponse({ 
+        isAuthenticated,
+        authDetails: isAuthenticated ? {
+          email: globalAuthState.userEmail,
+          displayName: globalAuthState.userDisplayName,
+          userId: globalAuthState.userId
+        } : null
+      });
+      return true;
+    }
+    
+    // New handler for getting auth state
+    if (request?.action === 'GET_AUTH_STATE') {
+      console.log('WordStream Background: Auth state requested, current state:', isAuthenticated);
+      sendResponse({ 
+        isAuthenticated,
+        authDetails: isAuthenticated ? {
+          email: globalAuthState.userEmail,
+          displayName: globalAuthState.userDisplayName,
+          userId: globalAuthState.userId
+        } : null
+      });
+      return true;
+    }
+    
+    // Handler for SIGN_OUT action
+    if (request?.action === 'SIGN_OUT') {
+      console.log('WordStream Background: Signing out user');
+      auth.signOut()
+        .then(() => {
+          console.log('WordStream Background: User signed out successfully');
+          isAuthenticated = false;
+          
+          // עדכון המצב הגלובלי
+          globalAuthState.isAuthenticated = false;
+          globalAuthState.userEmail = null;
+          globalAuthState.userDisplayName = null;
+          globalAuthState.userId = null;
+          globalAuthState.expiresAt = null;
+          
+          // שמירה לאחסון
+          saveAuthState();
+          
+          // Broadcast auth state change to all tabs
+          broadcastAuthStateChange();
+          
+          sendResponse({ success: true });
+        })
+        .catch((error) => {
+          console.error('WordStream Background: Error signing out user:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error signing out'
+          });
+        });
+      return true;
+    }
+    
+    // New handler for auth state updates from popup/hooks
+    if (request?.action === 'AUTH_STATE_UPDATED') {
+      console.log('WordStream Background: Auth state update received:', request.isAuthenticated);
+      isAuthenticated = request.isAuthenticated;
+      
+      // אם יש עדכון פרטים, עדכן גם אותם
+      if (request.authDetails) {
+        globalAuthState.userEmail = request.authDetails.email || null;
+        globalAuthState.userDisplayName = request.authDetails.displayName || null;
+        globalAuthState.userId = request.authDetails.userId || null;
+      }
+      
+      // עדכון המצב הגלובלי
+      globalAuthState.isAuthenticated = isAuthenticated;
+      
+      // שמירה לאחסון
+      saveAuthState();
+      
+      // Broadcast to content scripts
+      broadcastAuthStateChange();
+      
+      sendResponse({ success: true });
+      return true;
+    }
+    
+    // המשך הטיפול בהודעות אחרות...
+    
+  } catch (error) {
+    console.error('WordStream Background: Error handling message:', error);
+    sendResponse({ success: false, error: String(error) });
+  }
+  
+  // המשך הקוד המקורי...
+  
+  if (request?.action === 'OPEN_POPUP') {
+    // Open the extension popup
+    console.log('WordStream: Opening popup');
+    if (chrome.action && chrome.action.openPopup) {
+      chrome.action.openPopup();
+    } else {
+      // Fallback for browsers that don't support openPopup
+      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    }
+    return true;
+  }
+  
+  if (request?.action === 'googleAuth') {
+    // We can't use chrome.identity in background in MV3, so we'll just respond with an error
+    console.log('WordStream: Google auth requested from background, but it\'s not supported in MV3');
+    sendResponse({ 
+      success: false, 
+      error: 'Chrome identity API not available in background. Auth must be performed from popup or tab' 
+    });
+    return true;
+  }
+  
+  if (request?.action === 'processAuthToken') {
+    // Process token received from popup
+    try {
+      console.log('WordStream: Processing auth token received from popup');
+      const { token } = request;
+      if (!token) {
+        sendResponse({ success: false, error: 'No token provided' });
+        return true;
+      }
+      
+      sendResponse({ success: true, token });
+    } catch (error) {
+      console.error('WordStream: Error processing auth token:', error);
+      sendResponse({ 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error processing token' 
+      });
+    }
+    return true;
+  }
+  
+  if (request?.action === 'translate') {
+    handleTranslation(request.data)
+      .then(response => sendResponse(response))
+      .catch(error => {
+        console.error('WordStream: Translation error:', error);
+        sendResponse({ success: false, error: safeStringifyError(error) });
+      });
+    return true; // Keep the message channel open for async response
+  }
   
   if (!isBackgroundActive) {
     console.error('WordStream: Background script is not active');
@@ -46,17 +419,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
-  if (request.type === 'PING') {
+  if (request?.type === 'PING') {
     sendResponse({ success: true, message: 'Background script is active' });
     return true; // Will respond asynchronously
   }
   
-  if (request.type === 'TRANSLATE_WORD') {
+  if (request?.type === 'TRANSLATE_WORD') {
     handleTranslation(request.payload).then(sendResponse);
     return true; // Will respond asynchronously
   }
   
-  if (request.action === 'gemini') {
+  if (request?.type === 'GOOGLE_AUTH') {
+    handleGoogleAuth(request.interactive).then(sendResponse);
+    return true; // Will respond asynchronously
+  }
+  
+  if (request?.action === 'gemini') {
     console.log('WordStream: Processing Gemini request', { 
       message: request.message,
       historyLength: request.history?.length,
@@ -79,7 +457,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Will respond asynchronously
   }
   
-  if (request.type === 'UPDATE_LANGUAGE_SETTINGS') {
+  if (request?.type === 'UPDATE_LANGUAGE_SETTINGS') {
     handleLanguageSettingsUpdate(request.payload)
       .then((result) => {
         console.log('WordStream: Language settings update result', result);
@@ -95,6 +473,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
+
+// Handle Google authentication - simplified approach
+interface AuthResponse {
+  success: boolean;
+  token?: string;
+  error?: string;
+}
+
+/**
+ * Original function that used chrome.identity - REPLACED
+ * This will not be used anymore - we'll perform auth in popup
+ */
+async function handleGoogleAuth(interactive = true): Promise<AuthResponse> {
+  console.log('WordStream: Background handling Google auth is not supported in MV3');
+  return { 
+    success: false, 
+    error: 'Chrome identity API not available in background. Auth must be performed from popup or tab' 
+  };
+}
 
 interface TranslationRequest {
   text: string;
@@ -394,7 +791,7 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
        - Relate explanations to real-world usage scenarios to make learning practical.
     
     8. INTEGRATION WITH EXTENSION FEATURES:
-       - Only mention WordStream features when relevant to the conversation—avoid forcing feature suggestions unless they directly benefit the user’s current request.
+       - Only mention WordStream features when relevant to the conversation—avoid forcing feature suggestions unless they directly benefit the user's current request.
        - Offer learning tips that complement the extension's capabilities.
     
     9. PERSONALIZED LEARNING GUIDANCE:

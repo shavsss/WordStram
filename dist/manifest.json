@@ -1,28 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "WordStream2",
+  "name": "WordStream",
   "version": "1.0.0",
-  "description": "Learn vocabulary while watching videos with Firebase sync",
+  "description": "Learn languages while watching videos",
   "permissions": [
     "storage",
-    "identity",
     "tabs",
-    "webNavigation"
+    "scripting",
+    "webRequest"
   ],
-  "oauth2": {
-    "client_id": "719695800723-g94o16oeku2foas74thlf2v9i2sd0933.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile"
-    ]
-  },
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.netflix.com/*",
-    "*://*.translation.googleapis.com/*"
+    "https://*.googleapis.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -30,23 +24,14 @@
         "*://*.youtube.com/*",
         "*://*.netflix.com/*"
       ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "content.css"
-      ]
+      "js": ["content.js"],
+      "css": ["content.css"]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "icons/*"
-      ],
-      "matches": [
-        "*://*.youtube.com/*",
-        "*://*.netflix.com/*"
-      ]
+      "resources": ["popup.html", "popup.js", "popup.css"],
+      "matches": ["*://*.youtube.com/*", "*://*.netflix.com/*"]
     }
   ],
   "action": {

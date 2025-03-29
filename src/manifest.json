@@ -2,20 +2,16 @@
   "manifest_version": 3,
   "name": "WordStream",
   "version": "1.0.0",
-  "description": "Learn languages while watching YouTube and Netflix videos",
+  "description": "A Chrome extension that enhances videos with summaries, search, and tagging.",
   "permissions": [
+    "identity",
     "storage",
     "tabs",
     "scripting"
   ],
   "host_permissions": [
-    "https://www.youtube.com/*",
-    "https://www.netflix.com/*",
-    "https://translation.googleapis.com/*"
+    "*://*.youtube.com/*"
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -26,21 +22,33 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://www.youtube.com/*",
-        "https://www.netflix.com/*"
-      ],
+      "matches": ["*://*.youtube.com/*"],
       "js": ["content.js"],
       "css": ["content.css"]
     }
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "oauth2": {
+    "client_id": "1097713470067-g34g0oqh4o6chpjfq41nt84js3r06if1.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 } 
