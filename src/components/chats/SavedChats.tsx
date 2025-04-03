@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ChatsStorage, ChatConversation, ExportFormat, VideoChatsMap } from '@/types/chats';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ChatsStorage, ChatConversation, VideoChatsMap } from '@/types/chats';
 import { GeminiMessage } from '@/services/gemini/gemini-service';
-import { FileText, Download, ExternalLink, Clock, Calendar, Trash2, ChevronLeft, Check, ChevronDown, MessageSquare, ChevronRight, Video } from 'lucide-react';
+import { FileText, Download, ExternalLink, Clock, Calendar, Trash2, ChevronLeft, Check, ChevronDown, MessageSquare, ChevronRight, Video, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { format as formatDate } from 'date-fns';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 import { saveAs } from 'file-saver';
+import * as FirestoreService from '@/core/firebase/firestore';
+import { toast } from 'react-toastify';
 
 interface SavedChatsProps {
   onBack: () => void;
@@ -31,7 +33,9 @@ export function SavedChats({ onBack }: SavedChatsProps) {
   const [selectedChat, setSelectedChat] = useState<ChatConversation | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const unsubscribeRef = useRef<() => void>(() => {});
   
   // Handle click outside to close export menu
   useEffect(() => {
@@ -47,10 +51,128 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     };
   }, []);
 
-  // Load saved chats when component mounts
+  // סנכרון אוטומטי בין Firebase לאחסון מקומי והקמת האזנה בזמן אמת
   useEffect(() => {
-    loadAllChats();
+    setIsLoading(true);
+    
+    const initChatSync = async () => {
+      try {
+        // 1. סנכרון ראשוני בין מקורות הנתונים
+        console.log('WordStream: Starting initial sync between storage systems');
+        await FirestoreService.syncChatsBetweenStorageAndFirestore();
+        
+        // 2. האזנה לשינויים ב-Firestore
+        console.log('WordStream: Setting up realtime chat subscription');
+        
+        const handleChatsUpdate = (chats: ChatConversation[]) => {
+          console.log(`WordStream: Received ${chats.length} chats from Firestore listener`);
+          setSavedChats(chats);
+          
+          // 3. עדכון האחסון המקומי עם הנתונים החדשים
+          updateLocalStorage(chats);
+        };
+        
+        // הקמת האזנה בזמן אמת
+        const unsubscribe = FirestoreService.subscribeToAllChats(handleChatsUpdate);
+        unsubscribeRef.current = unsubscribe;
+      } catch (error) {
+        console.error('WordStream: Error setting up chat sync:', error);
+        setError('Error syncing chats. Please try again later.');
+        
+        // במקרה של כישלון הסנכרון, ננסה לטעון מהאחסון המקומי
+        loadFromLocalStorage();
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    initChatSync();
+    
+    // ניקוי ההאזנה כאשר הקומפוננטה מתפרקת
+    return () => {
+      console.log('WordStream: Cleaning up chats subscription');
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
   }, []);
+  
+  // פונקציה לעדכון האחסון המקומי
+  const updateLocalStorage = (chats: ChatConversation[]) => {
+    try {
+      // בניית מבנה האחסון הנדרש
+      const chatsStorage: ChatsStorage = {};
+      const videoChatsMap: VideoChatsMap = {};
+      
+      // מבנה הנתונים באחסון המקומי
+      chats.forEach(chat => {
+        // עדכון מאגר הצ'אטים
+        chatsStorage[chat.conversationId] = chat;
+        
+        // עדכון מיפוי סרטון-לצ'אטים
+        if (!videoChatsMap[chat.videoId]) {
+          videoChatsMap[chat.videoId] = [];
+        }
+        
+        if (!videoChatsMap[chat.videoId].includes(chat.conversationId)) {
+          videoChatsMap[chat.videoId].push(chat.conversationId);
+        }
+      });
+      
+      console.log('WordStream: Updating local storage with synced chats');
+      
+      // שמירה באחסון המקומי
+      chrome.storage.local.set({
+        chats_storage: chatsStorage,
+        video_chats_map: videoChatsMap
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('WordStream: Error updating local storage:', chrome.runtime.lastError);
+        } else {
+          console.log('WordStream: Successfully updated local storage with synced chats');
+        }
+      });
+    } catch (error) {
+      console.error('WordStream: Error updating local storage:', error);
+    }
+  };
+  
+  // פונקציה לטעינה מהאחסון המקומי (במקרה שה-Firestore אינו זמין)
+  const loadFromLocalStorage = () => {
+    try {
+      console.log('WordStream: Loading chats from local storage');
+      
+      // Check if Chrome API is available
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+        setError('Chrome storage API not available');
+        setIsLoading(false);
+        return;
+      }
+      
+      chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
+        if (chrome.runtime.lastError) {
+          console.error('WordStream: Error loading chats from storage:', chrome.runtime.lastError);
+          setError(`Error loading saved chats: ${chrome.runtime.lastError.message}`);
+          setIsLoading(false);
+          return;
+        }
+
+        const chatsStorage: ChatsStorage = result.chats_storage || {};
+        
+        // Convert object to array and sort by lastUpdated (most recent first)
+        const chatsList = Object.values(chatsStorage)
+          .sort((a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
+        
+        console.log('WordStream: Loaded chats from local storage:', chatsList.length);
+        setSavedChats(chatsList);
+        setIsLoading(false);
+      });
+    } catch (err) {
+      console.error('WordStream: Exception while loading chats from storage:', err);
+      setError(`Failed to load saved chats: ${err}`);
+      setIsLoading(false);
+    }
+  };
   
   // קיבוץ הצ'אטים לפי videoId
   useEffect(() => {
@@ -92,46 +214,24 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     }
   }, [savedChats]);
 
-  // Load all saved chats from storage
-  const loadAllChats = async () => {
-    setIsLoading(true);
+  // פונקציה לאיתחול הסנכרון מחדש
+  const handleResync = async () => {
+    setIsSyncing(true);
     setError(null);
-
+    
     try {
-      console.log('WordStream: Attempting to load chats from storage');
+      toast.info('Syncing chats between storage systems...');
       
-      // Check if Chrome API is available
-      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-        const errorMsg = 'Chrome storage API not available';
-        console.error('WordStream ERROR:', errorMsg);
-        setError(errorMsg);
-        setIsLoading(false);
-        return;
-      }
+      // סנכרון בין מקורות הנתונים
+      await FirestoreService.syncChatsBetweenStorageAndFirestore();
       
-      chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
-        if (chrome.runtime.lastError) {
-          console.error('WordStream: Error loading chats from storage:', chrome.runtime.lastError);
-          setError(`Error loading saved chats: ${chrome.runtime.lastError.message}`);
-          setIsLoading(false);
-          return;
-        }
-
-        console.log('WordStream: Chats loaded from storage:', result.chats_storage);
-        const chatsStorage: ChatsStorage = result.chats_storage || {};
-        
-        // Convert object to array and sort by lastUpdated (most recent first)
-        const chatsList = Object.values(chatsStorage)
-          .sort((a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
-        
-        console.log('WordStream: Processed chats list:', chatsList.length, 'chats');
-        setSavedChats(chatsList);
-        setIsLoading(false);
-      });
-    } catch (err) {
-      console.error('WordStream: Exception while loading chats:', err);
-      setError(`Failed to load saved chats: ${err}`);
-      setIsLoading(false);
+      toast.success('Chats synced successfully');
+    } catch (error) {
+      console.error('WordStream: Error during manual resync:', error);
+      setError(`Error syncing chats: ${error}`);
+      toast.error('Failed to sync chats. Please try again later.');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -155,34 +255,41 @@ export function SavedChats({ onBack }: SavedChatsProps) {
   };
 
   // Delete a saved chat
-  const deleteChat = (conversationId: string, event: React.MouseEvent) => {
+  const deleteChat = async (conversationId: string, event: React.MouseEvent) => {
     event.stopPropagation();
     
     if (window.confirm('Are you sure you want to delete this saved chat?')) {
       console.log('WordStream: Deleting chat for conversationId:', conversationId);
       
-      // Check if Chrome API is available
-      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-        const errorMsg = 'Chrome storage API not available';
-        console.error('WordStream ERROR:', errorMsg);
-        alert(errorMsg);
-        return;
-      }
-      
       try {
+        setIsLoading(true);
+        
+        // מצא את הצ'אט המיועד למחיקה
+        const chatToDelete = savedChats.find(chat => chat.conversationId === conversationId);
+        
+        if (!chatToDelete) {
+          throw new Error('Chat not found');
+        }
+        
+        // 1. מחק מ-Firestore
+        const videoId = chatToDelete.videoId;
+        const success = await FirestoreService.deleteChat(conversationId, videoId);
+        
+        if (!success) {
+          toast.error('Failed to delete chat from Firestore');
+        }
+        
+        // 2. מחק מהאחסון המקומי
         chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
           if (chrome.runtime.lastError) {
             console.error('WordStream ERROR: Failed to get storage for deletion:', chrome.runtime.lastError);
-            alert(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
+            toast.error(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
+            setIsLoading(false);
             return;
           }
           
           const chatsStorage: ChatsStorage = result.chats_storage || {};
           const videoChatsMap: VideoChatsMap = result.video_chats_map || {};
-          console.log('WordStream: Current chats storage:', chatsStorage);
-          
-          // זיהוי ה-videoId של השיחה שנמחקת
-          const videoId = chatsStorage[conversationId]?.videoId;
           
           // מחיקת השיחה ממאגר השיחות
           delete chatsStorage[conversationId];
@@ -197,99 +304,135 @@ export function SavedChats({ onBack }: SavedChatsProps) {
             }
           }
           
-          // Save updated storage
-          console.log('WordStream: Saving updated chats storage after deletion');
+          // שמירת האחסון המעודכן
           chrome.storage.local.set({ 
             chats_storage: chatsStorage,
             video_chats_map: videoChatsMap 
           }, () => {
             if (chrome.runtime.lastError) {
               console.error('WordStream ERROR: Error saving chats after deletion:', chrome.runtime.lastError);
-              alert(`Error saving: ${chrome.runtime.lastError.message}`);
+              toast.error(`Error saving: ${chrome.runtime.lastError.message}`);
+              setIsLoading(false);
               return;
             }
             
             console.log('WordStream: Chats saved successfully after deletion');
-            // Refresh the list
-            loadAllChats();
             
-            // If the deleted chat was selected, go back to list
+            // עדכון המצב המקומי
+            setSavedChats(savedChats.filter(chat => chat.conversationId !== conversationId));
+            
+            // אם הצ'אט שנמחק היה נבחר, חזור לרשימה
             if (selectedChat?.conversationId === conversationId) {
               setSelectedChat(null);
             }
+            
+            toast.success('Chat deleted successfully');
+            setIsLoading(false);
           });
         });
       } catch (error) {
         console.error('WordStream ERROR: Exception in deletion process:', error);
-        alert(`Error during deletion: ${error}`);
+        toast.error(`Error during deletion: ${error}`);
+        setIsLoading(false);
       }
     }
   };
 
-  // מחיקת כל השיחות של וידאו מסוים
-  const deleteVideoChats = (videoId: string, event: React.MouseEvent) => {
+  // Delete all chats for a video
+  const deleteVideoChats = async (videoId: string, event: React.MouseEvent) => {
     event.stopPropagation();
     
-    if (!groupedChats[videoId] || !window.confirm(`Are you sure you want to delete all ${groupedChats[videoId].conversations.length} chats for this video?`)) {
+    // שימוש בטואסט להצגת הודעות מצב במקום אזהרות או alerts
+    if (!groupedChats[videoId]) {
       return;
     }
     
-    // Check if Chrome API is available
-    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-      const errorMsg = 'Chrome storage API not available';
-      console.error('WordStream ERROR:', errorMsg);
-      alert(errorMsg);
+    const chatCount = groupedChats[videoId].conversations.length;
+    
+    if (!window.confirm(`Are you sure you want to delete all ${chatCount} chats for this video?`)) {
       return;
     }
     
     try {
+      setIsLoading(true);
+      toast.info(`Deleting ${chatCount} chats...`);
+      
+      // 1. מחק את כל הצ'אטים מ-Firestore
+      const deletedCount = await FirestoreService.deleteAllChatsForVideo(videoId);
+      
+      if (deletedCount < 0) {
+        toast.error('Failed to delete all chats from Firestore');
+      } else {
+        console.log(`WordStream: Deleted ${deletedCount} chats from Firestore`);
+      }
+      
+      // 2. מחק מאחסון מקומי
       chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
         if (chrome.runtime.lastError) {
           console.error('WordStream ERROR: Failed to get storage for deletion:', chrome.runtime.lastError);
-          alert(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
+          toast.error(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
+          setIsLoading(false);
           return;
         }
         
         const chatsStorage: ChatsStorage = result.chats_storage || {};
         const videoChatsMap: VideoChatsMap = result.video_chats_map || {};
         
-        // מחיקת כל השיחות הקשורות לוידאו זה
-        const conversationsToDelete = groupedChats[videoId].conversations.map(c => c.conversationId);
-        conversationsToDelete.forEach(conversationId => {
-          delete chatsStorage[conversationId];
+        // קבל את כל הצ'אטים שצריך למחוק
+        const chatsToDelete = savedChats.filter(chat => chat.videoId === videoId);
+        
+        // מחק את כל הצ'אטים של הווידאו הזה
+        chatsToDelete.forEach(chat => {
+          delete chatsStorage[chat.conversationId];
         });
         
-        // מחיקת הוידאו ממיפוי סרטון-לשיחות
+        // מחק את כל המיפוי לווידאו זה
         delete videoChatsMap[videoId];
         
-        // שמירת המידע המעודכן
+        // שמור את האחסון המעודכן
         chrome.storage.local.set({ 
           chats_storage: chatsStorage,
           video_chats_map: videoChatsMap 
         }, () => {
           if (chrome.runtime.lastError) {
-            console.error('WordStream ERROR: Error saving chats after deletion:', chrome.runtime.lastError);
-            alert(`Error saving: ${chrome.runtime.lastError.message}`);
+            console.error('WordStream ERROR: Error saving storage after deletion:', chrome.runtime.lastError);
+            toast.error(`Error saving changes: ${chrome.runtime.lastError.message}`);
+            setIsLoading(false);
             return;
           }
           
-          console.log('WordStream: All video chats deleted successfully');
-          loadAllChats();
+          console.log('WordStream: Chats deleted successfully');
           
-          // If one of the deleted chats was selected, go back to list
-          if (selectedChat && conversationsToDelete.includes(selectedChat.conversationId)) {
+          // עדכן את המצב המקומי
+          setSavedChats(savedChats.filter(chat => chat.videoId !== videoId));
+          
+          // אם הצ'אט שנבחר שייך לווידאו זה, חזור לרשימה
+          if (selectedChat && selectedChat.videoId === videoId) {
             setSelectedChat(null);
           }
+          
+          toast.success(`Successfully deleted ${chatCount} chats`);
+          setIsLoading(false);
         });
       });
     } catch (error) {
-      console.error('WordStream ERROR: Exception in deletion process:', error);
-      alert(`Error during deletion: ${error}`);
+      console.error('WordStream ERROR: Exception in group deletion:', error);
+      toast.error(`Error deleting chats: ${error}`);
+      setIsLoading(false);
     }
   };
 
-  // Export chat based on format
-  const exportChat = async (chat: ChatConversation, format: ExportFormat = 'docx') => {
+  /**
+   * Export a chat conversation to a file
+   * @param chat The chat conversation to export
+   * @param format The export format
+   */
+  const exportChat = async (chat: ChatConversation, format: 'docx' | 'txt' | 'html' | 'json' = 'docx') => {
+    if (!chat || !chat.messages || chat.messages.length === 0) {
+      toast.error('No chat data to export');
+      return;
+    }
+    
     setIsExporting(true);
     setShowExportMenu(false);
     
@@ -396,24 +539,22 @@ export function SavedChats({ onBack }: SavedChatsProps) {
         // Create a blob and download
         const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
         saveAs(blob, `Chat-${chat.conversationId.substring(0, 10)}-${formatDate(new Date(), "yyyy-MM-dd")}.txt`);
-      } else if (format === 'md') {
-        // Create a Markdown version
-        let mdContent = `# Saved Chat Conversation\n\n`;
-        mdContent += `## Video: ${chat.videoTitle}\n\n`;
-        mdContent += `Watch video: [${chat.videoURL}](${chat.videoURL})\n\n`;
-        mdContent += `## Conversation\n\n`;
+      } else if (format === 'html') {
+        // Create an HTML version
+        let htmlContent = `<h1>Saved Chat Conversation</h1>`;
+        htmlContent += `<p><strong>Video:</strong> ${chat.videoTitle}</p>`;
+        htmlContent += `<p><strong>URL:</strong> <a href="${chat.videoURL}" target="_blank">${chat.videoURL}</a></p>`;
+        htmlContent += `<p><strong>Exported:</strong> ${formatDate(new Date(), "PPpp")}</p>`;
+        htmlContent += `<h2>Conversation</h2>`;
         
         chat.messages.forEach((message, index) => {
-          mdContent += `### ${message.role === 'user' ? '👤 You' : '🤖 Assistant'}\n\n`;
-          mdContent += `${message.content}\n\n`;
-          mdContent += `---\n\n`;
+          htmlContent += `<p><strong>${message.role === 'user' ? 'YOU' : 'ASSISTANT'}:</strong></p>`;
+          htmlContent += `<p>${message.content}</p>`;
         });
         
-        mdContent += `*Exported on: ${formatDate(new Date(), "PPpp")}*`;
-        
         // Create a blob and download
-        const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
-        saveAs(blob, `Chat-${chat.conversationId.substring(0, 10)}-${formatDate(new Date(), "yyyy-MM-dd")}.md`);
+        const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+        saveAs(blob, `Chat-${chat.conversationId.substring(0, 10)}-${formatDate(new Date(), "yyyy-MM-dd")}.html`);
       } else if (format === 'json') {
         // Create a JSON version - just export the raw data
         const blob = new Blob([JSON.stringify(chat, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -441,7 +582,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       style={{ minWidth: '180px', maxWidth: '100%' }}
     >
       <div className="py-1" role="menu" aria-orientation="vertical">
-        {(['docx', 'txt', 'md', 'json'] as ExportFormat[]).map(format => (
+        {(['docx', 'txt', 'html', 'json'] as const).map(format => (
           <button
             key={format}
             className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center transition-colors"
@@ -471,24 +612,37 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     return isDark ? 'text-gray-200' : 'text-gray-800';
   };
 
-  // Render the component
-  return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-white dark:bg-slate-900 rounded-lg shadow-lg border border-gray-200 dark:border-slate-800">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-800 bg-gray-50 dark:bg-slate-800 backdrop-blur-sm rounded-t-lg">
-        <h2 className="text-2xl font-bold flex items-center gap-2 text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-400 dark:to-purple-500 drop-shadow-sm">
-          <span className="text-gray-600 dark:text-white text-opacity-75 mr-1">💬</span>
-          <span className="tracking-wide">Saved Chats</span>
-        </h2>
+  // Header with sync button
+  const renderHeader = () => (
+    <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-800 bg-gray-50 dark:bg-slate-800 backdrop-blur-sm rounded-t-lg">
+      <h2 className="text-2xl font-bold flex items-center gap-2 text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-400 dark:to-purple-500 drop-shadow-sm">
+        <span className="text-gray-600 dark:text-white text-opacity-75 mr-1">💬</span>
+        <span className="tracking-wide">Saved Chats</span>
+      </h2>
+      <div className="flex items-center">
+        <button
+          onClick={handleResync}
+          disabled={isSyncing}
+          className="mr-2 p-2 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors text-gray-600 dark:text-white flex items-center justify-center"
+          title="Sync chats with cloud storage"
+        >
+          <RefreshCw className={`h-5 w-5 ${isSyncing ? 'animate-spin' : ''}`} />
+        </button>
         <button
           onClick={selectedChat ? backToList : onBack}
           className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors text-gray-600 dark:text-white"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6"></polyline>
-          </svg>
+          <ChevronLeft className="h-5 w-5" />
         </button>
       </div>
+    </div>
+  );
+
+  // Render the component
+  return (
+    <div className="w-full h-full flex flex-col overflow-hidden bg-white dark:bg-slate-900 rounded-lg shadow-lg border border-gray-200 dark:border-slate-800">
+      {/* Header */}
+      {renderHeader()}
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
@@ -500,7 +654,25 @@ export function SavedChats({ onBack }: SavedChatsProps) {
           <div className="text-center py-8 px-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/30 shadow-lg">
             <div className="text-red-500 dark:text-red-400 text-5xl mb-4">⚠️</div>
             <h3 className="text-xl font-semibold text-red-600 dark:text-red-400 mb-2">Error Loading Chats</h3>
-            <p className="text-red-600 dark:text-slate-300">{error}</p>
+            <p className="text-red-600 dark:text-slate-300 mb-4">{error}</p>
+            <Button 
+              variant="outline" 
+              onClick={handleResync}
+              disabled={isSyncing}
+              className="bg-white dark:bg-slate-800 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              {isSyncing ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 animate-spin" />
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry Sync
+                </>
+              )}
+            </Button>
           </div>
         ) : selectedChat ? (
           // View a specific chat

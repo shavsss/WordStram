@@ -1,6 +1,44 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Basic functions for authorization
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    // User profiles and their nested collections
+    match /users/{userId} {
+      // Allow users to read and write their own profile
+      allow read, write: if isOwner(userId);
+      
+      // User's videos
+      match /videos/{videoId} {
+        allow read, write: if isOwner(userId);
+        
+        // Notes for specific videos
+        match /notes/{noteId} {
+          allow read, write: if isOwner(userId);
+        }
+        
+        // Chats for specific videos
+        match /chats/{chatId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+      
+      // User's saved words
+      match /words/{wordId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+    
+    // Legacy collections (for backward compatibility)
+    // Will be deprecated after migration is complete
+    
     // Allow users to read and write their own notes only
     match /notes/{noteId} {
       allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
@@ -17,11 +55,6 @@ service cloud.firestore {
     match /words/{wordId} {
       allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
       allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
-    }
-    
-    // User profiles
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
     
     // Default deny

@@ -10,30 +10,6 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { FloatingControls } from '@/components/floating-controls/FloatingControls';
 
-declare global {
-  interface Window {
-    WordStream?: {
-      auth?: {
-        isAuthenticated: boolean;
-        email?: string | null;
-        displayName?: string | null;
-        userId?: string | null;
-        [key: string]: any;
-      };
-      [key: string]: any;
-    };
-    firebase?: {
-      auth: () => {
-        currentUser: {
-          email?: string | null;
-          displayName?: string | null;
-          uid?: string | null;
-        } | null;
-      };
-    };
-  }
-}
-
 interface StorageResult {
   settings?: {
     targetLanguage: SupportedLanguageCode;
@@ -289,89 +265,13 @@ export class YouTubeCaptionDetector implements CaptionDetector {
     };
   }
 
-  async checkAuthentication(): Promise<boolean> {
-    try {
-      console.log('WordStream: Checking authentication status in YouTube detector');
-
-      // 1. Fastest check: using the injected global object if available
-      if (window.WordStream?.auth?.isAuthenticated !== undefined) {
-        console.log('WordStream: Authentication quick check from window object:', window.WordStream.auth.isAuthenticated);
-        return window.WordStream.auth.isAuthenticated;
-      }
-
-      // 2. Reliable check: ask the background script (authoritative source)
-      try {
-        const response = await new Promise<{isAuthenticated: boolean, authDetails?: any}>((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            { action: 'IS_AUTHENTICATED' },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                console.error('WordStream: Error checking auth with background script:', chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
-                return;
-              }
-              
-              if (response && typeof response === 'object') {
-                resolve(response);
-              } else {
-                reject(new Error('Invalid response format from background script'));
-              }
-            }
-          );
-          
-          // Set a timeout in case the background script doesn't respond
-          setTimeout(() => {
-            reject(new Error('Authentication check timed out'));
-          }, 5000);
-        });
-        
-        // Update the global window object with the latest auth data from background
-        if (window.WordStream) {
-          window.WordStream.auth = {
-            isAuthenticated: response.isAuthenticated,
-            ...(response.authDetails || {})
-          };
-        }
-        
-        console.log('WordStream: Authentication check from background:', response.isAuthenticated);
-        return response.isAuthenticated;
-      } catch (error) {
-        console.error('WordStream: Error during background auth check:', error);
-        // Continue to the next check method
-      }
-      
-      // 3. Last resort: direct check with Firebase (if available in content script)
-      try {
-        if (window.firebase && window.firebase.auth) {
-          const user = window.firebase.auth().currentUser;
-          const isAuthenticated = !!user;
-          console.log('WordStream: Authentication direct check with Firebase:', isAuthenticated);
-          
-          // Update window object with this data
-          if (window.WordStream) {
-            window.WordStream.auth = {
-              isAuthenticated,
-              email: user?.email || null,
-              displayName: user?.displayName || null,
-              userId: user?.uid || null
-            };
-          }
-          
-          return isAuthenticated;
-        }
-      } catch (error) {
-        console.error('WordStream: Error during direct Firebase check:', error);
-      }
-      
-      console.error('WordStream: All authentication checks failed');
-      return false;
-    } catch (error) {
-      console.error('WordStream: Error in checkAuthentication:', error);
-      return false;
-    }
-  }
-
   async handleWordClick(event: MouseEvent): Promise<void> {
+    // בדיקת אימות לפני המשך הפעולה
+    if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated !== true) {
+      console.log('WordStream YouTube: Word click blocked - user not authenticated');
+      return;
+    }
+    
     if (!event.target) return;
     
     event.preventDefault();
@@ -382,17 +282,9 @@ export class YouTubeCaptionDetector implements CaptionDetector {
     
     if (!text.trim()) return;
     
-    // בדיקת אימות מקיפה
-    const isAuthenticated = await this.checkAuthentication();
+    // בדיקת האימות הוסרה כדי לאפשר תרגום לכולם
+    // אין צורך לבדוק אם המשתמש מחובר
     
-    if (!isAuthenticated) {
-      console.log('WordStream: Authentication required to use word click feature');
-      // הצגת הודעה למשתמש
-      this.showAuthRequiredMessage(wordElement);
-      return;
-    }
-    
-    // המשך הטיפול במילה לאחר בדיקת האימות
     console.log('WordStream: Handling click for word:', text);
 
     try {
@@ -813,11 +705,21 @@ export class YouTubeCaptionDetector implements CaptionDetector {
   }
 
   public processCaption(caption: HTMLElement): void {
+    // בדיקת אימות לפני עיבוד כתובית
+    if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated !== true) {
+      return;
+    }
+    
     if (!caption) return;
     this.startObserving(caption);
   }
 
   public processTextNode(textNode: Text): void {
+    // בדיקת אימות לפני עיבוד טקסט
+    if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated !== true) {
+      return;
+    }
+    
     if (!textNode || !textNode.textContent) return;
 
     const text = textNode.textContent.trim();
@@ -1255,38 +1157,5 @@ export class YouTubeCaptionDetector implements CaptionDetector {
       console.error('[WordStream] Error getting player API:', error);
       return null;
     }
-  }
-
-  /**
-   * הצגת הודעה למשתמש שנדרש אימות
-   */
-  private showAuthRequiredMessage(element: HTMLElement): void {
-    // שמירת המיקום של האלמנט
-    const rect = element.getBoundingClientRect();
-    
-    // יצירת אלמנט הודעה
-    const message = document.createElement('div');
-    message.className = 'wordstream-auth-message';
-    message.innerHTML = '<strong>WordStream:</strong> Please sign in to use this feature';
-    message.style.cssText = `
-      position: fixed;
-      top: ${rect.bottom + 10}px;
-      left: ${rect.left}px;
-      z-index: 99999;
-      background: rgba(0, 0, 0, 0.8);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-size: 14px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-    `;
-    
-    // הוספה לדף
-    document.body.appendChild(message);
-    
-    // הסרה אחרי 3 שניות
-    setTimeout(() => {
-      document.body.removeChild(message);
-    }, 3000);
   }
 } 

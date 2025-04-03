@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { NotesStorage, VideoWithNotes, ExportFormat } from '@/types/notes';
-import { FileText, Download, ExternalLink, Clock, Calendar, Trash2, ChevronLeft, Check, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Note, VideoNote, VideoWithNotes, NotesStorage } from '@/features/notes/types';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/Spinner';
+import { File, ChevronLeft, FileText, Download, DownloadCloud, Trash2, ExternalLink, Clock, Calendar, Video, ChevronDown, ChevronRight } from 'lucide-react';
+import * as FirestoreService from '@/core/firebase/firestore';
 import { format as formatDate } from 'date-fns';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 import { saveAs } from 'file-saver';
@@ -102,7 +104,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
   };
 
   // Export notes based on format
-  const exportNotes = async (video: VideoWithNotes, format: ExportFormat = 'docx') => {
+  const exportNotes = async (video: VideoWithNotes, format: 'docx' | 'txt' | 'html' | 'json' = 'docx') => {
     setIsExporting(true);
     setShowExportMenu(false);
     
@@ -204,33 +206,9 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
         // Generate the DOCX file
         Packer.toBlob(doc).then((blob) => {
           saveAs(blob, `notes_${video.videoId}.docx`);
-          setIsExporting(false);
         });
-      } else if (format === 'json') {
-        // Export as JSON
-        const jsonData = JSON.stringify(video, null, 2);
-        const blob = new Blob([jsonData], { type: 'application/json' });
-        saveAs(blob, `notes_${video.videoId}.json`);
-        setIsExporting(false);
-      } else if (format === 'md') {
-        // Export as Markdown
-        let content = `# ${video.videoTitle}\n\n`;
-        content += `URL: ${video.videoURL}\n\n`;
-        content += `Exported on: ${formatDate(new Date(), 'dd/MM/yyyy HH:mm')}\n\n`;
-        content += `## Notes\n\n`;
-        
-        video.notes.forEach((note) => {
-          content += `### Time: ${note.formattedTime || 'N/A'}\n\n`;
-          content += `${note.content}\n\n`;
-          content += `*Created: ${formatDate(new Date(note.timestamp), 'dd/MM/yyyy HH:mm')}*\n\n`;
-          content += `---\n\n`;
-        });
-        
-        const blob = new Blob([content], { type: 'text/markdown' });
-        saveAs(blob, `notes_${video.videoId}.md`);
-        setIsExporting(false);
-      } else {
-        // Fallback for other formats (txt, etc.)
+      } else if (format === 'txt') {
+        // Export as plain text
         let content = '';
         
         // Create header
@@ -255,18 +233,40 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `notes_${video.videoId}.${format}`;
+        a.download = `notes_${video.videoId}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+      } else if (format === 'html') {
+        // Export as HTML
+        let content = '<html><head><title>Summary & Notes</title></head><body>';
+        content += `<h1>${video.videoTitle}</h1>`;
+        content += `<p>URL: ${video.videoURL}</p>`;
+        content += `<p>Exported on: ${formatDate(new Date(), 'dd/MM/yyyy HH:mm')}</p>`;
+        content += '<h2>Notes</h2>';
+        content += '<ul>';
         
-        setIsExporting(false);
+        video.notes.forEach((note) => {
+          content += `<li>${note.formattedTime || 'N/A'} - ${note.content}</li>`;
+        });
+        
+        content += '</ul>';
+        content += '</body></html>';
+        
+        const blob = new Blob([content], { type: 'text/html' });
+        saveAs(blob, `notes_${video.videoId}.html`);
+      } else if (format === 'json') {
+        // Export as JSON
+        const jsonData = JSON.stringify(video, null, 2);
+        const blob = new Blob([jsonData], { type: 'application/json' });
+        saveAs(blob, `notes_${video.videoId}.json`);
       }
     } catch (err) {
       console.error('Failed to export notes:', err);
-      setIsExporting(false);
       alert('Failed to export notes. Please try again.');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -299,7 +299,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
         <div className="absolute right-0 top-full mt-2 w-56 rounded-lg shadow-xl bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 z-[100] overflow-hidden animate-fadeIn"
              style={{ minWidth: '180px', maxWidth: '100%', position: 'relative' }}>
           <div className="py-1" role="menu" aria-orientation="vertical">
-            {(['docx', 'txt', 'md', 'json'] as ExportFormat[]).map(format => (
+            {(['docx', 'txt', 'html', 'json'] as ('docx' | 'txt' | 'html' | 'json')[]).map(format => (
               <button
                 key={format}
                 className="flex items-center w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -414,7 +414,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
                       style={{ minWidth: '180px', maxWidth: '100%', position: 'relative' }}
                     >
                       <div className="py-1" role="menu" aria-orientation="vertical">
-                        {(['docx', 'txt', 'md', 'json'] as ExportFormat[]).map(format => (
+                        {(['docx', 'txt', 'html', 'json'] as ('docx' | 'txt' | 'html' | 'json')[]).map(format => (
                           <button
                             key={format}
                             className="flex items-center w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"

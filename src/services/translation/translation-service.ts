@@ -3,30 +3,6 @@ import { GoogleTranslateProvider } from './providers/google-translate';
 import { TranslationResult } from '@/types';
 import { SupportedLanguageCode, isLanguageSupported } from '@/config/supported-languages';
 
-declare global {
-  interface Window {
-    WordStream?: {
-      auth?: {
-        isAuthenticated: boolean;
-        email?: string | null;
-        displayName?: string | null;
-        userId?: string | null;
-        [key: string]: any;
-      };
-      [key: string]: any;
-    };
-    firebase?: {
-      auth: () => {
-        currentUser: {
-          email?: string | null;
-          displayName?: string | null;
-          uid?: string | null;
-        } | null;
-      };
-    };
-  }
-}
-
 /**
  * שירות תרגום מאוחד שמנהל את כל פעולות התרגום במערכת
  */
@@ -47,6 +23,32 @@ export class TranslationService {
       TranslationService.instance = new TranslationService();
     }
     return TranslationService.instance;
+  }
+  
+  /**
+   * בדיקת האימות של המשתמש ממספר מקורות
+   * @returns אמת אם המשתמש מחובר, שקר אחרת
+   */
+  private async isUserAuthenticated(): Promise<boolean> {
+    // בדיקה ראשונה - גישה ישירה לאובייקט ה-window.WordStream.local
+    if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
+      return true;
+    }
+    
+    // בדיקה שנייה - storage.local (עובד גם ב-background ו-popup)
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      try {
+        const result = await chrome.storage.local.get('isAuthenticated');
+        if (result.isAuthenticated === true) {
+          return true;
+        }
+      } catch (error) {
+        console.error('WordStream Translation: Error checking auth in storage:', error);
+      }
+    }
+    
+    // אם הגענו לכאן, המשתמש לא מאומת
+    return false;
   }
   
   /**
@@ -72,92 +74,6 @@ export class TranslationService {
   }
   
   /**
-   * בודק אם המשתמש מחובר ורשאי להשתמש בפיצ'רים פרימיום
-   * מבצע בדיקה רב-שכבתית של האימות
-   */
-  async checkAuthentication(): Promise<boolean> {
-    try {
-      console.log('WordStream: Checking authentication status in Translation Service');
-
-      // 1. Fastest check: using the injected global object if available
-      if (window.WordStream?.auth?.isAuthenticated !== undefined) {
-        console.log('WordStream: Authentication quick check from window object:', window.WordStream.auth.isAuthenticated);
-        return window.WordStream.auth.isAuthenticated;
-      }
-
-      // 2. Reliable check: ask the background script (authoritative source)
-      try {
-        const response = await new Promise<{isAuthenticated: boolean, authDetails?: any}>((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            { action: 'IS_AUTHENTICATED' },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                console.error('WordStream: Error checking auth with background script:', chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
-                return;
-              }
-              
-              if (response && typeof response === 'object') {
-                resolve(response);
-              } else {
-                reject(new Error('Invalid response format from background script'));
-              }
-            }
-          );
-          
-          // Set a timeout in case the background script doesn't respond
-          setTimeout(() => {
-            reject(new Error('Authentication check timed out'));
-          }, 5000);
-        });
-        
-        // Update the global window object with the latest auth data from background
-        if (window.WordStream) {
-          window.WordStream.auth = {
-            isAuthenticated: response.isAuthenticated,
-            ...(response.authDetails || {})
-          };
-        }
-        
-        console.log('WordStream: Authentication check from background:', response.isAuthenticated);
-        return response.isAuthenticated;
-      } catch (error) {
-        console.error('WordStream: Error during background auth check:', error);
-        // Continue to the next check method
-      }
-      
-      // 3. Last resort: direct check with Firebase (if available in content script)
-      try {
-        if (window.firebase && window.firebase.auth) {
-          const user = window.firebase.auth().currentUser;
-          const isAuthenticated = !!user;
-          console.log('WordStream: Authentication direct check with Firebase:', isAuthenticated);
-          
-          // Update window object with this data
-          if (window.WordStream) {
-            window.WordStream.auth = {
-              isAuthenticated,
-              email: user?.email || null,
-              displayName: user?.displayName || null,
-              userId: user?.uid || null
-            };
-          }
-          
-          return isAuthenticated;
-        }
-      } catch (error) {
-        console.error('WordStream: Error during direct Firebase check:', error);
-      }
-      
-      console.error('WordStream: All authentication checks failed');
-      return false;
-    } catch (error) {
-      console.error('WordStream: Error in checkAuthentication:', error);
-      return false;
-    }
-  }
-  
-  /**
    * תרגום מטקסט אנגלי לעברית
    * @param text טקסט לתרגום
    * @returns תוצאת התרגום
@@ -170,18 +86,13 @@ export class TranslationService {
       };
     }
     
-    // בדיקת אימות משופרת משולשת
-    const isAuthenticated = await this.checkAuthentication();
-    
-    // אם המשתמש לא מחובר ואנחנו דורשים אימות
-    // החלטה זו צריכה להתקבל ברמה עסקית - האם לדרוש אימות לתרגום
-    // כרגע אנחנו מאפשרים תרגום גם למשתמשים לא מחוברים
-    const requireAuth = false; // הגדרה האם לדרוש אימות לתרגום
-    
-    if (requireAuth && !isAuthenticated) {
+    // בדיקת אימות - אם לא מאומת, חסום את התרגום
+    const isAuthenticated = await this.isUserAuthenticated();
+    if (!isAuthenticated) {
+      console.log('WordStream: Translation blocked - user not authenticated');
       return {
         success: false,
-        error: 'Authentication required for translation'
+        error: 'Authentication required'
       };
     }
     
@@ -206,18 +117,13 @@ export class TranslationService {
       };
     }
     
-    // בדיקת אימות משופרת משולשת
-    const isAuthenticated = await this.checkAuthentication();
-    
-    // אם המשתמש לא מחובר ואנחנו דורשים אימות
-    // החלטה זו צריכה להתקבל ברמה עסקית - האם לדרוש אימות לתרגום
-    // כרגע אנחנו מאפשרים תרגום גם למשתמשים לא מחוברים
-    const requireAuth = false; // הגדרה האם לדרוש אימות לתרגום
-    
-    if (requireAuth && !isAuthenticated) {
+    // בדיקת אימות - אם לא מאומת, חסום את התרגום
+    const isAuthenticated = await this.isUserAuthenticated();
+    if (!isAuthenticated) {
+      console.log('WordStream: Translation blocked - user not authenticated');
       return {
         success: false,
-        error: 'Authentication required for translation'
+        error: 'Authentication required'
       };
     }
     
@@ -243,18 +149,13 @@ export class TranslationService {
       };
     }
     
-    // בדיקת אימות משופרת משולשת
-    const isAuthenticated = await this.checkAuthentication();
-    
-    // אם המשתמש לא מחובר ואנחנו דורשים אימות
-    // החלטה זו צריכה להתקבל ברמה עסקית - האם לדרוש אימות לתרגום
-    // כרגע אנחנו מאפשרים תרגום גם למשתמשים לא מחוברים
-    const requireAuth = false; // הגדרה האם לדרוש אימות לתרגום
-    
-    if (requireAuth && !isAuthenticated) {
+    // בדיקת אימות - אם לא מאומת, חסום את התרגום
+    const isAuthenticated = await this.isUserAuthenticated();
+    if (!isAuthenticated) {
+      console.log('WordStream: Translation blocked - user not authenticated');
       return {
         success: false,
-        error: 'Authentication required for translation'
+        error: 'Authentication required'
       };
     }
     
@@ -369,19 +270,6 @@ export class TranslationService {
       return JSON.stringify(error);
     } catch {
       return 'Unserializable error';
-    }
-  }
-  
-  /**
-   * בדיקה האם המשתמש מחובר לפי Firebase Auth
-   */
-  private isAuthenticatedFromFirebase(): boolean {
-    try {
-      // נסיון לגשת לפונקציה של Firebase שקיימת בגלובל סקופ
-      return !!(window as any).firebase?.auth?.currentUser;
-    } catch (error) {
-      console.error('WordStream: Error checking Firebase auth:', error);
-      return false;
     }
   }
 } 

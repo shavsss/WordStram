@@ -1,31 +1,56 @@
 /**
- * Types for Notes & Summaries feature
+ * Types for notes features
  */
 
 /**
- * Represents a single note taken on a video
+ * Options for exporting notes
+ */
+export interface ExportOptions {
+  format: 'docx' | 'txt' | 'pdf' | 'md' | 'json';
+  includeTimestamps?: boolean;
+  includeVideoInfo?: boolean;
+}
+
+/**
+ * Result of an export operation
+ */
+export interface ExportResult {
+  success: boolean;
+  data?: string | Blob;
+  filename?: string;
+  error?: string;
+}
+
+/**
+ * Basic note structure
  */
 export interface VideoNote {
-  id: string;                 // Unique identifier
-  content: string;            // Note content
-  timestamp: string;          // ISO timestamp when the note was created
-  videoTime?: number;         // Time in video when note was taken (seconds)
-  formattedTime?: string;     // Formatted video time (MM:SS)
+  id: string;
+  content: string;
+  timestamp: string;
+  videoTime?: number;
+  videoId: string;
+  videoTitle?: string;
+  formattedTime?: string;
+  lastSynced?: string;
 }
 
 /**
- * Represents a video with notes
+ * Video with associated notes
  */
 export interface VideoWithNotes {
-  videoId: string;            // YouTube/Netflix video ID
-  videoTitle: string;         // Video title
-  videoURL: string;           // Full URL to video
-  lastUpdated: string;        // ISO timestamp of last update
-  notes: VideoNote[];         // Array of notes for this video
+  videoId: string;
+  videoTitle: string;
+  videoURL?: string;
+  lastUpdated?: string;
+  lastViewed?: string;
+  thumbnailURL?: string;
+  platform?: string;
+  notes: VideoNote[];
 }
 
 /**
- * Type for the notes storage object that maps videoIds to their notes
+ * Storage structure for notes
  */
 export interface NotesStorage {
   [videoId: string]: VideoWithNotes;
@@ -34,4 +59,4 @@ export interface NotesStorage {
 /**
  * Export format options
  */
-export type ExportFormat = 'docx' | 'txt' | 'md' | 'json'; 
+export type ExportFormat = 'docx' | 'txt' | 'pdf' | 'md' | 'json'; 

@@ -33,7 +33,6 @@ export function createFloatingControls(): HTMLElement | null {
   
   // Add buttons to the container
   addGeminiButton(container);
-  addSignOutButton(container);
   
   // Add container to document
   document.body.appendChild(container);
@@ -64,59 +63,6 @@ function addGeminiButton(container: HTMLElement): void {
   
   // Add event listener
   geminiButton.addEventListener('click', handleGeminiButtonClick);
-}
-
-/**
- * מוסיף את כפתור ההתנתקות למיכל
- */
-function addSignOutButton(container: HTMLElement): void {
-  // Create Sign Out button
-  const signOutButton = document.createElement('button');
-  signOutButton.id = 'wordstream-signout-button';
-  signOutButton.className = 'wordstream-floating-button';
-  signOutButton.innerHTML = `
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-      <polyline points="16 17 21 12 16 7"></polyline>
-      <line x1="21" y1="12" x2="9" y2="12"></line>
-    </svg>
-  `;
-  signOutButton.setAttribute('title', 'Sign Out from WordStream');
-  
-  // Add button to container
-  container.appendChild(signOutButton);
-  
-  // Add event listener
-  signOutButton.addEventListener('click', handleSignOutButtonClick);
-}
-
-/**
- * מטפל בלחיצה על כפתור ההתנתקות
- */
-async function handleSignOutButtonClick(): Promise<void> {
-  try {
-    console.log('WordStream: Sign Out button clicked, signing out user');
-    
-    // שליחת הודעה לסקריפט הרקע לבצע התנתקות
-    chrome.runtime.sendMessage({ action: 'SIGN_OUT' }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('WordStream: Error during sign out', chrome.runtime.lastError);
-        return;
-      }
-      
-      console.log('WordStream: User signed out successfully', response);
-      
-      // אם קיים popup או UI שמציג את מצב ההתחברות, כאן אפשר לעדכן אותו
-      
-      // הסרת הכפתורים הצפים מהמסך אחרי ההתנתקות
-      if (controlsContainer && document.body.contains(controlsContainer)) {
-        document.body.removeChild(controlsContainer);
-        controlsContainer = null;
-      }
-    });
-  } catch (error) {
-    console.error('WordStream: Error signing out:', error);
-  }
 }
 
 /**

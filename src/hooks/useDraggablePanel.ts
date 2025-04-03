@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { SizeOption } from '@/types/video-notes';
+import { SizeOption, SIZES } from '@/features/notes/types';
 
 interface Position {
   x: number;

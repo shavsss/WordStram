@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { NotesPanel } from './video-notes/NotesPanel';
+import { NotesPanel } from '@/features/notes/components/NotesPanel';
 import { FloatingButton } from './floating-controls/FloatingButton';
 import { AuthPanel } from './auth/AuthPanel';
 import { getCurrentTime, addTimeUpdateListener } from '@/services/video-service';
@@ -20,7 +20,7 @@ export function FloatingControls({ videoId, videoTitle }: FloatingControlsProps)
   const [currentTime, setCurrentTime] = useState<number | undefined>(undefined);
   
   // Auth state
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, currentUser } = useAuth();
 
   // Check if we're on YouTube
   const isYouTube = typeof window !== 'undefined' && window.location.hostname.includes('youtube.com');
@@ -105,8 +105,8 @@ export function FloatingControls({ videoId, videoTitle }: FloatingControlsProps)
         </svg>
       );
       
-      // Add Sign Out button icon
-      const signOutIcon = (
+      // Auth button
+      const authIcon = (
         <svg 
           className="w-7 h-7 stroke-white" 
           viewBox="0 0 24 24" 
@@ -115,42 +115,35 @@ export function FloatingControls({ videoId, videoTitle }: FloatingControlsProps)
           strokeLinecap="round" 
           strokeLinejoin="round"
         >
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-          <polyline points="16 17 21 12 16 7"></polyline>
-          <line x1="21" y1="12" x2="9" y2="12"></line>
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path>
         </svg>
       );
       
-      // Toggle notes panel
-      const toggleNotes = () => {
-        setIsNotesVisible(!isNotesVisible);
+      const handleNotesClick = () => {
+        console.log('WordStream: Notes button clicked');
+        setIsNotesVisible(prev => !prev);
+        setIsAuthVisible(false);
       };
       
-      // Handle sign out
-      const handleSignOut = async () => {
-        try {
-          console.log('WordStream: Signing out user');
-          const { auth } = await import('@/firebase/config');
-          await auth.signOut();
-          console.log('WordStream: User signed out successfully');
-        } catch (error) {
-          console.error('WordStream: Error signing out', error);
-        }
+      const handleAuthClick = () => {
+        console.log('WordStream: Auth button clicked');
+        setIsAuthVisible(prev => !prev);
+        setIsNotesVisible(false);
       };
       
-      // Render buttons with React
+      // Use React to render the buttons
       const ReactDOM = require('react-dom');
       ReactDOM.render(
         <div className="flex flex-col gap-4">
           <FloatingButton 
-            onClick={toggleNotes} 
+            onClick={handleNotesClick} 
             icon={notesIcon} 
             label="NOTES" 
           />
           <FloatingButton 
-            onClick={handleSignOut} 
-            icon={signOutIcon} 
-            label="SIGN OUT" 
+            onClick={handleAuthClick} 
+            icon={authIcon} 
+            label="ACCOUNT" 
           />
         </div>,
         root

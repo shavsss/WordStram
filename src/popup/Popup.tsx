@@ -4,15 +4,18 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { LANGUAGE_MAP, normalizeLanguageCode } from '@/services/caption-detectors/shared/language-map';
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
-import { Settings, Moon, Sun, Calendar as CalendarIcon, Pencil, Brain, Flame, Globe, BookOpen, Gamepad, BarChart, X, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, FileText, MessageSquare, Download } from 'lucide-react';
+import { Settings, Moon, Sun, Calendar as CalendarIcon, Pencil, Brain, Flame, Globe, BookOpen, Gamepad, BarChart, X, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, FileText, MessageSquare, Download, LogOut, User } from 'lucide-react';
 import { format, differenceInDays, isSameDay, isAfter, parseISO, subDays, subMonths, addMonths, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addDays, isSameMonth, isToday } from 'date-fns';
 import { Select } from '@/components/ui/select';
 import { Word } from '@/types/word';
 import { Games } from '@/components/games';
 import { StatisticsPage } from '@/components/statistics/StatisticsPage';
+import { NotesAndSummaries } from '@/content/modules/notes/NotesAndSummaries';
 import { SavedChats } from '@/components/chats/SavedChats';
 import { Button } from '@/components/ui/button';
 import * as XLSX from 'xlsx';
+import { useAuth } from '@/hooks/useAuth';
+import * as FirestoreService from '@/core/firebase/firestore';
 
 interface Stats {
   totalWords: number;
@@ -131,12 +134,13 @@ function DatePicker({ selectedDate, onChange, onClose }: DatePickerProps) {
 }
 
 export default function Popup() {
+  const { isAuthenticated, currentUser, signOut } = useAuth();
   const [words, setWords] = useState<Word[]>([]);
   const [stats, setStats] = useState<Stats>({
     totalWords: 0,
     todayWords: 0,
     streak: 0,
-    lastActive: new Date().toISOString()
+    lastActive: new Date().toISOString().split('T')[0]
   });
   const [settings, setSettings] = useState<Settings>({
     autoTranslate: true,
@@ -148,8 +152,8 @@ export default function Popup() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<{
-    from: Date | null;
-    to: Date | null;
+    from: string | null;
+    to: string | null;
   }>({
     from: null,
     to: null
@@ -166,7 +170,6 @@ export default function Popup() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [currentView, setCurrentView] = useState<'home' | 'stats' | 'games' | 'notes' | 'chats'>('home');
-  const [currentUser, setCurrentUser] = useState<{ email: string | null } | null>(null);
 
   // Add helper function for date handling
   const parseDate = (dateString: string): Date | null => {
@@ -202,45 +205,38 @@ export default function Popup() {
     document.documentElement.lang = 'en-US';
   }, []);
 
-  // Update handleSettingsChange for theme
+  // פונקציה זו מטפלת בשינויי הגדרות
   const handleSettingsChange = async (key: keyof Settings, value: boolean | string) => {
-    try {
-      // Clear any previous error state
-      setError('');
-      
-      // Verify background script connection first
-      const response = await chrome.runtime.sendMessage({ type: 'PING' });
-      if (!response?.success) {
-        throw new Error('Background script is not responding');
-      }
+    if (!settings) return;
 
-      // Make a copy of settings to update
-      const updatedSettings = { ...settings, [key]: value };
-      setSettings(updatedSettings);
+    console.log(`WordStream: Changing setting ${key} to`, value);
 
-      // Apply dark mode setting to the document
-      if (key === 'darkMode') {
-        const root = document.documentElement;
-        if (value === true) {
-          root.classList.add('dark');
-          root.classList.remove('light');
-        } else {
-          root.classList.add('light');
-          root.classList.remove('dark');
+    // עדכון הגדרות מקומי
+    const updatedSettings: Settings = {
+      ...settings,
+      [key]: value,
+    };
+
+    // שמירת ההגדרות בדפדן
+    setSettings(updatedSettings);
+    localStorage.setItem('wordstream_settings', JSON.stringify(updatedSettings));
+
+    // שליחת הגדרות שפה לתסריט רקע אם צריך
+    if (key === 'targetLanguage') {
+      if (chrome?.runtime?.sendMessage) {
+        try {
+          const response = await chrome.runtime.sendMessage({
+            action: 'updateLanguageSettings',
+            settings: {
+              targetLanguage: value
+            }
+          });
+
+          console.log('WordStream: Language settings update response:', response);
+        } catch (error) {
+          console.error('WordStream: Failed to update language settings:', error);
         }
       }
-
-      // Save to Chrome storage
-        chrome.storage.sync.set({ settings: updatedSettings }, () => {
-          if (chrome.runtime.lastError) {
-          console.error('Error saving settings:', chrome.runtime.lastError);
-          // Inform background script of settings update
-          chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATE', settings: updatedSettings });
-        }
-      });
-    } catch (err) {
-      console.error('Error updating settings:', err);
-      setError(`Failed to update settings: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -466,20 +462,6 @@ export default function Popup() {
           setError('Chrome API not available. Please try reloading the extension.');
           setIsLoading(false);
           return;
-        }
-
-        // Load current user information
-        try {
-          const { auth } = await import('@/firebase/config');
-          const user = auth.currentUser;
-          if (user) {
-            setCurrentUser({
-              email: user.email
-            });
-            console.log('WordStream: Current user loaded:', user.email);
-          }
-        } catch (authError) {
-          console.error('WordStream: Error loading user information:', authError);
         }
 
         // Load saved settings
@@ -766,7 +748,32 @@ export default function Popup() {
         return;
       }
 
-      // Load the most up-to-date statistics
+      // Try to get stats from Firestore first if the user is authenticated
+      if (currentUser) {
+        try {
+          const firestoreStats = await FirestoreService.getUserStats();
+          if (firestoreStats) {
+            console.log('WordStream: Successfully loaded stats from Firestore');
+            setStats(firestoreStats);
+            
+            // Update local storage with Firestore stats
+            chrome.storage.sync.set({ stats: firestoreStats }, () => {
+              if (chrome.runtime.lastError) {
+                console.error('Error saving Firestore stats to local storage:', chrome.runtime.lastError);
+              } else {
+                console.log('WordStream: Successfully synced Firestore stats to local storage');
+              }
+            });
+            
+            return; // Exit early since we got stats from Firestore
+          }
+        } catch (firestoreError) {
+          console.error('WordStream: Error loading stats from Firestore:', firestoreError);
+          // Continue to load from local storage as fallback
+        }
+      }
+
+      // Load the most up-to-date statistics from local storage
       const result = await new Promise<StorageData>((resolve, reject) => {
         chrome.storage.sync.get(['stats', 'words_metadata', 'words_groups', 'words'], (result) => {
           if (chrome.runtime.lastError) {
@@ -823,8 +830,10 @@ export default function Popup() {
       // Update stats with accurate word count if different
       if (actualWordCount > 0 && (!result.stats || result.stats.totalWords !== actualWordCount)) {
         const updatedStats = {
-          ...(result.stats || {}),
           totalWords: actualWordCount,
+          todayWords: result.stats?.todayWords || 0,
+          streak: result.stats?.streak || 0,
+          lastActive: result.stats?.lastActive || new Date().toISOString()
         };
         
         setStats(prevStats => ({
@@ -836,7 +845,19 @@ export default function Popup() {
         chrome.storage.sync.set({ stats: updatedStats }, () => {
           if (chrome.runtime.lastError) {
             console.error('Error saving updated stats to storage:', chrome.runtime.lastError);
+          } else {
+            // Save updated stats to Firestore if user is authenticated
+            if (currentUser) {
+              FirestoreService.saveUserStats(updatedStats).catch(err => {
+                console.error('WordStream: Error saving stats to Firestore:', err);
+              });
+            }
           }
+        });
+      } else if (currentUser && result.stats) {
+        // Even if no changes needed, save to Firestore for consistency
+        FirestoreService.saveUserStats(result.stats).catch(err => {
+          console.error('WordStream: Error saving existing stats to Firestore:', err);
         });
       }
       
@@ -863,15 +884,15 @@ export default function Popup() {
   const handleDeleteWord = async (wordId: string) => {
     try {
       // Filter out the deleted word from our local array
-    const newWords = words.filter(w => w.id !== wordId);
-    setWords(newWords);
+      const newWords = words.filter(w => w.id !== wordId);
+      setWords(newWords);
       
       // Update local stats
-    setStats({
-      ...stats,
-      totalWords: newWords.length,
-      todayWords: stats.todayWords > 0 ? stats.todayWords - 1 : 0
-    });
+      setStats({
+        ...stats,
+        totalWords: newWords.length,
+        todayWords: stats.todayWords > 0 ? stats.todayWords - 1 : 0
+      });
       
       // Load metadata to check if we're using the new format
       const metadata = await new Promise<any>((resolve, reject) => {
@@ -965,13 +986,12 @@ export default function Popup() {
                 if (chrome.runtime.lastError) {
                   console.warn('Warning removing unused groups:', chrome.runtime.lastError.message);
                 }
-                // Continue even if there's an error
                 resolve();
               });
             });
           }
           
-          // Perform bulk update with all changes at once to reduce write operations
+          // Now apply all updates in a single operation
           await new Promise<void>((resolve, reject) => {
             chrome.storage.sync.set(updates, () => {
               if (chrome.runtime.lastError) {
@@ -982,33 +1002,23 @@ export default function Popup() {
             });
           });
           
-          console.log('Successfully updated word groups after deletion');
-        } catch (groupError) {
-          console.error('Error updating word groups:', groupError);
-          throw new Error(`Failed to update groups: ${groupError}`);
+          // Save updated stats to Firestore if user is authenticated
+          if (currentUser) {
+            const statsForFirestore = {
+              totalWords: allWords.length,
+              todayWords: stats.todayWords > 0 ? stats.todayWords - 1 : 0,
+              streak: stats.streak,
+              lastActive: stats.lastActive
+            };
+            
+            await FirestoreService.saveUserStats(statsForFirestore);
+          }
+        } catch (error) {
+          console.error('Error updating storage after word deletion:', error);
         }
-      } else {
-        // Old format - simpler update
-        await new Promise<void>((resolve, reject) => {
-          chrome.storage.sync.set({ 
-            words: newWords, 
-            stats: { 
-              ...stats, 
-              totalWords: newWords.length,
-              todayWords: stats.todayWords > 0 ? stats.todayWords - 1 : 0
-            } 
-          }, () => {
-            if (chrome.runtime.lastError) {
-              reject(chrome.runtime.lastError.message || 'Error updating storage');
-            } else {
-              resolve();
-            }
-          });
-        });
       }
     } catch (error) {
       console.error('Error deleting word:', error);
-      alert(`Could not delete word: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -1259,33 +1269,6 @@ export default function Popup() {
     setCurrentView('home');
   };
 
-  // הוספת פונקציית התנתקות
-  const handleSignOut = async () => {
-    try {
-      console.log('WordStream: Signing out user');
-      
-      // בדיקה ש-Chrome API זמין
-      if (!await waitForChromeAPI()) {
-        setError('Chrome API not available. Cannot sign out.');
-        return;
-      }
-      
-      // שליחת הודעת התנתקות ל-background script
-      const response = await chrome.runtime.sendMessage({ action: 'SIGN_OUT' });
-      
-      if (response?.success) {
-        console.log('WordStream: User signed out successfully');
-        // אפשר להוסיף הודעה למשתמש או פעולות נוספות לאחר ההתנתקות
-      } else {
-        console.error('WordStream: Error signing out:', response?.error);
-        setError(`Failed to sign out: ${response?.error || 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error('WordStream: Error signing out:', error);
-      setError(`Failed to sign out: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
   // Determine content based on current view
   let content;
   
@@ -1312,18 +1295,9 @@ export default function Popup() {
   } else if (currentView === 'notes') {
     // Notes & Summaries view
     content = (
-      <div className="flex flex-col items-center justify-center py-8">
-        <div className="text-center p-6 bg-slate-100 dark:bg-slate-800 rounded-lg max-w-md">
-          <FileText size={48} className="mx-auto mb-4 text-blue-500" />
-          <h2 className="text-xl font-bold mb-2">Notes Coming Soon</h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-4">
-            The Notes & Summaries feature is currently in development and will be available soon.
-          </p>
-          <Button onClick={handleBackFromNotes} className="mt-2">
-            Go Back
-          </Button>
-        </div>
-      </div>
+      <NotesAndSummaries 
+        onBack={handleBackFromNotes} 
+      />
     );
   } else if (currentView === 'chats') {
     // Saved Chats view with the new component
@@ -1337,15 +1311,15 @@ export default function Popup() {
     content = (
       <div className="popup-container">
         <header className="popup-header">
-          <div className="flex items-center flex-1">
-            <img src="icons/icon48.png" alt="WordStream Logo" className="w-10 h-10" />
-            <h1 className="text-xl font-bold ml-3">WordStream</h1>
+          <div className="flex items-center">
+            <img src="/icons/icon48.png" alt="Logo" className="logo" />
+            <h1 className="title">WordStream</h1>
           </div>
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => handleSettingsChange('darkMode', !settings.darkMode)}
+              onClick={() => settings.darkMode ? handleSettingsChange('darkMode', false) : handleSettingsChange('darkMode', true)}
               className="icon-button"
-              aria-label={settings.darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle theme"
             >
               {settings.darkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
@@ -1355,18 +1329,6 @@ export default function Popup() {
               aria-label="Settings"
             >
               <Settings size={20} />
-            </button>
-            <button
-              onClick={handleSignOut}
-              className="icon-button text-red-500"
-              aria-label="Sign Out"
-              title="Sign Out"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                <polyline points="16 17 21 12 16 7"></polyline>
-                <line x1="21" y1="12" x2="9" y2="12"></line>
-              </svg>
             </button>
           </div>
         </header>
@@ -1428,25 +1390,68 @@ export default function Popup() {
                       Switch between light and dark themes
                     </p>
                   </div>
+
+                  <div className="setting-item">
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="auto-translate" className="text-base font-medium">
+                        Auto-translate
+                      </label>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          id="auto-translate"
+                          checked={settings.autoTranslate}
+                          onChange={() => handleSettingsChange('autoTranslate', !settings.autoTranslate)}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Automatically translate subtitles
+                    </p>
+                  </div>
+
+                  {/* Account Information */}
+                  <div className="border-t pt-4 mt-6">
+                    <div>
+                      <div className="mb-2">
+                        <p className="text-sm text-muted-foreground">
+                          Logged in as: <span className="font-medium">{currentUser?.email}</span>
+                        </p>
+                      </div>
+                      
+                      <button
+                        onClick={signOut}
+                        className="w-full py-2 px-4 rounded-md bg-red-600 text-white font-medium hover:bg-red-700 transition-colors"
+                      >
+                        Sign Out
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           ) : (
             <>
-              {currentUser?.email && (
-                <div className="user-info-card flex items-center gap-2 p-2 mb-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
-                  <div className="bg-blue-100 dark:bg-blue-900/30 p-1.5 rounded-full">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 dark:text-blue-400">
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
+              {currentUser && (
+                <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 px-4 py-3 rounded-lg mb-5">
+                  <div className="flex items-center gap-2">
+                    <User size={18} className="text-blue-600 dark:text-blue-400" />
+                    <span className="text-blue-700 dark:text-blue-300 font-medium">
+                      {currentUser.email}
+                    </span>
                   </div>
-                  <div className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-                    {currentUser.email}
-                  </div>
+                  <button
+                    onClick={() => signOut()}
+                    className="flex items-center gap-1 px-3 py-1 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+                    aria-label="Sign out"
+                  >
+                    <LogOut size={16} />
+                    <span className="text-sm font-medium">Sign Out</span>
+                  </button>
                 </div>
               )}
-              
+            
               {renderStatistics()}
               
               <div className="practice-section">

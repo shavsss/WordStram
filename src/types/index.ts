@@ -125,4 +125,36 @@ export interface SavedWord {
     previousLanguage: string;
     newLanguage: string;
   }[];
+}
+
+/**
+ * Represents a chat conversation 
+ */
+export interface Chat {
+  id: string;
+  conversationId: string;
+  userId: string;
+  videoId: string;
+  videoTitle: string;
+  videoURL: string;
+  timestamp: string;
+  messages: Array<{
+    role: 'user' | 'ai';
+    content: string;
+    timestamp: string;
+  }>;
+}
+
+/**
+ * Represents video metadata
+ */
+export interface VideoMetadata {
+  id: string;
+  userId: string;
+  videoId: string;
+  videoTitle: string;
+  videoURL: string;
+  lastUpdated: string;
+  durationInSeconds?: number;
+  watchedPercentage?: number;
 } 

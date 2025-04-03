@@ -5,32 +5,79 @@
 import { GeminiMessage } from '@/services/gemini/gemini-service';
 
 /**
- * Represents a conversation with AI
+ * Represents a single message in a chat conversation
  */
-export interface ChatConversation {
-  conversationId: string;     // Unique ID for this conversation
-  videoId: string;            // YouTube/Netflix video ID
-  videoTitle: string;         // Video title
-  videoURL: string;           // Full URL to video
-  lastUpdated: string;        // ISO timestamp of last update
-  messages: GeminiMessage[];  // Array of messages in this conversation
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'; // System for introductory messages or warnings
+  content: string;
+  timestamp: string;
 }
 
 /**
- * Type for the chats storage object that maps conversationIds to their conversations
+ * Represents a single chat conversation
+ */
+export interface ChatConversation {
+  conversationId: string;
+  videoId: string;
+  videoTitle: string;
+  videoURL: string;
+  userId?: string;
+  lastUpdated: string;
+  messages: ChatMessage[];
+}
+
+/**
+ * Mapping of conversation IDs to chat conversations
  */
 export interface ChatsStorage {
   [conversationId: string]: ChatConversation;
 }
 
 /**
- * Type for VideoChatsMap to organize chats by videoId for easy lookup
+ * Mapping of video IDs to conversation IDs
  */
 export interface VideoChatsMap {
-  [videoId: string]: string[]; // Array of conversationIds for this video
+  [videoId: string]: string[]; // Array of conversation IDs
 }
 
 /**
- * Export format options (same as notes for consistency)
+ * Format options for exporting chat conversations
  */
-export type ExportFormat = 'docx' | 'txt' | 'md' | 'json'; 
+export enum ExportFormat {
+  TEXT = 'text',
+  HTML = 'html',
+  DOCX = 'docx',
+  JSON = 'json'
+}
+
+/**
+ * Options for chat export
+ */
+export interface ExportOptions {
+  format: ExportFormat;
+  includeTimestamps?: boolean;
+  includeVideoInfo?: boolean;
+  includeUserInfo?: boolean;
+}
+
+/**
+ * Result of a chat export operation
+ */
+export interface ExportResult {
+  success: boolean;
+  data?: string | Blob;
+  filename?: string;
+  error?: string;
+}
+
+/**
+ * Filters for chat search and filtering
+ */
+export interface ChatFilters {
+  videoId?: string;
+  dateRange?: {
+    from?: Date;
+    to?: Date;
+  };
+  searchText?: string;
+} 

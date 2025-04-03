@@ -1,6 +1,10 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+/**
+ * Merge and normalize tailwind classes with clsx
+ * Used for conditionally joining tailwind classes
+ */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -48,7 +52,7 @@ export function levenshteinDistance(a: string, b: string): number {
 
   return matrix[a.length][b.length];
 }
-
+ 
 /**
  * Calculate similarity ratio between two strings
  * Returns a value between 0 and 1, where 1 is a perfect match

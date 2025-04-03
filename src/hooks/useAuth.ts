@@ -1,10 +1,24 @@
-import { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import * as AuthService from '@/firebase/auth';
-import * as FirestoreService from '@/firebase/firestore';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { User, UserCredential } from 'firebase/auth';
+import { auth } from '@/core/firebase/config';
+import { 
+  signInWithEmail as firebaseSignInWithEmail, 
+  signInWithGoogle as firebaseSignInWithGoogle, 
+  registerWithEmail, 
+  logOut,
+  resetPassword as resetPasswordFn,
+  getCurrentUser,
+  subscribeToAuthChanges
+} from '@/core/firebase/auth';
+import { syncNotesBetweenStorageAndFirestore } from '@/core/firebase/firestore';
+
+// Constants for login security
+const MAX_FAILED_ATTEMPTS = 5; // Maximum failed login attempts before locking
+const ACCOUNT_LOCK_DURATION = 30 * 60 * 1000; // 30 minutes in milliseconds
 
 interface AuthState {
-  user: User | null;
+  currentUser: User | null;
+  isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
 }
@@ -17,280 +31,220 @@ export interface UserData {
 }
 
 /**
- * Custom hook to manage authentication state
+ * Authentication hook for managing user authentication state
+ * Integrates with Firebase Auth and the global WordStream object
  */
 export function useAuth() {
+  // Auth state with loading and error handling
   const [authState, setAuthState] = useState<AuthState>({
-    user: null,
+    currentUser: null,
+    isAuthenticated: false,
     isLoading: true,
     error: null
   });
 
-  // Monitor auth state
+  // Update global WordStream object with auth state
+  const updateGlobalAuthState = useCallback((user: User | null) => {
+    if (typeof window !== 'undefined' && window.WordStream) {
+      window.WordStream.currentUser = user ? {
+        uid: user.uid,
+        displayName: user.displayName || undefined,
+        email: user.email || undefined,
+        photoURL: user.photoURL || undefined
+      } : undefined;
+      window.WordStream.isAuthenticated = Boolean(user);
+    }
+  }, []);
+
+  // Handle auth state changes
   useEffect(() => {
-    console.log('WordStream: Setting up auth state listener');
+    // Check for current user immediately
+    const user = getCurrentUser();
     
-    const unsubscribe = AuthService.subscribeToAuthChanges((user) => {
+    // If user exists, update state
+    if (user) {
+      setAuthState({
+        currentUser: user,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null
+      });
+      updateGlobalAuthState(user);
+    } else {
       setAuthState(prev => ({
         ...prev,
-        user,
         isLoading: false
       }));
+    }
+    
+    // Subscribe to auth state changes
+    const unsubscribe = subscribeToAuthChanges((user) => {
+      setAuthState({
+        currentUser: user,
+        isAuthenticated: Boolean(user),
+        isLoading: false,
+        error: null
+      });
+      updateGlobalAuthState(user);
       
-      console.log('WordStream: Auth state changed:', user ? `User ${user.displayName || user.email}` : 'No user');
-      
-      // Notify background script about auth state change
-      try {
-        chrome.runtime.sendMessage({
-          action: 'AUTH_STATE_UPDATED',
-          isAuthenticated: !!user
-        }).catch(err => {
-          // It's OK if this fails, the background script itself is also listening to auth changes
-          console.log('WordStream: Could not notify background about auth change:', err);
-        });
-      } catch (error) {
-        console.error('WordStream: Error notifying about auth change:', error);
-      }
-      
-      // Initialize Firestore collections when user logs in
+      // Sync data when authentication state changes
       if (user) {
-        // Initialize Firestore collections
-        FirestoreService.initializeFirestoreCollections()
-          .then(() => {
-            // Sync local storage data to Firestore if this is the first login
-            syncLocalDataToFirestore(user.uid);
-          })
-          .catch(err => {
-            console.error('WordStream: Error initializing Firestore collections:', err);
-          });
+        syncNotesBetweenStorageAndFirestore()
+          .catch((err: Error) => console.error('Failed to sync notes after auth change:', err));
       }
     });
-    
-    // Check for current user on mount
-    const currentUser = AuthService.getCurrentUser();
-    if (currentUser) {
-      setAuthState(prev => ({
-        ...prev,
-        user: currentUser,
-        isLoading: false
-      }));
-      
-      // Initialize Firestore collections for existing user
-      FirestoreService.initializeFirestoreCollections()
-        .then(() => {
-          // Try to sync on mount too
-          syncLocalDataToFirestore(currentUser.uid);
-        })
-        .catch(err => {
-          console.error('WordStream: Error initializing Firestore collections:', err);
-        });
-    } else {
-      // If no current user, stop loading
-      setAuthState(prev => ({
-        ...prev,
-        isLoading: false
-      }));
-    }
-    
-    return () => {
-      console.log('WordStream: Cleaning up auth state listener');
-      unsubscribe();
-    };
-  }, []);
-  
-  // Function to sync data from local storage to Firestore
-  const syncLocalDataToFirestore = async (userId: string) => {
-    try {
-      console.log('WordStream: Syncing local data to Firestore');
-      
-      // Get all data from local storage
-      chrome.storage.local.get(null, async (items) => {
-        if (chrome.runtime.lastError) {
-          console.error('WordStream: Error getting local storage data:', chrome.runtime.lastError);
-          return;
-        }
-        
-        // Check for chats data
-        if (items.chats_storage) {
-          console.log('WordStream: Found local chats, syncing to Firestore');
-          const chatsStorage = items.chats_storage;
-          
-          // For each chat, save to Firestore
-          for (const chatId in chatsStorage) {
-            const chat = chatsStorage[chatId];
-            try {
-              await FirestoreService.saveChat({
-                conversationId: chat.conversationId,
-                videoId: chat.videoId,
-                videoTitle: chat.videoTitle,
-                videoURL: chat.videoURL,
-                messages: chat.messages
-              });
-            } catch (error) {
-              console.error(`WordStream: Error saving chat ${chatId} to Firestore:`, error);
-            }
-          }
-        }
-        
-        // Check for words data in new grouped format
-        try {
-          if (items.words_metadata && items.words_groups && Array.isArray(items.words_groups)) {
-            console.log('WordStream: Found words metadata, syncing words to Firestore');
-            
-            // Fetch all word groups
-            chrome.storage.sync.get(items.words_groups, async (groupsResult) => {
-              if (chrome.runtime.lastError) {
-                console.error('WordStream: Error getting word groups:', chrome.runtime.lastError);
-                return;
-              }
-              
-              // Combine all groups into one array
-              const allWords = [];
-              for (const groupKey of items.words_groups) {
-                if (groupsResult[groupKey] && Array.isArray(groupsResult[groupKey])) {
-                  allWords.push(...groupsResult[groupKey]);
-                }
-              }
-              
-              if (allWords.length > 0) {
-                console.log(`WordStream: Syncing ${allWords.length} words to Firestore`);
-                await FirestoreService.saveWords(allWords);
-              }
-            });
-          } 
-          // Check for words data in old format
-          else if (items.words && Array.isArray(items.words)) {
-            console.log('WordStream: Found words in old format, syncing to Firestore');
-            await FirestoreService.saveWords(items.words);
-          }
-        } catch (wordError) {
-          console.error('WordStream: Error syncing words to Firestore:', wordError);
-        }
-        
-        console.log('WordStream: Local data sync to Firestore completed');
-      });
-    } catch (error) {
-      console.error('WordStream: Error in syncLocalDataToFirestore:', error);
-    }
-  };
 
-  /**
-   * Register with email and password
-   */
-  const register = async (email: string, password: string, userData?: UserData): Promise<boolean> => {
-    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
-    
-    try {
-      await AuthService.registerWithEmail(email, password, userData);
-      return true;
-    } catch (error: any) {
-      let errorMessage = 'Registration failed';
-      
-      // Format Firebase error message
-      if (error.code === 'auth/email-already-in-use') {
-        errorMessage = 'This email is already registered';
-      } else if (error.code === 'auth/weak-password') {
-        errorMessage = 'Password should be at least 6 characters';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        isLoading: false, 
-        error: errorMessage
-      }));
-      return false;
-    }
-  };
-  
-  /**
-   * Sign in with email and password
-   */
+    return () => unsubscribe();
+  }, [updateGlobalAuthState]);
+
+  // Sign in with email and password
   const signInWithEmail = async (email: string, password: string): Promise<boolean> => {
     setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
     
     try {
-      await AuthService.signInWithEmail(email, password);
-      return true;
-    } catch (error: any) {
-      let errorMessage = 'Sign in failed';
+      const userCredential = await firebaseSignInWithEmail(email, password);
       
-      // Format Firebase error message
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
-        errorMessage = 'Invalid email or password';
-      } else if (error.code === 'auth/too-many-requests') {
-        errorMessage = 'Too many attempts. Try again later';
-      } else if (error.message) {
-        errorMessage = error.message;
+      // Check if userCredential exists and has user
+      if (userCredential && userCredential.user) {
+        setAuthState({
+          currentUser: userCredential.user,
+          isAuthenticated: true,
+          isLoading: false,
+          error: null
+        });
+        updateGlobalAuthState(userCredential.user);
+        return true;
       }
       
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage
+        error: 'Sign in failed' 
       }));
       return false;
-    }
-  };
-  
-  /**
-   * Sign out
-   */
-  const signOut = async (): Promise<void> => {
-    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
-    
-    try {
-      await AuthService.logOut();
-      setAuthState({ 
-        user: null, 
-        isLoading: false, 
-        error: null
-      });
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: error.message || 'Sign out failed'
-      }));
-    }
-  };
-  
-  /**
-   * Reset password
-   */
-  const resetPassword = async (email: string): Promise<boolean> => {
-    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
-    
-    try {
-      await AuthService.resetPassword(email);
-      setAuthState(prev => ({ ...prev, isLoading: false }));
-      return true;
-    } catch (error: any) {
-      let errorMessage = 'Password reset failed';
-      
-      if (error.code === 'auth/user-not-found') {
-        errorMessage = 'No account found with this email';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        isLoading: false, 
-        error: errorMessage
+        error: errorMessage 
       }));
       return false;
     }
   };
 
+  // Sign in with Google
+  const signInWithGoogle = async (): Promise<boolean> => {
+    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
+    
+    try {
+      const userCredential = await firebaseSignInWithGoogle();
+      
+      // Check if userCredential exists and has user
+      if (userCredential && userCredential.user) {
+        setAuthState({
+          currentUser: userCredential.user,
+          isAuthenticated: true,
+          isLoading: false,
+          error: null
+        });
+        updateGlobalAuthState(userCredential.user);
+        return true;
+      }
+      
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: 'Google sign in failed' 
+      }));
+      return false;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: errorMessage 
+      }));
+      return false;
+    }
+  };
+
+  // Register with email and password
+  const register = async (email: string, password: string, userData?: UserData): Promise<boolean> => {
+    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
+    
+    try {
+      const result = await registerWithEmail(email, password, userData);
+      setAuthState({
+        currentUser: result.user,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null
+      });
+      updateGlobalAuthState(result.user);
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: errorMessage 
+      }));
+      return false;
+    }
+  };
+
+  // Sign out
+  const signOut = async (): Promise<void> => {
+    setAuthState(prev => ({ ...prev, isLoading: true }));
+    
+    try {
+      await logOut();
+      setAuthState({
+        currentUser: null,
+        isAuthenticated: false,
+        isLoading: false,
+        error: null
+      });
+      updateGlobalAuthState(null);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: errorMessage 
+      }));
+    }
+  };
+
+  // Reset password
+  const resetPassword = async (email: string): Promise<boolean> => {
+    setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
+    
+    try {
+      await resetPasswordFn(email);
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false 
+      }));
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setAuthState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        error: errorMessage 
+      }));
+      return false;
+    }
+  };
+
+  // Return auth state and methods
   return {
-    user: authState.user,
-    isLoading: authState.isLoading,
-    error: authState.error,
-    isAuthenticated: !!authState.user,
-    register,
+    ...authState,
     signInWithEmail,
+    signInWithGoogle,
+    register,
     signOut,
     resetPassword
   };

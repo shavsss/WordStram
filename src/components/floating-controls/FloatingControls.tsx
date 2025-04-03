@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { NotesPanel } from '../video-notes/NotesPanel';
+import { NotesPanel } from '@/features/notes/components/NotesPanel';
 import { cn } from '@/utils';
 
 interface FloatingControlsProps {
