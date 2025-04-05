@@ -10,7 +10,8 @@ import {
   getCurrentUser,
   subscribeToAuthChanges
 } from '@/core/firebase/auth';
-import { syncNotesBetweenStorageAndFirestore } from '@/core/firebase/firestore';
+import { syncBetweenStorageAndFirestore } from '@/core/firebase/firestore';
+import AuthManager from '@/core/auth-manager';
 
 // Constants for login security
 const MAX_FAILED_ATTEMPTS = 5; // Maximum failed login attempts before locking
@@ -43,23 +44,15 @@ export function useAuth() {
     error: null
   });
 
-  // Update global WordStream object with auth state
+  // Update global authentication state using AuthManager
   const updateGlobalAuthState = useCallback((user: User | null) => {
-    if (typeof window !== 'undefined' && window.WordStream) {
-      window.WordStream.currentUser = user ? {
-        uid: user.uid,
-        displayName: user.displayName || undefined,
-        email: user.email || undefined,
-        photoURL: user.photoURL || undefined
-      } : undefined;
-      window.WordStream.isAuthenticated = Boolean(user);
-    }
+    AuthManager.updateAuthState(user);
   }, []);
 
   // Handle auth state changes
   useEffect(() => {
-    // Check for current user immediately
-    const user = getCurrentUser();
+    // Check for current user immediately using AuthManager
+    const user = AuthManager.getCurrentUser();
     
     // If user exists, update state
     if (user) {
@@ -69,7 +62,6 @@ export function useAuth() {
         isLoading: false,
         error: null
       });
-      updateGlobalAuthState(user);
     } else {
       setAuthState(prev => ({
         ...prev,
@@ -89,7 +81,7 @@ export function useAuth() {
       
       // Sync data when authentication state changes
       if (user) {
-        syncNotesBetweenStorageAndFirestore()
+        syncBetweenStorageAndFirestore()
           .catch((err: Error) => console.error('Failed to sync notes after auth change:', err));
       }
     });

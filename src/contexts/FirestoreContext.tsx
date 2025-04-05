@@ -12,15 +12,21 @@ import {
 } from 'firebase/firestore';
 import { toast } from 'react-toastify';
 import * as FirestoreService from '@/core/firebase/firestore';
-import { syncAllData } from '@/services/firebase-sync';
 import { useBackgroundSync } from '@/hooks/useBackgroundSync';
 import { Note } from '@/features/notes/types';
-import { Chat, VideoMetadata } from '@/types';
+import { VideoMetadata } from '@/types';
+import { ChatConversation } from '@/types/chats';
 import { useAuth } from '@/hooks/useAuth';
+import { handleFirestoreTimestamp } from '@/utils/date-utils';
+import { 
+  syncBetweenStorageAndFirestore,
+  debouncedSyncToFirestore,
+  subscribeToAllChats
+} from '@/core/firebase/firestore';
 
 interface FirestoreContextType {
   videos: VideoMetadata[];
-  chats: Chat[];
+  chats: ChatConversation[];
   notes: Record<string, Note[]>;
   isLoading: boolean;
   hasError: boolean;
@@ -45,7 +51,7 @@ interface FirestoreProviderProps {
 
 export function FirestoreProvider({ children }: FirestoreProviderProps) {
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [chats, setChats] = useState<ChatConversation[]>([]);
   const [notes, setNotes] = useState<Record<string, Note[]>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -85,61 +91,71 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
         
         console.log(`WordStream: Setting up Firestore listeners for user: ${userId}`);
         
-        // התחל סנכרון דו-כיווני של נתונים
+        // Start two-way data sync
         console.log('WordStream: Running initial data sync after login');
         try {
-          await FirestoreService.syncChatsBetweenStorageAndFirestore();
-          await FirestoreService.syncNotesBetweenStorageAndFirestore();
+          await syncBetweenStorageAndFirestore();
           setLastSyncTimestamp(new Date().toISOString());
         } catch (syncError) {
           console.error('WordStream: Error during initial sync:', syncError);
         }
 
-        // Videos listener
+        // Videos listener - no changes needed for now
         const videosRef = collection(db, `users/${userId}/videos`);
         unsubscribeVideos = onSnapshot(videosRef, (snapshot) => {
           const videosData: VideoMetadata[] = [];
           snapshot.forEach((doc) => {
-            const data = doc.data();
-            const mappedVideo: VideoMetadata = {
-              id: doc.id,
-              userId: userId,
-              videoId: data.videoId,
-              videoTitle: data.videoTitle,
-              videoURL: data.videoURL,
-              lastViewed: data.lastViewed,
-              lastUpdated: data.lastUpdated,
-              durationInSeconds: data.durationInSeconds,
-              watchedPercentage: data.watchedPercentage
-            } as VideoMetadata;
-            videosData.push(mappedVideo);
+            try {
+              const data = doc.data();
+              
+              // Process dates safely
+              const lastViewed = handleFirestoreTimestamp(data.lastViewed);
+              const lastUpdated = handleFirestoreTimestamp(data.lastUpdated);
+              
+              const mappedVideo: VideoMetadata = {
+                id: doc.id,
+                userId: userId,
+                videoId: data.videoId,
+                videoTitle: data.videoTitle,
+                videoURL: data.videoURL,
+                lastViewed: lastViewed.toISOString(),
+                lastUpdated: lastUpdated.toISOString(),
+                durationInSeconds: data.durationInSeconds,
+                watchedPercentage: data.watchedPercentage
+              } as VideoMetadata;
+              videosData.push(mappedVideo);
+            } catch (videoError) {
+              console.warn(`WordStream: Error processing video document ${doc.id}:`, videoError);
+              // Continue processing other videos even if one fails
+            }
           });
           console.log(`WordStream: Received ${videosData.length} videos from Firestore`);
           setVideos(videosData);
           
-          // Call sync functions without await and parameters
-          FirestoreService.syncVideosToLocalStorage();
+          // Sync data
+          chrome.runtime.sendMessage({ action: 'SYNC_DATA' });
         }, (error) => {
           console.error('WordStream: Error listening to videos:', error);
           setHasError(true);
           setErrorMessage(`Failed to get videos: ${error.message}`);
         });
         
-        // Chats are fetched per video, but we can subscribe to all user's chats
+        // Chats - use the official subscription method
         try {
-          console.log(`WordStream: Setting up ALL chats listener for user: ${userId}`);
-          unsubscribeChats = FirestoreService.subscribeToAllChats((updatedChats) => {
-            console.log(`WordStream: Received ${updatedChats.length} chats from Firestore listener`);
+          console.log(`WordStream: Setting up chats listener for user: ${userId}`);
+          
+          // Use the dedicated function for subscribing to chats
+          unsubscribeChats = subscribeToAllChats((updatedChats) => {
+            console.log(`WordStream: Received ${updatedChats.length} chats from Firestore`);
             setChats(updatedChats);
             
-            // Call sync functions without await and parameters
-            FirestoreService.syncChatsToLocalStorage();
+            // No need to explicitly sync to local storage as the subscribeToAllChats handles it
           });
         } catch (chatError) {
           console.error('WordStream: Error setting up chats listener:', chatError);
         }
         
-        // הקמת האזנה לכל ההערות
+        // Notes listeners - no major changes
         await setupAllNotesListeners(userId);
         
         // Notes - get initial load
@@ -194,8 +210,8 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       console.log(`WordStream: Fetched notes for ${Object.keys(notesData).length} videos`);
       setNotes(notesData);
       
-      // Call sync functions without await and parameters
-      FirestoreService.syncNotesToLocalStorage();
+      // Sync notes through background
+      chrome.runtime.sendMessage({ action: 'SYNC_DATA' });
       
     } catch (error) {
       console.error('WordStream: Error fetching notes:', error);
@@ -215,9 +231,8 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
     try {
       console.log('WordStream: Manual data refresh triggered');
       
-      // סנכרון דו-כיווני של צ'טים והערות
-      await FirestoreService.syncChatsBetweenStorageAndFirestore();
-      await FirestoreService.syncNotesBetweenStorageAndFirestore();
+      // Sync all data
+      await syncBetweenStorageAndFirestore();
       
       await fetchAllNotes(currentUser.uid);
       
@@ -258,11 +273,11 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
     }
   };
 
-  // האזנה בזמן אמת לשינויים בהערות עבור סרטון ספציפי
+  // Listen for notes changes for a specific video
   const setupNotesListener = (userId: string, videoId: string) => {
     if (!userId || !videoId) return;
     
-    // בדיקה אם כבר יש האזנה פעילה
+    // Check if listener already exists
     if (notesListeners.current[videoId]) {
       console.log(`WordStream: Notes listener for video ${videoId} already exists, skipping`);
       return;
@@ -290,19 +305,22 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
         
         console.log(`WordStream: Received ${videoNotes.length} notes for video ${videoId} from real-time listener`);
         
-        // עדכון מצב ההערות במערכת
+        // Update notes state
         setNotes(prevNotes => ({
           ...prevNotes,
           [videoId]: videoNotes
         }));
         
-        // עדכון אחסון מקומי
+        // Update local storage
         updateLocalNotesStorage(videoId, videoNotes);
+        
+        // Trigger a sync
+        debouncedSyncToFirestore();
       }, (error) => {
         console.error(`WordStream: Error in notes listener for video ${videoId}:`, error);
       });
       
-      // שמירת מפסיק ההאזנה
+      // Save the unsubscribe function
       notesListeners.current[videoId] = unsubscribe;
       
     } catch (error) {
@@ -310,11 +328,11 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
     }
   };
   
-  // ניקוי כל מאזיני ההערות
+  // Clean up all note listeners
   const cleanupAllNotesListeners = () => {
     console.log('WordStream: Cleaning up all notes listeners');
     
-    // הפעלת כל מפסיקי ההאזנה
+    // Call all unsubscribe functions
     Object.entries(notesListeners.current).forEach(([videoId, unsubscribe]) => {
       if (typeof unsubscribe === 'function') {
         console.log(`WordStream: Removing notes listener for video ${videoId}`);
@@ -322,11 +340,11 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       }
     });
     
-    // איפוס המאזינים
+    // Reset listeners
     notesListeners.current = {};
   };
   
-  // עדכון אחסון מקומי של הערות
+  // Update local storage for notes
   const updateLocalNotesStorage = (videoId: string, videoNotes: Note[]) => {
     chrome.storage.local.get(['notes_storage'], (result) => {
       if (chrome.runtime.lastError) {
@@ -337,7 +355,7 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       const storageObj = result.notes_storage || {};
       const videoNotesObj: Record<string, any> = {};
       
-      // המרת מערך הערות לאובייקט אחסון
+      // Convert notes array to storage object
       videoNotes.forEach(note => {
         if (note.id) {
           videoNotesObj[note.id] = {
@@ -347,13 +365,13 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
         }
       });
       
-      // עדכון רק עבור הסרטון הספציפי
+      // Update only for the specific video
       const updatedStorage = {
         ...storageObj,
         [videoId]: videoNotesObj
       };
       
-      // שמירה באחסון המקומי
+      // Save to local storage
       chrome.storage.local.set({ 'notes_storage': updatedStorage }, () => {
         if (chrome.runtime.lastError) {
           console.error('WordStream: Error updating notes in local storage:', chrome.runtime.lastError);
@@ -364,7 +382,7 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
     });
   };
   
-  // האזנה בזמן אמת לכל ההערות עבור כל הסרטונים הקיימים
+  // Setup listeners for all videos' notes
   const setupAllNotesListeners = async (userId: string) => {
     if (!userId) return;
     
@@ -372,10 +390,10 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       console.log('WordStream: Setting up notes listeners for all videos');
       const db = getFirestore();
       
-      // ניקוי האזנות קיימות
+      // Clean up existing listeners
       cleanupAllNotesListeners();
       
-      // קבלת כל הסרטונים
+      // Get all videos
       const videosSnapshot = await getDocs(collection(db, `users/${userId}/videos`));
       
       if (videosSnapshot.empty) {
@@ -383,7 +401,7 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
         return;
       }
       
-      // הקמת האזנות לכל הסרטונים
+      // Setup listeners for all videos
       videosSnapshot.docs.forEach(videoDoc => {
         const videoId = videoDoc.id;
         setupNotesListener(userId, videoId);

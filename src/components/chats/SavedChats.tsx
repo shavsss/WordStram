@@ -51,35 +51,36 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     };
   }, []);
 
-  // סנכרון אוטומטי בין Firebase לאחסון מקומי והקמת האזנה בזמן אמת
+  // Auto-sync between Firebase and local storage and setup real-time listeners
   useEffect(() => {
     setIsLoading(true);
     
     const initChatSync = async () => {
       try {
-        // 1. סנכרון ראשוני בין מקורות הנתונים
+        // 1. Initial sync between data sources
         console.log('WordStream: Starting initial sync between storage systems');
-        await FirestoreService.syncChatsBetweenStorageAndFirestore();
+        // Use the messaging approach to sync
+        await chrome.runtime.sendMessage({ action: 'SYNC_DATA' });
         
-        // 2. האזנה לשינויים ב-Firestore
+        // 2. Set up Firestore listener
         console.log('WordStream: Setting up realtime chat subscription');
         
         const handleChatsUpdate = (chats: ChatConversation[]) => {
           console.log(`WordStream: Received ${chats.length} chats from Firestore listener`);
           setSavedChats(chats);
           
-          // 3. עדכון האחסון המקומי עם הנתונים החדשים
+          // 3. Update local storage with new data
           updateLocalStorage(chats);
         };
         
-        // הקמת האזנה בזמן אמת
+        // Set up real-time listener
         const unsubscribe = FirestoreService.subscribeToAllChats(handleChatsUpdate);
         unsubscribeRef.current = unsubscribe;
       } catch (error) {
         console.error('WordStream: Error setting up chat sync:', error);
         setError('Error syncing chats. Please try again later.');
         
-        // במקרה של כישלון הסנכרון, ננסה לטעון מהאחסון המקומי
+        // On sync failure, try to load from local storage
         loadFromLocalStorage();
       } finally {
         setIsLoading(false);
@@ -88,7 +89,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     
     initChatSync();
     
-    // ניקוי ההאזנה כאשר הקומפוננטה מתפרקת
+    // Clean up listener when component unmounts
     return () => {
       console.log('WordStream: Cleaning up chats subscription');
       if (unsubscribeRef.current) {
@@ -106,16 +107,18 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       
       // מבנה הנתונים באחסון המקומי
       chats.forEach(chat => {
+        const chatId = chat.id || chat.conversationId; // תמיכה בשני השדות
+        
         // עדכון מאגר הצ'אטים
-        chatsStorage[chat.conversationId] = chat;
+        chatsStorage[chatId] = chat;
         
         // עדכון מיפוי סרטון-לצ'אטים
         if (!videoChatsMap[chat.videoId]) {
           videoChatsMap[chat.videoId] = [];
         }
         
-        if (!videoChatsMap[chat.videoId].includes(chat.conversationId)) {
-          videoChatsMap[chat.videoId].push(chat.conversationId);
+        if (!videoChatsMap[chat.videoId].includes(chatId)) {
+          videoChatsMap[chat.videoId].push(chatId);
         }
       });
       
@@ -181,6 +184,8 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       
       // קיבוץ הצ'אטים לפי videoId
       savedChats.forEach(chat => {
+        const chatId = chat.id || chat.conversationId; // תמיכה בשני השדות למקרה שיש נתונים ישנים
+        
         if (!grouped[chat.videoId]) {
           grouped[chat.videoId] = {
             videoTitle: chat.videoTitle,
@@ -209,6 +214,18 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       });
       
       setGroupedChats(grouped);
+      
+      // הגדרת מצב ההרחבה הראשוני - נפתח את השיחה הראשונה (החדשה ביותר)
+      if (Object.keys(expandedGroups).length === 0 && Object.keys(grouped).length > 0) {
+        // מרחיבים אוטומטית רק את הווידאו עם השיחה החדשה ביותר
+        const sortedVideos = Object.entries(grouped)
+          .sort(([, a], [, b]) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
+        
+        if (sortedVideos.length > 0) {
+          const mostRecentVideoId = sortedVideos[0][0];
+          setExpandedGroups({ [mostRecentVideoId]: true });
+        }
+      }
     } else {
       setGroupedChats({});
     }
@@ -216,20 +233,21 @@ export function SavedChats({ onBack }: SavedChatsProps) {
 
   // פונקציה לאיתחול הסנכרון מחדש
   const handleResync = async () => {
-    setIsSyncing(true);
-    setError(null);
+    if (isSyncing) return;
     
+    setIsSyncing(true);
     try {
-      toast.info('Syncing chats between storage systems...');
+      console.log('WordStream: Manual sync triggered');
+      toast.info('Synchronizing chats...');
       
-      // סנכרון בין מקורות הנתונים
-      await FirestoreService.syncChatsBetweenStorageAndFirestore();
+      // Use the messaging approach to trigger sync in background
+      await chrome.runtime.sendMessage({ action: 'SYNC_DATA' });
       
-      toast.success('Chats synced successfully');
+      // Show success toast
+      toast.success('Chats synchronized successfully');
     } catch (error) {
-      console.error('WordStream: Error during manual resync:', error);
-      setError(`Error syncing chats: ${error}`);
-      toast.error('Failed to sync chats. Please try again later.');
+      console.error('WordStream: Error during manual sync:', error);
+      toast.error('Failed to synchronize chats. Please try again.');
     } finally {
       setIsSyncing(false);
     }
@@ -255,31 +273,30 @@ export function SavedChats({ onBack }: SavedChatsProps) {
   };
 
   // Delete a saved chat
-  const deleteChat = async (conversationId: string, event: React.MouseEvent) => {
+  const deleteChat = async (chatId: string, event: React.MouseEvent) => {
     event.stopPropagation();
     
     if (window.confirm('Are you sure you want to delete this saved chat?')) {
-      console.log('WordStream: Deleting chat for conversationId:', conversationId);
+      console.log('WordStream: Deleting chat for id:', chatId);
       
       try {
         setIsLoading(true);
         
-        // מצא את הצ'אט המיועד למחיקה
-        const chatToDelete = savedChats.find(chat => chat.conversationId === conversationId);
+        // Find the chat to delete
+        const chatToDelete = savedChats.find(chat => (chat.id || chat.conversationId) === chatId);
         
         if (!chatToDelete) {
           throw new Error('Chat not found');
         }
         
-        // 1. מחק מ-Firestore
-        const videoId = chatToDelete.videoId;
-        const success = await FirestoreService.deleteChat(conversationId, videoId);
+        // 1. Delete from Firestore - now only requires chatId
+        const success = await FirestoreService.deleteChat(chatId);
         
         if (!success) {
           toast.error('Failed to delete chat from Firestore');
         }
         
-        // 2. מחק מהאחסון המקומי
+        // 2. Delete from local storage
         chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
           if (chrome.runtime.lastError) {
             console.error('WordStream ERROR: Failed to get storage for deletion:', chrome.runtime.lastError);
@@ -290,21 +307,22 @@ export function SavedChats({ onBack }: SavedChatsProps) {
           
           const chatsStorage: ChatsStorage = result.chats_storage || {};
           const videoChatsMap: VideoChatsMap = result.video_chats_map || {};
+          const videoId = chatToDelete.videoId;
           
-          // מחיקת השיחה ממאגר השיחות
-          delete chatsStorage[conversationId];
+          // Delete the conversation from chat storage
+          delete chatsStorage[chatId];
           
-          // עדכון מיפוי סרטון-לשיחות: הסרת ה-conversationId מהרשימה
+          // Update video-to-chats mapping: remove the chatId from the list
           if (videoId && videoChatsMap[videoId]) {
-            videoChatsMap[videoId] = videoChatsMap[videoId].filter(id => id !== conversationId);
+            videoChatsMap[videoId] = videoChatsMap[videoId].filter(id => id !== chatId);
             
-            // אם אין יותר שיחות לסרטון זה, מסיר את הערך לגמרי
+            // If no more chats for this video, remove the entry completely
             if (videoChatsMap[videoId].length === 0) {
               delete videoChatsMap[videoId];
             }
           }
           
-          // שמירת האחסון המעודכן
+          // Save the updated storage
           chrome.storage.local.set({ 
             chats_storage: chatsStorage,
             video_chats_map: videoChatsMap 
@@ -318,11 +336,11 @@ export function SavedChats({ onBack }: SavedChatsProps) {
             
             console.log('WordStream: Chats saved successfully after deletion');
             
-            // עדכון המצב המקומי
-            setSavedChats(savedChats.filter(chat => chat.conversationId !== conversationId));
+            // Update local state - check both id and conversationId for compatibility
+            setSavedChats(savedChats.filter(chat => (chat.id || chat.conversationId) !== chatId));
             
-            // אם הצ'אט שנמחק היה נבחר, חזור לרשימה
-            if (selectedChat?.conversationId === conversationId) {
+            // If the deleted chat was selected, go back to list
+            if ((selectedChat?.id || selectedChat?.conversationId) === chatId) {
               setSelectedChat(null);
             }
             

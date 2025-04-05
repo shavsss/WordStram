@@ -7,7 +7,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import * as FirestoreService from '@/core/firebase/firestore';
 import { getCurrentUser } from '@/core/firebase/auth';
 import { useFirestore } from '@/contexts/FirestoreContext';
-import { syncNotesBetweenStorageAndFirestore, syncChatsBetweenStorageAndFirestore } from '@/services/firebase-sync';
+import { syncAllData } from '@/services/firebase-sync';
 
 interface AuthPanelProps {
   onClose: () => void;
@@ -31,6 +31,8 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showDebugOptions, setShowDebugOptions] = useState(true);
+  const [isDebugLoading, setDebugLoading] = useState(false);
   
   // Additional user info for registration
   const [gender, setGender] = useState('');
@@ -184,17 +186,17 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
     // Don't reset password field since it's not used in reset mode
   };
   
-  // Handler for the debug button
+  // Handler for the debug structure button
   const handleDebugStructure = async () => {
     if (!isAuthenticated || !currentUser) {
-      toast.error('You must be logged in to debug the structure');
+      toast.error('You must be logged in to debug Firestore structure');
       return;
     }
     
     try {
       toast.info('Checking Firestore structure, check console for details...');
-      const results = await debugFirestoreStructure(currentUser.uid);
-      toast.success(`Debug complete! Found: ${results.videos} videos, ${results.notes} notes, and ${results.chats} chats`);
+      const results = await debugFirestoreStructure();
+      toast.success(`Debug complete! Found: ${results.collections.videos || 0} videos, ${results.collections.notes || 0} notes, and ${results.collections.chats || 0} chats`);
     } catch (error) {
       console.error('Error in debug:', error);
       toast.error('Error checking structure');
@@ -210,7 +212,7 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
     
     try {
       toast.info('Checking chats in Firestore, check console for details...');
-      const results = await debugChats(currentUser.uid);
+      const results = await debugChats();
       toast.success(`Chats debug complete! Found: ${results.total} chats across ${Object.keys(results.byVideoId).length} videos`);
     } catch (error) {
       console.error('Error in chats debug:', error);
@@ -237,14 +239,13 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
         }
       } else {
         // גיבוי במקרה שאין קונטקסט - שימוש ישיר בשירות ה-Firestore
-        await syncChatsBetweenStorageAndFirestore();
-        await syncNotesBetweenStorageAndFirestore();
+        await syncAllData();
         
         // Check and debug data structure
         const currentUser = getCurrentUser();
         if (currentUser) {
-          const results = await FirestoreService.debugFirestoreStructure(currentUser.uid);
-          toast.success(`סנכרון הושלם! נמצאו ${results.videos} סרטונים, ${results.notes} הערות, ${results.chats} צ'אטים`);
+          const results = await debugFirestoreStructure();
+          toast.success(`סנכרון הושלם! נמצאו ${results.collections.videos || 0} סרטונים, ${results.collections.notes || 0} הערות, ${results.collections.chats || 0} צ'אטים`);
         } else {
           toast.error('לא ניתן לבצע סנכרון: משתמש לא מחובר');
         }
@@ -254,6 +255,77 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
       toast.error('שגיאה בסנכרון נתונים');
     } finally {
       setIsLoading(false);
+    }
+  };
+  
+  // פונקצית סנכרון מחדש של הצ'אטים
+  const handleForceResyncChats = async () => {
+    setDebugLoading(true);
+    try {
+      const { forceResyncChats } = await import('@/core/firebase/firestore');
+      const result = await forceResyncChats();
+      alert(result 
+        ? "סנכרון מחדש של הצ'אטים הושלם בהצלחה!" 
+        : "סנכרון הצ'אטים נכשל, אנא בדוק את הלוגים לפרטים נוספים.");
+    } catch (error) {
+      console.error('Error force resyncing chats:', error);
+      alert("שגיאה בניסיון לסנכרן צ'אטים: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
+    } finally {
+      setDebugLoading(false);
+    }
+  };
+  
+  // פונקציית סנכרון מחדש של ההערות
+  const handleForceResyncNotes = async () => {
+    setDebugLoading(true);
+    try {
+      const { forceResyncNotes } = await import('@/core/firebase/firestore');
+      const result = await forceResyncNotes();
+      alert(result 
+        ? "סנכרון מחדש של ההערות הושלם בהצלחה!" 
+        : "סנכרון ההערות נכשל, אנא בדוק את הלוגים לפרטים נוספים.");
+    } catch (error) {
+      console.error('Error force resyncing notes:', error);
+      alert("שגיאה בניסיון לסנכרן הערות: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
+    } finally {
+      setDebugLoading(false);
+    }
+  };
+
+  // פונקצית בדיקת מצב פיירסטור
+  const handleDebugFirestoreState = async () => {
+    setDebugLoading(true);
+    try {
+      const { debugFirestoreState } = await import('@/core/firebase/firestore');
+      const debugInfo = await debugFirestoreState();
+      console.log('🔍 מצב סנכרון פיירבייס:', debugInfo);
+      
+      // הצג סיכום בסיסי למשתמש
+      let summary = "סיכום מצב הסנכרון:\n\n";
+      
+      if (debugInfo.error) {
+        summary += `❌ שגיאה: ${debugInfo.error}\n`;
+      } else {
+        summary += `✅ משתמש: ${debugInfo.userId}\n`;
+        summary += `📁 מסמכים בפיירסטור:\n`;
+        summary += `- צ'אטים: ${debugInfo.collections.chats.count || 0} (${debugInfo.collections.chats.exists ? 'קיים' : 'לא קיים'})\n`;
+        summary += `- מילים: ${debugInfo.collections.words.count || 0} (${debugInfo.collections.words.exists ? 'קיים' : 'לא קיים'})\n`;
+        summary += `- הערות: ${debugInfo.collections.notes.count || 0} (${debugInfo.collections.notes.exists ? 'קיים' : 'לא קיים'})\n`;
+        summary += `- סטטיסטיקות: ${debugInfo.collections.stats?.exists ? 'קיים' : 'לא קיים'}\n\n`;
+        
+        summary += `📋 נתונים באחסון מקומי:\n`;
+        summary += `- צ'אטים: ${debugInfo.localStorage.chats?.count || 0} (${debugInfo.localStorage.chats?.exists ? 'קיים' : 'לא קיים'})\n`;
+        summary += `- מילים: ${debugInfo.localStorage.words?.count || 0} (${debugInfo.localStorage.words?.exists ? 'קיים' : 'לא קיים'})\n`;
+        summary += `- הערות: ${debugInfo.localStorage.notes?.count || 0} (${debugInfo.localStorage.notes?.exists ? 'קיים' : 'לא קיים'})\n`;
+      }
+      
+      summary += "\nלפרטים נוספים בדוק את הקונסול.";
+      alert(summary);
+    } catch (error) {
+      console.error('Error checking Firestore state:', error);
+      alert("שגיאה בבדיקת מצב הסנכרון: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
+    } finally {
+      setDebugLoading(false);
     }
   };
   
@@ -379,6 +451,70 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
               disabled={isLoading}
             >
               בדיקת צ'אטים
+            </button>
+          </div>
+        </div>
+
+        // Developer options at the bottom
+        <div className="mt-6 border-t border-gray-200 pt-4">
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-3">אפשרויות מפתח</h3>
+          <div className="grid grid-cols-1 gap-3">
+            <button 
+              onClick={handleDebugFirestoreState}
+              disabled={isDebugLoading}
+              className="w-full py-2 px-4 bg-gray-600 hover:bg-gray-700 text-white rounded transition duration-200"
+            >
+              {isDebugLoading ? 'בודק...' : 'בדוק מצב סנכרון'}
+            </button>
+            
+            <button 
+              onClick={handleForceResyncChats}
+              disabled={isDebugLoading}
+              className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded transition duration-200"
+            >
+              {isDebugLoading ? 'מסנכרן...' : 'סנכרן צאטים מחדש'}
+            </button>
+            
+            <button 
+              onClick={handleForceResyncNotes}
+              disabled={isDebugLoading}
+              className="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition duration-200"
+            >
+              {isDebugLoading ? 'מסנכרן...' : 'סנכרן הערות מחדש'}
+            </button>
+            
+            <button
+              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+              onClick={handleSyncData}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center">
+                  <svg
+                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  מסנכרן...
+                </span>
+              ) : (
+                'סנכרון נתונים'
+              )}
             </button>
           </div>
         </div>

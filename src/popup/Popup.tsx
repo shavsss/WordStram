@@ -1,21 +1,59 @@
 'use client';
 
+/**
+ * ==============================================
+ * IMPORTS
+ * ==============================================
+ */
+
+// React וספריות בסיס
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import ReactDOM from 'react-dom';
+
+// ספריות תאריכים
+import { 
+  format, differenceInDays, isSameDay, isAfter, parseISO, 
+  subDays, subMonths, addMonths, startOfMonth, endOfMonth, 
+  eachDayOfInterval, getDay, addDays, isSameMonth, isToday 
+} from 'date-fns';
+
+// ייבוא אייקונים
+import { 
+  Settings, Moon, Sun, Calendar as CalendarIcon, Pencil, Brain, 
+  Flame, Globe, BookOpen, Gamepad, BarChart, X, ChevronDown, 
+  ChevronLeft, ChevronRight, RefreshCw, FileText, MessageSquare, 
+  Download, LogOut, User 
+} from 'lucide-react';
+
+// תצורות וקונפיגורציה
 import { LANGUAGE_MAP, normalizeLanguageCode } from '@/services/caption-detectors/shared/language-map';
+
+// קומפוננטות UI
 import { Card } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
-import { Settings, Moon, Sun, Calendar as CalendarIcon, Pencil, Brain, Flame, Globe, BookOpen, Gamepad, BarChart, X, ChevronDown, ChevronLeft, ChevronRight, RefreshCw, FileText, MessageSquare, Download, LogOut, User } from 'lucide-react';
-import { format, differenceInDays, isSameDay, isAfter, parseISO, subDays, subMonths, addMonths, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addDays, isSameMonth, isToday } from 'date-fns';
 import { Select } from '@/components/ui/select';
-import { Word } from '@/types/word';
+import { Button } from '@/components/ui/button';
+
+// קומפוננטות אפליקציה
 import { Games } from '@/components/games';
 import { StatisticsPage } from '@/components/statistics/StatisticsPage';
 import { NotesAndSummaries } from '@/content/modules/notes/NotesAndSummaries';
 import { SavedChats } from '@/components/chats/SavedChats';
-import { Button } from '@/components/ui/button';
-import * as XLSX from 'xlsx';
+
+// שירותים וטיפוסים
+import { Word } from '@/types/word';
 import { useAuth } from '@/hooks/useAuth';
 import * as FirestoreService from '@/core/firebase/firestore';
+import { safeDate, safeFormatDate } from '@/utils/date-utils';
+
+// ספריות חיצוניות
+import * as XLSX from 'xlsx';
+
+/**
+ * ==============================================
+ * INTERFACES & TYPES
+ * ==============================================
+ */
 
 interface Stats {
   totalWords: number;
@@ -31,22 +69,9 @@ interface Settings {
   targetLanguage: string;
 }
 
-// Constants for Chrome API initialization
-const MAX_RETRIES = 5;
-const RETRY_DELAY = 1000;
-
-// Helper function to wait for Chrome API
-async function waitForChromeAPI(retries = MAX_RETRIES): Promise<boolean> {
-  for (let i = 0; i < retries; i++) {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.storage?.sync) {
-      return true;
-    }
-    console.log(`WordStream: Waiting for Chrome API (attempt ${i + 1}/${retries})...`);
-    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-  }
-  return false;
-}
-
+/**
+ * Storage data interface for Chrome storage
+ */
 interface StorageData {
   settings?: Settings;
   words?: Word[];
@@ -60,13 +85,67 @@ interface StorageData {
   words_groups?: any;
 }
 
-// Add a custom DatePicker component
+/**
+ * Props for the DatePicker component
+ */
 interface DatePickerProps {
   selectedDate: string;
   onChange: (date: string) => void;
   onClose: () => void;
 }
 
+/**
+ * Props for the WordCard component
+ */
+interface WordCardProps {
+  word: Word;
+  onEdit: (word: Word) => void;
+  onDelete: () => void;
+}
+
+/**
+ * ==============================================
+ * CONSTANTS
+ * ==============================================
+ */
+
+// Constants for Chrome API initialization
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 1000;
+
+/**
+ * ==============================================
+ * HELPER FUNCTIONS
+ * ==============================================
+ */
+
+/**
+ * Helper function to wait for Chrome API to be available
+ * @param retries - Number of retry attempts
+ * @returns Promise resolving to boolean indicating if Chrome API is available
+ */
+async function waitForChromeAPI(retries = MAX_RETRIES): Promise<boolean> {
+  for (let i = 0; i < retries; i++) {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.storage?.sync) {
+      return true;
+    }
+    console.log(`WordStream: Waiting for Chrome API (attempt ${i + 1}/${retries})...`);
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+  }
+  return false;
+}
+
+/**
+ * ==============================================
+ * SUB-COMPONENTS
+ * ==============================================
+ */
+
+/**
+ * DatePicker Component
+ * 
+ * תצוגה גרפית של לוח שנה לבחירת תאריך
+ */
 function DatePicker({ selectedDate, onChange, onClose }: DatePickerProps) {
   const [currentMonth, setCurrentMonth] = useState(selectedDate ? new Date(selectedDate) : new Date());
   const dayNames = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -81,14 +160,23 @@ function DatePicker({ selectedDate, onChange, onClose }: DatePickerProps) {
     return eachDayOfInterval({ start: startDate, end: endDate });
   }, [currentMonth]);
   
+  /**
+   * מעבר לחודש הקודם
+   */
   const handlePrevMonth = () => {
     setCurrentMonth(prevMonth => addMonths(prevMonth, -1));
   };
   
+  /**
+   * מעבר לחודש הבא
+   */
   const handleNextMonth = () => {
     setCurrentMonth(prevMonth => addMonths(prevMonth, 1));
   };
   
+  /**
+   * בחירת תאריך ספציפי
+   */
   const handleSelectDate = (date: Date) => {
     onChange(format(date, 'yyyy-MM-dd'));
     onClose();
@@ -133,8 +221,22 @@ function DatePicker({ selectedDate, onChange, onClose }: DatePickerProps) {
   );
 }
 
+/**
+ * ==============================================
+ * MAIN COMPONENT
+ * ==============================================
+ */
+
+/**
+ * Popup Component
+ * 
+ * הקומפוננטה הראשית של חלון הפופאפ של התוסף.
+ * מנהלת את התצוגה של המילים, המשחקים, הסטטיסטיקות והגדרות.
+ */
 export default function Popup() {
   const { isAuthenticated, currentUser, signOut } = useAuth();
+  
+  // State management
   const [words, setWords] = useState<Word[]>([]);
   const [stats, setStats] = useState<Stats>({
     totalWords: 0,
@@ -148,6 +250,8 @@ export default function Popup() {
     darkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
     targetLanguage: 'en'
   });
+  
+  // UI state
   const [showSettings, setShowSettings] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,26 +262,46 @@ export default function Popup() {
     from: null,
     to: null
   });
+  
+  // Filter state
   const [selectedLanguage, setSelectedLanguage] = useState<string>('all');
   const [groupByLanguage, setGroupByLanguage] = useState(true);
+  const [dateFilter, setDateFilter] = useState<string>('all');
+  const [customDate, setCustomDate] = useState<string>('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement>(null);
+  
+  // View state
   const [showGames, setShowGames] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showStatsPage, setShowStatsPage] = useState(false);
   const [currentActiveView, setCurrentActiveView] = useState<string>("home");
   const [isThemeDark, setIsThemeDark] = useState(false);
-  const [dateFilter, setDateFilter] = useState<string>('all');
-  const [customDate, setCustomDate] = useState<string>('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const datePickerRef = useRef<HTMLDivElement>(null);
   const [currentView, setCurrentView] = useState<'home' | 'stats' | 'games' | 'notes' | 'chats'>('home');
 
-  // Add helper function for date handling
+  // New state for showing login dialog
+  const [showLoginDialog, setShowLoginDialog] = useState(false);
+
+  // New ref for games container
+  const gamesContainer = useRef<HTMLDivElement>(null);
+
+  /**
+   * ==============================================
+   * UTILITY FUNCTIONS
+   * ==============================================
+   */
+
+  /**
+   * פונקציית עזר להמרת מחרוזת תאריך לאובייקט Date
+   */
   const parseDate = (dateString: string): Date | null => {
     const date = new Date(dateString);
     return isNaN(date.getTime()) ? null : date;
   };
 
-  // Add helper function for date formatting
+  /**
+   * פונקציית עזר לפורמט תאריך לקלט
+   */
   const formatDateForInput = (date: Date | null): string => {
     if (!date) return '';
     try {
@@ -188,24 +312,15 @@ export default function Popup() {
     }
   };
 
-  // Aplicar tema escuro/claro ao elemento HTML
-  useEffect(() => {
-    const html = document.documentElement;
-    if (settings.darkMode) {
-      html.classList.add('dark');
-      html.classList.remove('light');
-    } else {
-      html.classList.add('light');
-      html.classList.remove('dark');
-    }
-  }, [settings.darkMode]);
+  /**
+   * ==============================================
+   * EVENT HANDLERS
+   * ==============================================
+   */
 
-  // Set document language to English for date pickers
-  useEffect(() => {
-    document.documentElement.lang = 'en-US';
-  }, []);
-
-  // פונקציה זו מטפלת בשינויי הגדרות
+  /**
+   * טיפול בשינוי הגדרות
+   */
   const handleSettingsChange = async (key: keyof Settings, value: boolean | string) => {
     if (!settings) return;
 
@@ -240,6 +355,9 @@ export default function Popup() {
     }
   };
 
+  /**
+   * הוספת או עריכת מילה
+   */
   const handleAddWord = async (newWord: Word) => {
     try {
       if (!await waitForChromeAPI()) {
@@ -343,7 +461,7 @@ export default function Popup() {
             if (!word.timestamp) return false;
             
             // Parse word date and normalize to local midnight
-            const wordTimestamp = new Date(word.timestamp);
+            const wordTimestamp = safeDate(word.timestamp);
             const wordDateNormalized = new Date(
               wordTimestamp.getFullYear(),
               wordTimestamp.getMonth(),
@@ -363,7 +481,7 @@ export default function Popup() {
             startOfWeek.setDate(todayNormalized.getDate() - todayNormalized.getDay());
             
             // Parse word date and normalize to local midnight
-            const wordTimestamp = new Date(word.timestamp);
+            const wordTimestamp = safeDate(word.timestamp);
             const wordDateNormalized = new Date(
               wordTimestamp.getFullYear(),
               wordTimestamp.getMonth(),
@@ -379,7 +497,7 @@ export default function Popup() {
             if (!word.timestamp) return false;
             
             // Parse word date
-            const wordTimestamp = new Date(word.timestamp);
+            const wordTimestamp = safeDate(word.timestamp);
             
             // Compare month and year directly
             return (
@@ -398,7 +516,7 @@ export default function Popup() {
               const selectedDate = new Date(customDateParts[0], customDateParts[1] - 1, customDateParts[2]);
               
               // Parse word date and normalize to local midnight
-              const wordTimestamp = new Date(word.timestamp);
+              const wordTimestamp = safeDate(word.timestamp);
               const wordDateNormalized = new Date(
                 wordTimestamp.getFullYear(),
                 wordTimestamp.getMonth(),
@@ -534,17 +652,17 @@ export default function Popup() {
             if (wordsMap.has(key)) {
               // If duplicate exists, keep the newer one
               const existingWord = wordsMap.get(key);
-              const existingTime = new Date(existingWord.timestamp).getTime();
-              const currentTime = new Date(word.timestamp).getTime();
+              const existingTime = safeDate(existingWord.timestamp).getTime();
+              const currentTime = safeDate(word.timestamp).getTime();
               
               console.log(`Found duplicate: "${word.originalWord}" (${word.sourceLanguage}/${word.targetLanguage})`);
               
               if (currentTime > existingTime) {
-                console.log(`  Keeping newer version from ${new Date(currentTime).toLocaleString()}`);
+                console.log(`  Keeping newer version from ${safeFormatDate(word.timestamp, 'PPP')}`);
                 wordsMap.set(key, word);
                 return true;
               }
-              console.log(`  Keeping older version from ${new Date(existingTime).toLocaleString()}`);
+              console.log(`  Keeping older version from ${safeFormatDate(existingWord.timestamp, 'PPP')}`);
               return false;
             } else {
               wordsMap.set(key, word);
@@ -558,7 +676,7 @@ export default function Popup() {
           // Process stats and ensure they're accurate
         if (result.stats) {
           // Ensure lastActive is a valid date
-          const lastActive = result.stats.lastActive && !isNaN(new Date(result.stats.lastActive).getTime()) ? 
+          const lastActive = result.stats.lastActive && !isNaN(safeDate(result.stats.lastActive).getTime()) ? 
             result.stats.lastActive : 
             new Date().toISOString();
           
@@ -595,7 +713,7 @@ export default function Popup() {
           
           if (result.stats) {
             // Ensure lastActive is a valid date
-            const lastActive = result.stats.lastActive && !isNaN(new Date(result.stats.lastActive).getTime()) ? 
+            const lastActive = result.stats.lastActive && !isNaN(safeDate(result.stats.lastActive).getTime()) ? 
               result.stats.lastActive : 
               new Date().toISOString();
             
@@ -659,7 +777,7 @@ export default function Popup() {
           if (!stats || !stats.lastActive) return 0;
           
           const today = new Date();
-          const lastActive = new Date(stats.lastActive);
+          const lastActive = safeDate(stats.lastActive);
           
           // Reset time parts to compare just the dates
           const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -692,8 +810,10 @@ export default function Popup() {
         const newStreak = calculateStreak(result.stats);
         
         // Update todayWords - reset if it's a new day
-        const lastActiveDate = new Date(result.stats.lastActive);
+        const lastActiveDate = safeDate(result.stats.lastActive);
         const todayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
+        
+        // תיקון: יוצר תאריך חדש במקום להעביר פרמטרים בנפרד
         const lastActiveNormalized = new Date(
           lastActiveDate.getFullYear(), 
           lastActiveDate.getMonth(), 
@@ -735,9 +855,18 @@ export default function Popup() {
     setCurrentView('home');
   };
 
-  // Handle showing games from statistics
-  const handleShowGamesFromStats = () => {
+  // Handle showing games
+  const handleShowGames = () => {
+    if (!isAuthenticated) {
+      setShowLoginDialog(true);
+      return;
+    }
     setCurrentView('games');
+  };
+
+  // Handle showing games from statistics (we'll keep this to avoid breaking existing references)
+  const handleShowGamesFromStats = () => {
+    handleShowGames();
   };
 
   // Function to refresh statistics data from storage
@@ -1039,7 +1168,7 @@ export default function Popup() {
         'Translation': word.targetWord,
         'Source Language': LANGUAGE_MAP[word.sourceLanguage as keyof typeof LANGUAGE_MAP] || word.sourceLanguage,
         'Target Language': LANGUAGE_MAP[word.targetLanguage as keyof typeof LANGUAGE_MAP] || word.targetLanguage,
-        'Added Date': word.timestamp ? format(new Date(word.timestamp), 'yyyy-MM-dd HH:mm:ss') : 'Unknown',
+        'Added Date': word.timestamp ? safeFormatDate(word.timestamp, 'yyyy-MM-dd HH:mm:ss') : 'Unknown',
         'Context': word.context ? `${word.context.videoTitle} (${word.context.source})` : 'No context',
         'URL': word.context?.url || 'Not available'
       }));
@@ -1062,7 +1191,7 @@ export default function Popup() {
       ws['!cols'] = colWidths;
 
       // Generate Excel file
-      const fileName = `wordstream_vocabulary_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
+      const fileName = `wordstream_vocabulary_${safeFormatDate(new Date(), 'yyyy-MM-dd')}.xlsx`;
       XLSX.writeFile(wb, fileName);
       
       console.log(`WordStream: Exported ${wordsToExport.length} words to Excel`);
@@ -1281,16 +1410,21 @@ export default function Popup() {
       />
     );
   } else if (currentView === 'games') {
-    // Games view
+    // Games view - עטיפת המשחקים ב-div עם קלאס חדש שיטפל בבעיות התצוגה
     content = (
-        <Games
-          words={filteredWords.map(w => ({ 
-            word: w.originalWord, 
-            translation: w.targetWord, 
-            context: w.context?.source ? `From ${w.context.source}` : undefined 
-          }))} 
-          onBack={handleBackToMain}
-        />
+      <div className="fixed inset-0 flex justify-center items-center w-screen h-screen z-[9999]">
+        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm z-[9999]"></div>
+        <div className="relative w-full h-full z-[10000]">
+          <Games
+            words={filteredWords.map(w => ({ 
+              word: w.originalWord, 
+              translation: w.targetWord, 
+              context: w.context?.source ? `From ${w.context.source}` : undefined 
+            }))} 
+            onBack={handleBackToMain}
+          />
+        </div>
+      </div>
     );
   } else if (currentView === 'notes') {
     // Notes & Summaries view
@@ -1335,94 +1469,111 @@ export default function Popup() {
 
         <main className="popup-content">
           {showSettings ? (
-            <div className="fixed inset-0 bg-background/80 backdrop-blur-sm">
-              <div className="fixed inset-x-4 top-8 bottom-8 rounded-lg bg-background shadow-lg overflow-y-auto p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-2xl font-bold">Settings</h2>
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div className="absolute inset-0 bg-background/80 backdrop-blur-sm"></div>
+              <div 
+                className="z-50 w-[320px] bg-background shadow-lg rounded-lg border border-border"
+                style={{ position: 'absolute', top: '35%', left: '50%', transform: 'translateX(-50%)' }}
+              >
+                <div className="flex items-center justify-between p-3 border-b">
+                  <h2 className="text-lg font-bold">Settings</h2>
                   <button
                     onClick={() => {
                       setShowSettings(false);
                     }}
-                    className="icon-button"
+                    className="icon-button text-muted-foreground hover:text-foreground"
                     aria-label="Close settings"
                   >
-                    <X size={20} />
+                    <X size={18} />
                   </button>
                 </div>
-
-                <div className="settings-section space-y-6">
-                  <div className="setting-item">
-                    <div className="flex items-center justify-between mb-2">
-                      <label htmlFor="target-language" className="text-base font-medium">
-                        Target Language
-                      </label>
+                
+                <div className="flex flex-col h-[270px] justify-between py-3 px-4">
+                  <div>
+                    <div className="mb-4 pb-3 border-b">
+                      <div className="flex items-center justify-between mb-2">
+                        <label htmlFor="target-language" className="text-sm font-medium">
+                          Target Language
+                        </label>
+                      </div>
+                      <select
+                        id="target-language"
+                        value={settings.targetLanguage}
+                        onChange={(e) => handleSettingsChange('targetLanguage', e.target.value)}
+                        className="select-input w-full text-sm"
+                      >
+                        {languageOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <select
-                      id="target-language"
-                      value={settings.targetLanguage}
-                      onChange={(e) => handleSettingsChange('targetLanguage', e.target.value)}
-                      className="select-input w-full"
-                    >
-                      {languageOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
 
-                  <div className="setting-item">
-                    <div className="flex items-center justify-between">
-                      <label htmlFor="dark-mode" className="text-base font-medium">
-                        Dark Theme
-                      </label>
-                      <label className="switch">
-                        <input
-                          type="checkbox"
-                          id="dark-mode"
-                          checked={settings.darkMode}
-                          onChange={() => handleSettingsChange('darkMode', !settings.darkMode)}
-                        />
-                        <span className="slider"></span>
-                      </label>
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Switch between light and dark themes
-                    </p>
-                  </div>
+                    <div className="space-y-3">
+                      <div className="setting-item">
+                        <div className="flex items-center justify-between mb-1">
+                          <label htmlFor="dark-mode" className="text-sm font-medium">
+                            Dark Theme
+                          </label>
+                          <div className="switch-wrapper">
+                            <input
+                              type="checkbox"
+                              id="dark-mode"
+                              checked={settings.darkMode}
+                              onChange={() => handleSettingsChange('darkMode', !settings.darkMode)}
+                              className="hidden"
+                            />
+                            <div 
+                              onClick={() => handleSettingsChange('darkMode', !settings.darkMode)}
+                              className={`w-10 h-5 rounded-full flex items-center cursor-pointer transition-colors ${settings.darkMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                            >
+                              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${settings.darkMode ? 'translate-x-5' : 'translate-x-1'}`}></div>
+                            </div>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Switch between light and dark themes
+                        </p>
+                      </div>
 
-                  <div className="setting-item">
-                    <div className="flex items-center justify-between">
-                      <label htmlFor="auto-translate" className="text-base font-medium">
-                        Auto-translate
-                      </label>
-                      <label className="switch">
-                        <input
-                          type="checkbox"
-                          id="auto-translate"
-                          checked={settings.autoTranslate}
-                          onChange={() => handleSettingsChange('autoTranslate', !settings.autoTranslate)}
-                        />
-                        <span className="slider"></span>
-                      </label>
+                      <div className="setting-item">
+                        <div className="flex items-center justify-between mb-1">
+                          <label htmlFor="auto-translate" className="text-sm font-medium">
+                            Auto-translate
+                          </label>
+                          <div className="switch-wrapper">
+                            <input
+                              type="checkbox"
+                              id="auto-translate"
+                              checked={settings.autoTranslate}
+                              onChange={() => handleSettingsChange('autoTranslate', !settings.autoTranslate)}
+                              className="hidden"
+                            />
+                            <div 
+                              onClick={() => handleSettingsChange('autoTranslate', !settings.autoTranslate)}
+                              className={`w-10 h-5 rounded-full flex items-center cursor-pointer transition-colors ${settings.autoTranslate ? 'bg-blue-600' : 'bg-gray-300'}`}
+                            >
+                              <div className={`w-4 h-4 rounded-full bg-white shadow-md transform transition-transform ${settings.autoTranslate ? 'translate-x-5' : 'translate-x-1'}`}></div>
+                            </div>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Automatically translate subtitles
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Automatically translate subtitles
-                    </p>
                   </div>
 
                   {/* Account Information */}
-                  <div className="border-t pt-4 mt-6">
+                  <div className="pt-3 mt-3 border-t">
                     <div>
-                      <div className="mb-2">
-                        <p className="text-sm text-muted-foreground">
-                          Logged in as: <span className="font-medium">{currentUser?.email}</span>
-                        </p>
-                      </div>
+                      <p className="text-xs text-muted-foreground mb-1">Logged in as:</p>
+                      <p className="text-sm font-medium mb-2 truncate">{currentUser?.email}</p>
                       
                       <button
                         onClick={signOut}
-                        className="w-full py-2 px-4 rounded-md bg-red-600 text-white font-medium hover:bg-red-700 transition-colors"
+                        className="w-full py-1.5 px-4 rounded-md bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors"
                       >
                         Sign Out
                       </button>
@@ -1462,7 +1613,7 @@ export default function Popup() {
                 
                 <Button
                   className="w-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 hover:from-blue-600 hover:via-purple-600 hover:to-pink-600 text-white font-medium py-3 rounded-xl shadow-lg transform transition duration-200 hover:scale-105 mb-3"
-                  onClick={() => setCurrentView('games')}
+                  onClick={() => handleShowGames()}
                   disabled={words.length < 4}
                   title={words.length < 4 ? "Need at least 4 words to practice with games" : ""}
                 >
@@ -1614,12 +1765,39 @@ export default function Popup() {
         
         <footer className="popup-footer">
           <p className="text-xs text-muted-foreground text-center">
-            Last active: {stats.lastActive ? format(new Date(stats.lastActive), 'PPP') : 'Never'}
+            Last active: {stats.lastActive ? safeFormatDate(stats.lastActive, 'PPP') : 'Never'}
           </p>
         </footer>
       </div>
     );
   }
+
+  /**
+   * ==============================================
+   * SIDE EFFECTS
+   * ==============================================
+   */
+
+  /**
+   * התאמת תימה כהה/בהירה באלמנט HTML
+   */
+  useEffect(() => {
+    const html = document.documentElement;
+    if (settings.darkMode) {
+      html.classList.add('dark');
+      html.classList.remove('light');
+    } else {
+      html.classList.add('light');
+      html.classList.remove('dark');
+    }
+  }, [settings.darkMode]);
+
+  /**
+   * הגדרת שפת מסמך ל-en-US עבור בוחרי תאריכים
+   */
+  useEffect(() => {
+    document.documentElement.lang = 'en-US';
+  }, []);
 
   return (
     <>
@@ -1628,17 +1806,20 @@ export default function Popup() {
   );
 }
 
-// Add WordCard component
-interface WordCardProps {
-  word: Word;
-  onEdit: (word: Word) => void;
-  onDelete: () => void;
-}
-
+/**
+ * ==============================================
+ * WORD CARD COMPONENT
+ * ==============================================
+ * 
+ * קומפוננטה להצגת כרטיס מילה בודד, עם אפשרויות עריכה ומחיקה
+ */
 function WordCard({ word, onEdit, onDelete }: WordCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editedWord, setEditedWord] = useState(word);
 
+  /**
+   * שמירת המילה לאחר עריכה
+   */
   const handleSave = () => {
     try {
       if (!chrome?.runtime?.id) {
@@ -1711,6 +1892,9 @@ function WordCard({ word, onEdit, onDelete }: WordCardProps) {
     }
   };
 
+  /**
+   * עדכון שפת המקור של המילה
+   */
   const handleLanguageChange = (value: string) => {
     setEditedWord({
       ...editedWord,
@@ -1722,6 +1906,7 @@ function WordCard({ word, onEdit, onDelete }: WordCardProps) {
     });
   };
 
+  // תצוגת מצב עריכה
   if (isEditing) {
     return (
       <Card className="word-card">
@@ -1765,13 +1950,14 @@ function WordCard({ word, onEdit, onDelete }: WordCardProps) {
             className="language-select"
           />
           <span className="text-xs text-muted-foreground">
-            {word.timestamp ? format(new Date(word.timestamp), 'MMM d, yyyy') : 'Just added'}
+            {word.timestamp ? safeFormatDate(word.timestamp, 'MMM d, yyyy') : 'Just added'}
           </span>
         </div>
       </Card>
     );
   }
 
+  // תצוגת מצב רגיל
   return (
     <Card className="word-card">
       <div className="word-header">
@@ -1789,7 +1975,7 @@ function WordCard({ word, onEdit, onDelete }: WordCardProps) {
           {LANGUAGE_MAP[word.sourceLanguage as keyof typeof LANGUAGE_MAP] || word.sourceLanguage}
         </span>
         <span className="text-xs text-muted-foreground">
-          {word.timestamp ? format(new Date(word.timestamp), 'MMM d, yyyy') : 'Just added'}
+          {word.timestamp ? safeFormatDate(word.timestamp, 'MMM d, yyyy') : 'Just added'}
         </span>
       </div>
     </Card>

@@ -18,6 +18,7 @@ export interface ChatMessage {
  */
 export interface ChatConversation {
   conversationId: string;
+  id?: string;
   videoId: string;
   videoTitle: string;
   videoURL: string;

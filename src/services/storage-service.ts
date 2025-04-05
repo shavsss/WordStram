@@ -6,105 +6,26 @@
 import { Note } from '@/features/notes/types';
 import { getCurrentUser } from '@/core/firebase/auth';
 import * as FirestoreService from '@/core/firebase/firestore';
+import AuthManager from '@/core/auth-manager';
 
 /**
  * Check if user is authenticated from multiple sources
- * @throws Error if user is not authenticated
+ * @returns Promise resolving to boolean indicating if user is authenticated
  */
-async function requireAuth(): Promise<void> {
-  // בדיקת האימות מ-Firebase
-  const user = getCurrentUser();
-  if (user) {
-    // אם המשתמש מאומת, עדכן את המידע בחלון
-    if (typeof window !== 'undefined') {
-      // שמור מידע אימות בחלון
-      if (!window.WordStream) {
-        window.WordStream = {};
-      }
-      window.WordStream.isAuthenticated = true;
-      window.WordStream.currentUser = user;
-      
-      // שמור גם ב-localStorage למקרה של רענון
-      try {
-        localStorage.setItem('wordstream_auth_state', 'authenticated');
-        // שמור מידע מינימלי על המשתמש (לא את כל האובייקט)
-        localStorage.setItem('wordstream_user_info', JSON.stringify({
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName
-        }));
-      } catch (storageErr) {
-        console.warn('WordStream Storage: Error saving auth to localStorage:', storageErr);
-      }
+async function requireAuth(): Promise<boolean> {
+  try {
+    // בדיקה מהירה עם AuthManager
+    if (AuthManager.isAuthenticated()) {
+      return true;
     }
     
-    // שמור גם באחסון מקומי של התוסף
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      try {
-        await chrome.storage.local.set({
-          'isAuthenticated': true,
-          'userInfo': {
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName
-          },
-          'lastAuthCheck': new Date().toISOString()
-        });
-        console.log('WordStream Storage: Saved auth state to chrome.storage.local');
-      } catch (chromeErr) {
-        console.warn('WordStream Storage: Error saving auth to chrome storage:', chromeErr);
-      }
-    }
-    
-    return; // המשתמש מאומת!
+    // אם לא מצאנו משתמש מיידית, ננסה לבדוק באחסון (פעולה אסינכרונית)
+    const user = await AuthManager.checkStorageAuth();
+    return !!user;
+  } catch (error) {
+    console.warn('WordStream: Auth check error:', error);
+    return false;
   }
-  
-  // בדיקת האימות מ-window object (עובד בתסריט תוכן)
-  if (typeof window !== 'undefined' && window.WordStream?.isAuthenticated === true) {
-    console.log('WordStream Storage: Found authenticated status in window object');
-    return;
-  }
-  
-  // בדיקת האימות מאחסון מקומי
-  let isAuthenticatedInStorage = false;
-  
-  // בדיקה ב-localStorage
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const authState = localStorage.getItem('wordstream_auth_state');
-      if (authState === 'authenticated') {
-        console.log('WordStream Storage: Found authenticated status in localStorage');
-        isAuthenticatedInStorage = true;
-      }
-    } catch (localErr) {
-      console.warn('WordStream Storage: Error checking localStorage auth:', localErr);
-    }
-  }
-  
-  // בדיקה ב-chrome.storage.local
-  if (!isAuthenticatedInStorage && typeof chrome !== 'undefined' && chrome.storage?.local) {
-    try {
-      const result = await new Promise<{isAuthenticated?: boolean}>((resolve) => {
-        chrome.storage.local.get('isAuthenticated', (data) => {
-          resolve(data);
-        });
-      });
-      
-      if (result.isAuthenticated === true) {
-        console.log('WordStream Storage: Found authenticated status in chrome.storage.local');
-        isAuthenticatedInStorage = true;
-      }
-    } catch (chromeErr) {
-      console.warn('WordStream Storage: Error checking chrome storage auth:', chromeErr);
-    }
-  }
-  
-  if (isAuthenticatedInStorage) {
-    return; // מצאנו מצב אימות חיובי באחסון כלשהו
-  }
-  
-  // אם הגענו לכאן, המשתמש לא מאומת בשום מקור
-  throw new Error('Authentication required');
 }
 
 /**
@@ -115,7 +36,11 @@ async function requireAuth(): Promise<void> {
 export async function getNotes(videoId: string): Promise<Note[]> {
   try {
     // בדיקת אימות מחמירה לפני טעינת הערות
-    await requireAuth();
+    const isAuth = await requireAuth();
+    if (!isAuth) {
+      console.warn('WordStream: Cannot load notes - no authenticated user');
+      return [];
+    }
     
     return await FirestoreService.getNotes(videoId);
   } catch (error) {
@@ -131,10 +56,19 @@ export async function getNotes(videoId: string): Promise<Note[]> {
  * @returns Promise resolving to boolean indicating success
  */
 export async function saveNotes(videoId: string, notes: Note[]): Promise<boolean> {
-  // This function is not used with Firebase as we save notes individually
-  // But we still require authentication for consistency
-  await requireAuth();
-  return true;
+  try {
+    // בדיקת אימות לפני שמירת הערות
+    const isAuth = await requireAuth();
+    if (!isAuth) {
+      console.warn('WordStream: Cannot save notes - no authenticated user');
+      return false;
+    }
+    
+    return true; // This function is not used with Firebase as we save notes individually
+  } catch (error) {
+    console.error('WordStream: Failed to save notes:', error);
+    return false;
+  }
 }
 
 /**
@@ -151,9 +85,13 @@ export async function deleteNote(
 ): Promise<Note[]> {
   // בדיקת אימות מחמירה לפני מחיקת הערה
   try {
-    await requireAuth();
+    const isAuth = await requireAuth();
+    if (!isAuth) {
+      console.warn('WordStream: Cannot delete note - no authenticated user');
+      return currentNotes;
+    }
     
-    const success = await FirestoreService.deleteNote(noteId, videoId);
+    const success = await FirestoreService.deleteNote(noteId);
     if (success) {
       // Filter locally to avoid another network request
       return currentNotes.filter(note => note.id !== noteId);
@@ -181,17 +119,23 @@ export async function addNote(
 ): Promise<Note[]> {
   // בדיקת אימות מחמירה לפני הוספת הערה חדשה
   try {
-    await requireAuth();
+    const isAuth = await requireAuth();
+    if (!isAuth) {
+      console.warn('WordStream: Cannot add note - no authenticated user');
+      return currentNotes;
+    }
     
     const timestamp = new Date().toISOString();
     
     const newNoteData = {
       content: content.trim(),
       timestamp,
-      videoTime: currentTime
+      videoTime: currentTime,
+      videoId
     };
     
-    const savedNote = await FirestoreService.saveNote(newNoteData, videoId);
+    const savedNote = await FirestoreService.saveNote(newNoteData);
+    
     if (savedNote) {
       // If savedNote is a string (ID), then return the note with the ID assigned
       const noteWithId = typeof savedNote === 'string' 

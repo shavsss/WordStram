@@ -9,6 +9,7 @@ import { normalizeLanguageCode, LANGUAGE_MAP } from './shared/language-map';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { FloatingControls } from '@/components/floating-controls/FloatingControls';
+import { safeDate } from '@/utils/date-utils';
 
 interface StorageResult {
   settings?: {
@@ -396,7 +397,7 @@ export class YouTubeCaptionDetector implements CaptionDetector {
           if (wordsToSave.length > MAX_WORDS) {
             console.log(`WordStream: Too many saved words (${wordsToSave.length}), removing oldest`);
             // מיון המילים לפי timestamp (מהישן לחדש)
-            wordsToSave.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            wordsToSave.sort((a, b) => safeDate(a.timestamp).getTime() - safeDate(b.timestamp).getTime());
             // השאר רק את ה-MAX_WORDS המילים החדשות ביותר
             wordsToSave = wordsToSave.slice(-MAX_WORDS);
           }

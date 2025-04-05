@@ -11,15 +11,8 @@ export async function syncNotesBetweenStorageAndFirestore(): Promise<boolean> {
   try {
     console.log('WordStream: Syncing notes between storage and Firestore');
     
-    // This function should be implemented with:
-    // 1. Loading notes from local storage
-    // 2. Loading notes from Firestore
-    // 3. Comparing timestamps for conflict resolution
-    // 4. Merging data as needed
-    // 5. Updating both storage systems with merged data
-    
-    // For now, just ensure the function returns a boolean
-    await FirestoreService.syncNotesBetweenStorageAndFirestore();
+    // Use the new generic sync function with 'notes' type
+    await FirestoreService.syncBetweenStorageAndFirestore('notes');
     return true;
   } catch (error) {
     console.error('WordStream: Error syncing notes:', error);
@@ -35,15 +28,9 @@ export async function syncChatsBetweenStorageAndFirestore(): Promise<boolean> {
   try {
     console.log('WordStream: Syncing chats between storage and Firestore');
     
-    // This function should be implemented with:
-    // 1. Loading chats from local storage
-    // 2. Loading chats from Firestore
-    // 3. Comparing timestamps for conflict resolution 
-    // 4. Merging data as needed
-    // 5. Updating both storage systems with merged data
-    
-    // For now, just delegate to the Firebase service
-    return await FirestoreService.syncChatsBetweenStorageAndFirestore();
+    // Use the new generic sync function with 'chats' type
+    await FirestoreService.syncBetweenStorageAndFirestore('chats');
+    return true;
   } catch (error) {
     console.error('WordStream: Error syncing chats:', error);
     return false;
@@ -58,20 +45,17 @@ export async function syncAllData(): Promise<boolean> {
   try {
     console.log('WordStream: Starting comprehensive data sync');
     
-    // Sync videos
-    const videosResult = await FirestoreService.syncVideosToLocalStorage();
-    console.log('WordStream: Videos sync result:', videosResult);
-    
-    // Sync chats
-    await FirestoreService.syncChatsBetweenStorageAndFirestore();
+    // Sync all data types using the generic sync function
+    await FirestoreService.syncBetweenStorageAndFirestore('chats');
     console.log('WordStream: Chats sync completed');
     
-    // Sync notes
-    await FirestoreService.syncNotesBetweenStorageAndFirestore();
+    await FirestoreService.syncBetweenStorageAndFirestore('notes');
     console.log('WordStream: Notes sync completed');
     
-    // Return overall success (assuming videos result is a boolean)
-    return !!videosResult;
+    await FirestoreService.syncBetweenStorageAndFirestore('words');
+    console.log('WordStream: Words sync completed');
+    
+    return true;
   } catch (error) {
     console.error('WordStream: Error during data sync:', error);
     return false;
@@ -92,12 +76,11 @@ export async function syncVideoData(videoId: string): Promise<boolean> {
   try {
     console.log(`WordStream: Starting sync for video ${videoId}`);
     
-    // Execute sync operations
-    // Note: We don't pass videoId as it seems the API doesn't accept parameters
-    await FirestoreService.syncNotesBetweenStorageAndFirestore();
+    // Sync all data types that could be related to a video
+    await FirestoreService.syncBetweenStorageAndFirestore('notes');
     console.log(`WordStream: Notes sync completed for video ${videoId}`);
     
-    await FirestoreService.syncChatsBetweenStorageAndFirestore();
+    await FirestoreService.syncBetweenStorageAndFirestore('chats');
     console.log(`WordStream: Chats sync completed for video ${videoId}`);
     
     return true;

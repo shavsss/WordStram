@@ -7,6 +7,19 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/core/firebase/config';
 import { initializeApp } from "firebase/app";
 import { getAuth, User, Auth, signInWithCredential, GoogleAuthProvider, UserCredential } from "firebase/auth";
+import { 
+  initializeFirestoreSync, 
+  syncBetweenStorageAndFirestore, 
+  migrateStorageDataToFirestore, 
+  checkIfMigrationNeeded,
+  saveWord,
+  saveChat,
+  deleteWord,
+  deleteChat,
+  saveNote,
+  deleteNote,
+  saveUserStats
+} from '@/core/firebase/firestore';
 
 // Authentication support - removed onSignInChanged as it's not available in chrome.identity
 
@@ -72,9 +85,45 @@ function setupAuthListener() {
     // שמירת מצב האימות ב-storage.local לגישה אמינה וקבועה
     chrome.storage.local.set({ isAuthenticated });
     
+    // Initialize Firestore sync when user is authenticated
+    if (isAuthenticated && user) {
+      // Initialize the two-way sync
+      initializeFirestoreSync();
+      
+      // Check if we need to migrate data
+      checkAndMigrateData(user.uid);
+    }
+    
     // שידור מצב האימות לכל תבי התוכן הפתוחים
     broadcastAuthStateChange();
   });
+}
+
+// Check if data migration is needed and perform it if necessary
+async function checkAndMigrateData(userId: string) {
+  try {
+    const needsMigration = await checkIfMigrationNeeded();
+    
+    if (needsMigration) {
+      console.log('WordStream Background: Data migration needed, starting migration process');
+      const migrationResult = await migrateStorageDataToFirestore();
+      
+      if (migrationResult) {
+        console.log('WordStream Background: Data migration completed successfully');
+        // Notify all windows/tabs about the successful migration
+        chrome.runtime.sendMessage({ 
+          action: 'DATA_MIGRATION_COMPLETED',
+          success: true
+        }).catch(() => {/* Ignore errors for inactive contexts */});
+      } else {
+        console.error('WordStream Background: Data migration failed');
+      }
+    } else {
+      console.log('WordStream Background: No data migration needed');
+    }
+  } catch (error) {
+    console.error('WordStream Background: Error checking/performing data migration', error);
+  }
 }
 
 // פונקציה לשידור מצב האימות לכל תבי התוכן
@@ -104,6 +153,63 @@ async function broadcastAuthStateChange() {
 // Handle messages from content scripts and popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('WordStream: Background script received message:', request.action || request.type);
+  
+  // Handle Firestore data operations
+  if (request.action === 'SAVE_WORD') {
+    handleSaveWord(request.wordData)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'DELETE_WORD') {
+    handleDeleteWord(request.wordId)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'SAVE_CHAT') {
+    handleSaveChat(request.chatData)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'DELETE_CHAT') {
+    handleDeleteChat(request.chatId)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'SAVE_NOTE') {
+    handleSaveNote(request.noteData, request.videoId)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'DELETE_NOTE') {
+    handleDeleteNote(request.noteId)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'SAVE_STATS') {
+    handleSaveStats(request.statsData)
+      .then(response => sendResponse(response))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
+  
+  if (request.action === 'SYNC_DATA') {
+    syncBetweenStorageAndFirestore()
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
+    return true;
+  }
   
   // New handler for getting auth state
   if (request.action === 'GET_AUTH_STATE') {
@@ -243,6 +349,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ isAuthenticated });
     return true;
   }
+
+  // If no handlers matched
+  return false;
 });
 
 // Handle Google authentication - simplified approach
@@ -702,7 +811,136 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
   }
 }
 
-// אתחול מאזין האימות בעת הפעלת התוסף
+// Initialize the auth listener
 setupAuthListener();
 
-// ... existing code ... 
+// Handle saving word to Firestore
+async function handleSaveWord(wordData: any): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    if (!wordData || !wordData.originalWord) {
+      return { success: false, error: 'Invalid word data' };
+    }
+    
+    const wordId = await saveWord(wordData);
+    
+    if (wordId) {
+      return { success: true, id: wordId };
+    } else {
+      return { success: false, error: 'Failed to save word' };
+    }
+  } catch (error) {
+    console.error('WordStream: Error saving word:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle deleting word from Firestore
+async function handleDeleteWord(wordId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!wordId) {
+      return { success: false, error: 'Invalid word ID' };
+    }
+    
+    const result = await deleteWord(wordId);
+    
+    return { success: result };
+  } catch (error) {
+    console.error('WordStream: Error deleting word:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle saving chat to Firestore
+async function handleSaveChat(chatData: any): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    if (!chatData || !chatData.conversationId) {
+      return { success: false, error: 'Invalid chat data' };
+    }
+    
+    const chatId = await saveChat(chatData);
+    
+    if (chatId) {
+      return { success: true, id: chatId };
+    } else {
+      return { success: false, error: 'Failed to save chat' };
+    }
+  } catch (error) {
+    console.error('WordStream: Error saving chat:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle deleting chat from Firestore
+async function handleDeleteChat(chatId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!chatId) {
+      return { success: false, error: 'Invalid chat ID' };
+    }
+    
+    const result = await deleteChat(chatId);
+    
+    return { success: result };
+  } catch (error) {
+    console.error('WordStream: Error deleting chat:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle saving note to Firestore
+async function handleSaveNote(noteData: any, videoId: string): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    if (!noteData || !videoId) {
+      return { success: false, error: 'Invalid note data or video ID' };
+    }
+    
+    // Merge videoId into noteData
+    const noteWithVideoId = {
+      ...noteData,
+      videoId
+    };
+    
+    const noteId = await saveNote(noteWithVideoId);
+    
+    if (noteId) {
+      return { success: true, id: noteId };
+    } else {
+      return { success: false, error: 'Failed to save note' };
+    }
+  } catch (error) {
+    console.error('WordStream: Error saving note:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle deleting note from Firestore
+async function handleDeleteNote(noteId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!noteId) {
+      return { success: false, error: 'Invalid note ID' };
+    }
+    
+    const result = await deleteNote(noteId);
+    
+    return { success: result };
+  } catch (error) {
+    console.error('WordStream: Error deleting note:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+
+// Handle saving stats to Firestore
+async function handleSaveStats(statsData: any): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!statsData) {
+      return { success: false, error: 'Invalid stats data' };
+    }
+    
+    const result = await saveUserStats(statsData);
+    
+    return { success: result };
+  } catch (error) {
+    console.error('WordStream: Error saving stats:', error);
+    return { success: false, error: safeStringifyError(error) };
+  }
+}
+

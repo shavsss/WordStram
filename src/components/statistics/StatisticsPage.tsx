@@ -15,6 +15,7 @@ import {
   TrendingUp
 } from 'lucide-react';
 import { getLanguageName, LanguageCode } from '../../config/supported-languages';
+import { safeDate, safeFormatDate } from '@/utils/date-utils';
 
 // Simple Tabs components since we don't have @/components/ui/tabs
 interface TabsProps {
@@ -605,8 +606,8 @@ export function StatisticsPage({ onBack, showGames }: StatisticsPageProps) {
         
         if (wordsMap.has(key)) {
           const existingWord = wordsMap.get(key);
-          const existingTime = new Date(existingWord.timestamp).getTime();
-          const currentTime = new Date(word.timestamp).getTime();
+          const existingTime = safeDate(existingWord.timestamp).getTime();
+          const currentTime = safeDate(word.timestamp).getTime();
           
           if (currentTime > existingTime) {
             wordsMap.set(key, word);
@@ -684,37 +685,37 @@ export function StatisticsPage({ onBack, showGames }: StatisticsPageProps) {
 
   // Calculate streak based on last active date
   const calculateStreak = (stats: any): number => {
-    if (!stats || !stats.lastActive) return 0;
-    
-    const today = new Date();
-    const lastActive = new Date(stats.lastActive);
-    
-    // Reset time parts to compare just the dates
-    const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const lastActiveDate = new Date(lastActive.getFullYear(), lastActive.getMonth(), lastActive.getDate());
-    
-    // Calculate difference in days
-    const diffTime = Math.abs(todayDate.getTime() - lastActiveDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    // If last active was today, maintain streak
-    if (diffDays === 0) {
-      return stats.streak || 1; // Ensure streak is at least 1 if active today
+    try {
+      if (!stats || !stats.lastActive) return 0;
+      
+      // Get today's date without time part
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      // Get the last active date without time part
+      const lastActive = safeDate(stats.lastActive);
+      lastActive.setHours(0, 0, 0, 0);
+      
+      // If last active is today, maintain the current streak
+      if (lastActive.getTime() === today.getTime()) {
+        return stats.streak || 0;
+      }
+      
+      // Check if last active was yesterday
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      if (lastActive.getTime() === yesterday.getTime()) {
+        // Last active was yesterday, increment streak
+        return (stats.streak || 0) + 1;
+      } else {
+        // Last active was before yesterday, reset streak
+        return 0;
+      }
+    } catch (error) {
+      console.warn('WordStream: Error calculating streak:', error);
+      return 0;
     }
-    
-    // If last active was yesterday, increment streak
-    if (diffDays === 1 && lastActiveDate < todayDate) {
-      return (stats.streak || 0) + 1;
-    }
-    
-    // If last active was more than 1 day ago, check if stats.streak was already set
-    // If it was set and we're on a new day, start a new streak at 1
-    if (diffDays > 1) {
-      return 1; // Reset to 1 (not 0) since viewing stats counts as activity for today
-    }
-    
-    // Default case - return existing streak or start at 1
-    return stats.streak || 1;
   };
 
   // Get most played game
@@ -835,7 +836,7 @@ export function StatisticsPage({ onBack, showGames }: StatisticsPageProps) {
     return words.filter(word => {
       if (!word.timestamp) return false;
       
-      const wordDate = new Date(word.timestamp);
+      const wordDate = safeDate(word.timestamp);
       wordDate.setHours(0, 0, 0, 0);
       
       return wordDate.getTime() === today.getTime();
@@ -943,7 +944,7 @@ export function StatisticsPage({ onBack, showGames }: StatisticsPageProps) {
               <div className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">{stats.streak}</div>
               <div className="mt-1.5 text-sm text-slate-500 dark:text-white/60 flex items-center">
                 <Calendar size={14} className="mr-1 text-orange-500 dark:text-orange-400" />
-                {format(new Date(stats.lastActive), 'PP')}
+                {safeFormatDate(stats.lastActive, 'PP')}
               </div>
             </div>
           </div>

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Note, UseVideoNotesOptions, NoteSyncResult } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import * as FirestoreService from '@/core/firebase/firestore';
 
 /**
  * Custom hook for managing video notes
@@ -158,6 +159,58 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
     };
   }, [syncNotesWithFirestore]);
   
+  // Add a new effect to listen for broadcast messages
+  useEffect(() => {
+    // Function to handle incoming messages
+    const handleMessage = (event: MessageEvent) => {
+      // Ignore messages without data
+      if (!event.data) return;
+      
+      try {
+        const message = event.data;
+        
+        // Handle note deletion messages
+        if (message.action === 'NOTE_DELETED' && message.noteId) {
+          console.log('WordStream: Received broadcast for note deletion:', message.noteId);
+          
+          // Update notes by filtering out the deleted note
+          setNotes(currentNotes => currentNotes.filter(note => note.id !== message.noteId));
+        }
+        
+        // Handle note added messages (could be implemented in the future)
+        if (message.action === 'NOTE_ADDED' && message.note && message.note.videoId === videoId) {
+          console.log('WordStream: Received broadcast for new note');
+          
+          // Add the new note to the list if it's for this video
+          setNotes(currentNotes => {
+            // Avoid duplicate notes
+            if (currentNotes.some(note => note.id === message.note.id)) {
+              return currentNotes;
+            }
+            return [...currentNotes, message.note];
+          });
+        }
+        
+        // Handle sync messages
+        if (message.action === 'NOTES_SYNCED' && message.videoId === videoId) {
+          console.log('WordStream: Received notes sync broadcast');
+          // Reload notes when a sync event occurs
+          loadNotes();
+        }
+      } catch (error) {
+        console.error('WordStream: Error handling broadcast message in notes hook:', error);
+      }
+    };
+    
+    // Add event listener for messages
+    window.addEventListener('message', handleMessage);
+    
+    // Clean up event listener
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [videoId, loadNotes]);
+  
   // Save the current note
   const saveNote = useCallback(async () => {
     if (!videoId || !currentNote.trim()) return null;
@@ -191,13 +244,42 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
       // Update global object
       updateGlobalWordStream(videoId, updatedNotes);
       
+      // Save to Firestore directly using the improved saveNote function
+      try {
+        if (isOnline) {
+          // Dynamically import the saveNote function from Firestore
+          const { saveNote: saveNoteToFirestore } = await import('@/core/firebase/firestore');
+          
+          // Convert our Note to the format expected by Firestore
+          const firestoreNote = {
+            id: newNote.id,
+            content: newNote.content,
+            timestamp: newNote.timestamp,
+            videoTime: newNote.videoTime,
+            videoId: newNote.videoId,
+            videoTitle: document.title || 'Unknown video' // Try to include the video title
+          };
+          
+          // Save to Firestore עם אובייקט אחד בלבד
+          const result = await saveNoteToFirestore(firestoreNote);
+          console.log('WordStream: Note saved to Firestore with result:', result);
+          
+          // Broadcast the addition
+          if (typeof window !== 'undefined') {
+            window.postMessage({
+              action: 'NOTE_ADDED',
+              note: newNote,
+              videoId
+            }, '*');
+          }
+        }
+      } catch (firestoreError) {
+        console.error('WordStream: Error saving note to Firestore:', firestoreError);
+        // Don't throw here, we've already saved to local storage so this shouldn't fail the operation
+      }
+      
       // Clear the current note
       setCurrentNote('');
-      
-      // If online, sync to Firestore
-      if (isOnline) {
-        await syncNotesWithFirestore();
-      }
       
       return newNote;
     } catch (err) {
@@ -207,51 +289,7 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
     } finally {
       setIsSaving(false);
     }
-  }, [videoId, currentNote, currentVideoTime, notes, isOnline, updateGlobalWordStream, syncNotesWithFirestore]);
-  
-  // Function to add a new note
-  const addNote = useCallback(async (content: string) => {
-    if (!videoId) return null;
-    
-    const newNote: Note = {
-      id: uuidv4(),
-      content,
-      timestamp: new Date().toISOString(),
-      videoTime: currentVideoTime || 0,
-      videoId
-    };
-    
-    try {
-      // Update state with new note
-      const updatedNotes = [...notes, newNote];
-      setNotes(updatedNotes);
-      
-      // Save to local storage
-      await new Promise<void>((resolve, reject) => {
-        chrome.storage.local.set({ ['notes_' + videoId]: updatedNotes }, () => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError.message);
-          } else {
-            resolve();
-          }
-        });
-      });
-      
-      // Update global object
-      updateGlobalWordStream(videoId, updatedNotes);
-      
-      // If online, sync to Firestore
-      if (isOnline) {
-        await syncNotesWithFirestore();
-      }
-      
-      return newNote;
-    } catch (err) {
-      console.error('Error adding note:', err);
-      setError('Failed to save note. Please try again.');
-      return null;
-    }
-  }, [videoId, notes, currentVideoTime, isOnline, updateGlobalWordStream, syncNotesWithFirestore]);
+  }, [videoId, currentNote, currentVideoTime, notes, isOnline, updateGlobalWordStream]);
   
   // Function to delete a note
   const deleteNote = useCallback(async (noteId: string) => {
@@ -276,9 +314,22 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
       // Update global object
       updateGlobalWordStream(videoId, updatedNotes);
       
-      // If online, sync deletion to Firestore
-      if (isOnline) {
-        await syncNotesWithFirestore();
+      // Delete from Firestore directly
+      try {
+        if (isOnline) {
+          // Dynamically import the deleteNote function from Firestore
+          const { deleteNote: deleteNoteFromFirestore } = await import('@/core/firebase/firestore');
+          
+          // Delete from Firestore
+          const result = await deleteNoteFromFirestore(noteId, videoId);
+          console.log('WordStream: Note deleted from Firestore with result:', result);
+          
+          // Note: We don't need to broadcast here as the Firestore deleteNote function 
+          // already does that, and we're already filtering out the note from local state
+        }
+      } catch (firestoreError) {
+        console.error('WordStream: Error deleting note from Firestore:', firestoreError);
+        // Don't throw here, we've already deleted from local storage
       }
       
       return true;
@@ -287,7 +338,7 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
       setError('Failed to delete note. Please try again.');
       return false;
     }
-  }, [videoId, notes, isOnline, updateGlobalWordStream, syncNotesWithFirestore]);
+  }, [videoId, notes, isOnline, updateGlobalWordStream]);
   
   // Function to update a note
   const updateNote = useCallback(async (noteId: string, content: string) => {
@@ -357,7 +408,7 @@ export function useVideoNotes({ videoId, currentTime }: UseVideoNotesOptions) {
     error,
     isOnline,
     lastSyncTime,
-    addNote,
+    addNote: saveNote,
     deleteNote,
     updateNote,
     syncNotesWithFirestore,

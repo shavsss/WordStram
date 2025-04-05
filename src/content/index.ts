@@ -2395,7 +2395,7 @@ function createGeminiPanel2() {
       console.log('[WordStream] Saving chat for unified storage...');
       const timestamp = new Date().toISOString();
       const videoURL = window.location.href;
-      const conversationId = `chat_${videoId}_${Date.now()}`;
+      const chatId = `chat_${videoId}_${Date.now()}`;
       
       // Create message objects
       const messages = [
@@ -2422,9 +2422,9 @@ function createGeminiPanel2() {
         const chatsStorage = result.chats_storage || {};
         const videoChatsMap = result.video_chats_map || {};
         
-        // עדכון נתוני השיחה
-        chatsStorage[conversationId] = {
-          conversationId,
+        // עדכון נתוני השיחה - משתמש ב-id כמזהה העיקרי בהתאם למבנה החדש
+        chatsStorage[chatId] = {
+          id: chatId, // השתמש ב-id במקום conversationId לתאימות עם פונקציית saveChat
           videoId,
           videoTitle,
           videoURL,
@@ -2437,9 +2437,9 @@ function createGeminiPanel2() {
           videoChatsMap[videoId] = [];
         }
         
-        // וודא שה-conversationId נמצא במיפוי
-        if (!videoChatsMap[videoId].includes(conversationId)) {
-          videoChatsMap[videoId].push(conversationId);
+        // וודא שה-chatId נמצא במיפוי
+        if (!videoChatsMap[videoId].includes(chatId)) {
+          videoChatsMap[videoId].push(chatId);
         }
         
         // Save back to storage
@@ -2450,24 +2450,31 @@ function createGeminiPanel2() {
           if (chrome.runtime.lastError) {
             console.error('[WordStream] Error saving unified chat storage:', chrome.runtime.lastError);
           } else {
-            console.log('[WordStream] Chat saved to unified storage successfully, conversationId:', conversationId);
+            console.log('[WordStream] Chat saved to unified storage successfully, chatId:', chatId);
             
             // Also save to Firestore if it's available
             import('@/core/firebase/firestore').then(FirestoreService => {
+              console.log('[WordStream] Firestore module loaded, saving chat to Firebase...');
+              
+              // עדכון המבנה לפי המבנה החדש שמצפים בפונקציית saveChat
               const chatData = {
-                conversationId,
+                id: chatId, // השתמש ב-id במקום conversationId
                 videoId,
                 videoTitle,
                 videoURL,
-                messages
+                messages,
+                timestamp: timestamp, // הוסף שדה timestamp מפורש
+                updatedAt: new Date().toISOString() // הוסף שדה updatedAt מפורש
               };
               
+              console.log('[WordStream] Preparing to save chat data to Firestore:', chatData);
+              
               FirestoreService.saveChat(chatData)
-                .then(chatId => {
-                  if (chatId) {
-                    console.log('[WordStream] Chat also saved to Firestore successfully');
+                .then(savedChatId => {
+                  if (savedChatId) {
+                    console.log('[WordStream] Chat successfully saved to Firestore with ID:', savedChatId);
                   } else {
-                    console.error('[WordStream] Failed to save chat to Firestore');
+                    console.error('[WordStream] Failed to save chat to Firestore - no ID returned');
                   }
                 })
                 .catch(err => {
@@ -3805,7 +3812,7 @@ function createNotesPanel() {
         
         // אייקון ירח בלבד, ללא טקסט
         themeButton.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>';
-      } else {
+                  } else {
         panel.classList.remove('light-mode');
         panel.classList.add('dark-mode');
         panel.style.backgroundColor = '#121212';

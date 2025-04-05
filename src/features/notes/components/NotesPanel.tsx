@@ -1,484 +1,223 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { NotesPanelProps, SIZES } from '../types';
-import { useVideoNotes } from '../hooks/useVideoNotes';
-import { useDraggablePanel } from '@/hooks/useDraggablePanel';
-import { useBackgroundSync } from '@/hooks/useBackgroundSync';
-import { NoteItem } from './NoteItem';
-import { useAuth } from '@/hooks/useAuth';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { NotesPanelProps } from '../types';
+import { useStore } from '@/hooks/useStore';
+import { formatDate } from '@/utils/helpers';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/Spinner';
 
 /**
- * פאנל הערות משופר עם תמיכה במצב חיבור, שגיאות וסנכרון
+ * פאנל הערות על גבי סרטון
  */
 export function NotesPanel({
   videoId,
   videoTitle,
+  currentTime,
   isVisible,
   onClose,
-  currentTime
 }: NotesPanelProps) {
-  // Authentication check
-  const { isAuthenticated } = useAuth();
-  
-  // Use custom hooks
   const {
     notes,
-    currentNote,
-    setCurrentNote,
-    isSaving,
-    isLoading,
+    videosWithNotes,
+    isSyncing,
     error,
-    currentVideoTime,
-    setCurrentVideoTime,
-    loadNotes,
+    syncAll,
     saveNote,
-    deleteNote,
-    handleJumpToTime,
-    formatVideoTime,
-    forceSynchronize,
-    isOnline,
-    lastSyncTime
-  } = useVideoNotes({ videoId, currentTime });
-  
-  const {
-    sizeOption,
-    position,
-    isDarkMode,
-    handleMouseDown,
-    handleSizeChange,
-    toggleDarkMode
-  } = useDraggablePanel();
-  
-  // Add background sync with 2-minute interval (only when authenticated)
-  const { isSyncing, lastSyncTime: autoSyncTime, forceSync } = useBackgroundSync({
-    enabled: isAuthenticated,
-    intervalMs: 2 * 60 * 1000, // 2 minutes
-    onSyncStart: () => {
-      console.log('WordStream: Background sync started');
-    },
-    onSyncComplete: (success) => {
-      console.log(`WordStream: Background sync completed with status: ${success ? 'success' : 'error'}`);
-      // Reload notes after background sync
-      if (success) {
-        loadNotes();
+    deleteNote
+  } = useStore({ videoId });
+
+  // שמירה של ההערה האחרונה שניווטנו אליה
+  const [lastHighlightedNoteId, setLastHighlightedNoteId] = useState<string | null>(null);
+  const [newNote, setNewNote] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  // התנהגות כאשר הזמן הנוכחי משתנה
+  useEffect(() => {
+    if (currentTime !== undefined) {
+      const currentNotes = notes.filter(note => {
+        if (note.videoTime === undefined) return false;
+        return Math.abs(note.videoTime - currentTime) < 0.5;
+      });
+
+      if (currentNotes.length > 0) {
+        setLastHighlightedNoteId(currentNotes[0].id);
+      } else {
+        setLastHighlightedNoteId(null);
       }
     }
-  });
-  
-  // Refs
-  const containerRef = useRef<HTMLDivElement>(null);
-  const notesContainerRef = useRef<HTMLDivElement>(null);
-  const initialLoadDoneRef = useRef<boolean>(false);
-  
-  // Get current size based on selected option
-  const currentSize = SIZES[sizeOption];
-  
-  // פוקוס על שדה הטקסט בטעינה
+  }, [currentTime, notes]);
+
+  // התחלת טעינה
   useEffect(() => {
-    if (notesContainerRef.current) {
-      notesContainerRef.current.focus();
+    setIsLoading(true);
+    // כאשר יש הערות, סימן שהטעינה הסתיימה
+    if (notes.length > 0 || videosWithNotes.length > 0) {
+      setIsLoading(false);
     }
-  }, []);
-  
-  // עדכון הזמן הנוכחי בסרטון
-  useEffect(() => {
-    if (typeof currentTime === 'number') {
-      setCurrentVideoTime(currentTime);
+  }, [notes.length, videosWithNotes.length]);
+
+  // תזכורת פונקציות עזר עבור פעולות על ההערות
+  const handleDeleteNote = (noteId: string) => {
+    if (window.confirm('האם למחוק הערה זו?')) {
+      deleteNote(noteId);
     }
-  }, [currentTime, setCurrentVideoTime]);
+  };
   
-  // בכל פעם שהפאנל מוצג, נטען את ההערות מחדש
-  useEffect(() => {
-    if (isVisible) {
-      console.log('WordStream: Notes panel is visible, loading notes');
-      
-      // טעינה פעילה של ההערות בכל פעם שהפאנל נפתח
-      loadNotes();
-      
-      // Start tracking current time if we're in the content script
-      const updateCurrentTime = () => {
-        try {
-          const video = document.querySelector('video');
-          if (video) {
-            const time = video.currentTime;
-            setCurrentVideoTime(time);
-          }
-        } catch (err) {
-          console.error('WordStream: Error updating time in notes panel', err);
-        }
-      };
-      
-      // Set up interval to track current time
-      const timeInterval = setInterval(updateCurrentTime, 500);
-      
-      // מסמן שעשינו לפחות טעינה ראשונית אחת
-      initialLoadDoneRef.current = true;
-      
-      // Clean up the interval when the panel is hidden or unmounted
-      return () => {
-        clearInterval(timeInterval);
-      };
+  // סנכרון ידני עם השרת
+  const handleSync = useCallback(() => {
+    syncAll();
+  }, [syncAll]);
+  
+  // הוספת הערה חדשה
+  const handleAddNote = useCallback(() => {
+    if (newNote.trim() && videoId) {
+      saveNote({
+        content: newNote,
+        videoId,
+        videoTime: currentTime,
+      });
+      setNewNote('');
     }
-  }, [isVisible, loadNotes]);
+  }, [newNote, videoId, currentTime, saveNote]);
   
-  // בכל פעם שמזהה ההערה משתנה, נטען את ההערות מחדש
-  useEffect(() => {
-    if (isVisible && initialLoadDoneRef.current && videoId) {
-      console.log('WordStream: Video ID changed, reloading notes for new video');
-      loadNotes();
+  // מקשיד להוספת הערה בלחיצה על אנטר
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleAddNote();
     }
-  }, [videoId, isVisible, loadNotes]);
+  }, [handleAddNote]);
   
-  // בכל פעם שהמשתמש מתחבר או מתנתק, נטען את ההערות מחדש
-  useEffect(() => {
-    if (isVisible && initialLoadDoneRef.current) {
-      console.log('WordStream: Authentication state changed, reloading notes');
-      loadNotes();
-    }
-  }, [isAuthenticated, isVisible, loadNotes]);
-  
-  // Visibility logging
-  useEffect(() => {
-    console.log('WordStream: NotesPanel visibility changed to', isVisible ? 'visible' : 'hidden');
-    if (isVisible) {
-      console.log('WordStream: NotesPanel position:', position);
-    }
-  }, [isVisible, position]);
-  
-  // Don't render if not visible
   if (!isVisible) return null;
   
-  const handleSaveNote = async () => {
-    if (!currentNote.trim() || isSaving) return;
-    
-    // בדיקת אימות נוספת לפני שמירת הערה
-    if (!isAuthenticated) {
-      console.log('WordStream Notes: Save blocked - user not authenticated');
-      return;
-    }
-    
-    try {
-      // Use the saveNote function from the hook with no arguments
-      await saveNote();
-      console.log('WordStream: Note saved successfully');
-    } catch (error) {
-      console.error('WordStream: Error saving note', error);
-    }
-  };
-  
-  const handleDeleteNote = async (noteId: string) => {
-    // בדיקת אימות נוספת לפני מחיקת הערה
-    if (!isAuthenticated) {
-      console.log('WordStream Notes: Delete blocked - user not authenticated');
-      return;
-    }
-    
-    try {
-      console.log('WordStream: Deleting note', noteId);
-      
-      // Use the deleteNote function from the hook with just the ID
-      await deleteNote(noteId);
-    } catch (error) {
-      console.error('WordStream: Error deleting note', error);
-    }
-  };
-  
-  // Force manual sync button handler
-  const handleManualSync = async () => {
-    if (!isAuthenticated) return;
-    await forceSynchronize();
-  };
-  
-  // חישוב מחלקות CSS לפאנל על פי הגודל
-  const panelClasses = cn(
-    'fixed right-4 top-24 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 overflow-hidden flex flex-col transition-all duration-300',
-    {
-      'w-80 h-96': sizeOption === 'small',
-      'w-96 h-[70vh]': sizeOption === 'medium',
-      'w-[32rem] h-[85vh]': sizeOption === 'large',
-    }
-  );
-  
-  // Make formatTimestamp safer by ensuring date conversion works
-  const formatTimestamp = (timestamp: string) => {
-    try {
-      return new Date(timestamp).toLocaleTimeString();
-    } catch (error) {
-      return timestamp;
-    }
-  };
-  
   return (
-    <div 
-      ref={containerRef}
-      className={panelClasses}
-      style={{ 
-        top: `${position.y}px`, 
-        left: `${position.x}px`,
-        zIndex: 9999999,
-      }}
-      aria-label="Video notes panel"
-    >
-      {/* כותרת ולחצנים */}
-      <div 
-        className={cn(
-          "header flex items-center justify-between p-2 border-b",
-          isDarkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
-        )}
-        onMouseDown={handleMouseDown}
-      >
-        <div className="flex items-center">
-          <div className={cn(
-            "text-sm font-medium truncate max-w-[200px]",
-            isDarkMode ? "text-white" : "text-gray-700"
-          )} title={videoTitle}>
-            Notes & Summary
-          </div>
-        </div>
+    <div className="fixed top-0 right-0 h-screen w-80 bg-white shadow-lg flex flex-col z-50">
+      <div className="flex justify-between items-center p-2 border-b">
+        <h3 className="font-bold">{videoTitle || 'הערות'}</h3>
         
-        <div className="flex items-center space-x-1">
-          {/* כפתורי גודל */}
-          <div className="flex items-center space-x-0.5 mr-2">
-            <button
-              onClick={() => handleSizeChange('small')}
-              className={cn(
-                "text-xs px-1 py-0.5 rounded transition-colors",
-                sizeOption === 'small' 
-                  ? (isDarkMode ? "bg-gray-600 text-white" : "bg-gray-300 text-gray-700") 
-                  : (isDarkMode ? "text-gray-400 hover:bg-gray-700" : "text-gray-500 hover:bg-gray-200")
-              )}
-              aria-label="Small size"
+        <div className="flex items-center gap-2">
+          {isSyncing ? (
+            <div className="flex items-center text-xs">
+              <Spinner className="mr-1 h-4 w-4" />
+              <span>מסנכרן...</span>
+            </div>
+          ) : (
+            <Button 
+              size="sm" 
+              variant="outline" 
+              onClick={handleSync}
+              className="text-xs py-0.5 px-2"
             >
-              S
-            </button>
-            <button
-              onClick={() => handleSizeChange('medium')}
-              className={cn(
-                "text-xs px-1 py-0.5 rounded transition-colors",
-                sizeOption === 'medium' 
-                  ? (isDarkMode ? "bg-gray-600 text-white" : "bg-gray-300 text-gray-700") 
-                  : (isDarkMode ? "text-gray-400 hover:bg-gray-700" : "text-gray-500 hover:bg-gray-200")
-              )}
-              aria-label="Medium size"
-            >
-              M
-            </button>
-            <button
-              onClick={() => handleSizeChange('large')}
-              className={cn(
-                "text-xs px-1 py-0.5 rounded transition-colors",
-                sizeOption === 'large' 
-                  ? (isDarkMode ? "bg-gray-600 text-white" : "bg-gray-300 text-gray-700") 
-                  : (isDarkMode ? "text-gray-400 hover:bg-gray-700" : "text-gray-500 hover:bg-gray-200")
-              )}
-              aria-label="Large size"
-            >
-              L
-            </button>
-          </div>
+              סנכרן
+            </Button>
+          )}
           
-          {/* Theme toggle */}
-          <button
-            onClick={toggleDarkMode}
-            className={cn(
-              "p-1 rounded-full",
-              isDarkMode ? "text-gray-400 hover:bg-gray-700" : "text-gray-600 hover:bg-gray-200"
-            )}
-            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {isDarkMode ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            )}
-          </button>
-          
-          {/* כפתור סגירה */}
           <button
             onClick={onClose}
-            className={cn(
-              "p-1 rounded-full",
-              isDarkMode ? "text-gray-400 hover:bg-gray-700" : "text-gray-600 hover:bg-gray-200"
-            )}
-            aria-label="Close notes panel"
+            className="p-1 rounded-full hover:bg-gray-100"
+            aria-label="סגור"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
           </button>
         </div>
       </div>
       
-      {/* סטטוס חיבור */}
-      {!isOnline && (
-        <div className={cn(
-          "p-2 text-xs bg-amber-50 border-b border-amber-100 text-amber-800 flex items-center justify-between"
-        )}>
-          <div className="flex items-center">
-            <svg className="w-4 h-4 mr-1 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <span>You are offline. Changes will sync when you reconnect.</span>
+      <div className="flex-1 overflow-auto p-2">
+        {isLoading ? (
+          <div className="flex justify-center items-center h-full">
+            <Spinner />
           </div>
-        </div>
-      )}
-      
-      {/* הודעת שגיאה */}
-      {error && (
-        <div className={cn(
-          "p-2 text-xs border-l-4 mb-2 flex items-center",
-          isOnline 
-            ? "border-red-500 bg-red-50 text-red-800" 
-            : "border-amber-500 bg-amber-50 text-amber-800"
-        )}>
-          <div className="flex-1">{error}</div>
-          
-          {/* Show manual sync button if offline */}
-          {!isOnline && isAuthenticated && (
-            <button
-              onClick={handleManualSync}
-              className="ml-2 text-xs bg-amber-100 hover:bg-amber-200 px-2 py-0.5 rounded"
-            >
-              Retry
-            </button>
-          )}
-        </div>
-      )}
-      
-      {/* רשימת הערות */}
-      <div 
-        ref={notesContainerRef}
-        className={cn(
-          "flex-grow overflow-y-auto p-3 space-y-3",
-          isDarkMode ? "bg-gray-900" : "bg-white"
-        )}
-      >
-        {isLoading && (
-          <div className={cn(
-            "flex justify-center items-center p-4",
-            isDarkMode ? "text-gray-400" : "text-gray-500"
-          )}>
-            <Spinner className="h-8 w-8 text-blue-500" />
-          </div>
-        )}
-        
-        {!isLoading && notes.length > 0 ? (
-          <div className="space-y-2.5">
-            {notes.map((note) => (
-              <NoteItem
-                key={note.id}
-                note={note}
-                onDelete={handleDeleteNote}
-                onJumpToTime={handleJumpToTime}
-                formatVideoTime={formatVideoTime}
-                isDarkMode={isDarkMode}
-              />
-            ))}
-          </div>
-        ) : !isLoading && (
-          <div 
-            className={cn(
-              "text-center mt-10 text-sm",
-              isDarkMode ? "text-gray-400" : "text-gray-500"
-            )}
-          >
-            No notes for this video yet. Start typing below to add one.
-          </div>
-        )}
-        
-        {/* פורמט הזמן הנוכחי ומצב הסנכרון */}
-        <div className={cn(
-          "mt-4 text-xs flex justify-between items-center",
-          isDarkMode ? "text-gray-500" : "text-gray-400"
-        )}>
-          <div>
-            {lastSyncTime ? (
-              <span>Last sync: {formatTimestamp(lastSyncTime)}</span>
-            ) : (
-              <span>Not synced yet</span>
-            )}
-          </div>
-          
-          {isAuthenticated && (
-            <div className="flex items-center">
-              {isSyncing ? (
-                <div className="flex items-center">
-                  <Spinner className="w-3 h-3 mr-1" />
-                  <span>Syncing...</span>
-                </div>
-              ) : (
-                <button 
-                  onClick={handleManualSync}
-                  className={cn(
-                    "text-xs px-2 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700",
-                    isDarkMode ? "text-blue-400" : "text-blue-500"
-                  )}
-                  disabled={isSyncing}
-                >
-                  Sync now
-                </button>
-              )}
+        ) : error ? (
+          <div className="flex justify-center items-center h-full">
+            <div className="text-center p-4">
+              <p className="text-red-500">שגיאה בטעינת הערות</p>
+              <Button 
+                size="sm" 
+                variant="outline" 
+                onClick={syncAll}
+                className="mt-2"
+              >
+                נסה שוב
+              </Button>
             </div>
-          )}
-        </div>
-      </div>
-      
-      {/* טופס הוספת הערה */}
-      <div 
-        className={cn(
-          "p-3 border-t",
-          isDarkMode ? "bg-gray-800 border-gray-700" : "bg-gray-50 border-gray-200"
-        )}
-      >
-        {currentVideoTime !== undefined && (
-          <div className={cn(
-            "text-xs mb-1",
-            isDarkMode ? "text-gray-400" : "text-gray-500"
-          )}>
-            Current position: {formatVideoTime(currentVideoTime)}
           </div>
+        ) : notes.length === 0 ? (
+          <div className="flex justify-center items-center h-full text-gray-500">
+            אין הערות לסרטון זה
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {notes.map(note => (
+              <li 
+                key={note.id}
+                className={cn(
+                  "p-3 rounded-lg relative transition-colors border",
+                  lastHighlightedNoteId === note.id ? "bg-blue-50 border-blue-200" : "border-gray-200"
+                )}
+              >
+                <div className="flex justify-between items-start mb-1">
+                  <div className="flex items-center">
+                    {note.videoTime !== undefined && (
+                      <button
+                        onClick={() => {
+                          // ניווט לנקודה בסרטון - יש להגדיר בפרופס
+                          const event = new CustomEvent('jump-to-time', { detail: { time: note.videoTime } });
+                          window.dispatchEvent(event);
+                        }}
+                        className="flex items-center bg-transparent border-none rounded text-xs font-medium px-1.5 py-0.5 bg-gray-100 hover:bg-gray-200 mr-2"
+                      >
+                        <svg className="w-3.5 h-3.5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        {note.formattedTime}
+                      </button>
+                    )}
+                    <span className="text-xs text-gray-500">
+                      {formatDate(note.timestamp)}
+                    </span>
+                  </div>
+                  <button 
+                    onClick={() => handleDeleteNote(note.id)}
+                    className="p-1 rounded-full bg-transparent border-none opacity-50 hover:opacity-100 hover:bg-gray-100"
+                    title="מחק הערה"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 6h18"></path>
+                      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+                    </svg>
+                  </button>
+                </div>
+                <div className="mt-1 text-sm">
+                  {note.content}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
-        
-        <div className="flex space-x-2">
+      </div>
+
+      <div className="border-t p-2">
+        <div className="flex gap-2">
           <textarea
-            value={currentNote}
-            onChange={(e) => setCurrentNote(e.target.value)}
-            placeholder="Type your note here..."
-            className={cn(
-              "flex-grow p-2 border rounded text-sm min-h-[80px] resize-none",
-              isDarkMode 
-                ? "bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:border-blue-500" 
-                : "bg-white border-gray-300 text-gray-900 placeholder-gray-400 focus:border-blue-500"
-            )}
-            disabled={!isAuthenticated}
+            value={newNote}
+            onChange={(e) => setNewNote(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="הוסף הערה..."
+            className="flex-1 p-2 border rounded resize-none min-h-[60px]"
           />
-        </div>
-        
-        <div className="flex justify-end mt-2">
-          <button
-            onClick={handleSaveNote}
-            disabled={!currentNote.trim() || isSaving || !isAuthenticated}
-            className={cn(
-              "px-3 py-1 rounded text-sm font-medium flex items-center",
-              !currentNote.trim() || isSaving || !isAuthenticated
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-emerald-600 text-white hover:bg-emerald-700"
-            )}
+          <Button
+            onClick={handleAddNote}
+            disabled={!newNote.trim()}
+            className="self-end"
           >
-            {isSaving ? (
-              <>
-                <Spinner className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" />
-                Saving...
-              </>
-            ) : (
-              'Save Note'
-            )}
-          </button>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </Button>
         </div>
       </div>
     </div>
