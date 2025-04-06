@@ -62,14 +62,35 @@ export async function checkFirestoreConnection(): Promise<{
 // ================= פונקציות אימות =================
 
 /**
+ * קבלת מידע על מצב האימות של המשתמש
+ */
+export async function getAuthState(): Promise<{
+  isAuthenticated: boolean;
+  userInfo?: { 
+    uid?: string;
+    email?: string;
+    displayName?: string;
+    photoURL?: string;
+  } | null;
+  timestamp?: number;
+}> {
+  try {
+    return await sendMessageToBackground({
+      action: 'GET_AUTH_STATE'
+    });
+  } catch (error) {
+    console.error('WordStream: Failed to get auth state:', error);
+    return { isAuthenticated: false };
+  }
+}
+
+/**
  * קבלת מזהה המשתמש הנוכחי
  */
 export async function getCurrentUserId(): Promise<string | null> {
   try {
-    const result = await sendMessageToBackground({
-      action: 'getCurrentUserId'
-    });
-    return result;
+    const authState = await getAuthState();
+    return authState.isAuthenticated ? authState.userInfo?.uid || null : null;
   } catch (error) {
     console.error('WordStream: Failed to get current user ID:', error);
     return null;
@@ -81,8 +102,8 @@ export async function getCurrentUserId(): Promise<string | null> {
  */
 export async function isAuthenticated(): Promise<boolean> {
   try {
-    const userId = await getCurrentUserId();
-    return !!userId;
+    const authState = await getAuthState();
+    return authState.isAuthenticated;
   } catch (error) {
     console.error('WordStream: Authentication check failed:', error);
     return false;

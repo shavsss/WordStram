@@ -225,7 +225,51 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     }
   }, [savedChats]);
 
-  // פונקציה לאיתחול הסנכרון מחדש
+  // Function that finds chats for the selected video
+  const handleDeleteChat = async (chatId: string) => {
+    if (!chatId) return;
+    
+    try {
+      setIsLoading(true);
+      
+      // Delete chat using BackgroundMessaging
+      const success = await BackgroundMessaging.deleteChat(chatId);
+      
+      if (success) {
+        // Remove from local state
+        setSavedChats(prevChats => prevChats.filter(c => c.id !== chatId));
+        setGroupedChats(prevGrouped => {
+          const newGrouped = { ...prevGrouped };
+          
+          // Find which group contains this chat and remove it
+          Object.keys(newGrouped).forEach(videoId => {
+            // Make sure we have a conversations array
+            if (newGrouped[videoId] && newGrouped[videoId].conversations) {
+              newGrouped[videoId].conversations = newGrouped[videoId].conversations.filter(c => c.id !== chatId);
+              
+              // Remove empty groups
+              if (newGrouped[videoId].conversations.length === 0) {
+                delete newGrouped[videoId];
+              }
+            }
+          });
+          
+          return newGrouped;
+        });
+      } else {
+        toast.error('Failed to delete chat. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      toast.error('An error occurred while deleting the chat.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Reinitialize sync
+   */
   const handleResync = async () => {
     if (isSyncing) return;
     
@@ -247,7 +291,9 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     }
   };
 
-  // פונקציה להרחבה או צמצום קבוצה
+  /**
+   * Toggle group expansion or collapse
+   */
   const toggleGroupExpansion = (videoId: string, event: React.MouseEvent) => {
     event.stopPropagation();
     setExpandedGroups(prev => ({
@@ -280,51 +326,6 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     
     // Return the title from grouped chats with fallback
     return groupedChats[videoId].videoTitle || `Video: ${videoId}`;
-  };
-
-  /**
-   * Delete a chat
-   * @param chatId Chat ID to delete
-   */
-  const handleDeleteChat = async (chatId: string) => {
-    if (!chatId) return;
-    
-    try {
-      setIsLoading(true);
-      
-      // Delete chat using BackgroundMessaging
-      const success = await BackgroundMessaging.deleteChat(chatId);
-      
-      if (success) {
-        // Remove from local state
-        setSavedChats(prevChats => prevChats.filter(c => c.id !== chatId));
-        setGroupedChats(prevGrouped => {
-          const newGrouped = { ...prevGrouped };
-          
-          // Find which group contains this chat and remove it
-          Object.keys(newGrouped).forEach(videoId => {
-            // וודא שיש לנו מערך conversations
-            if (newGrouped[videoId] && newGrouped[videoId].conversations) {
-              newGrouped[videoId].conversations = newGrouped[videoId].conversations.filter(c => c.id !== chatId);
-              
-              // Remove empty groups
-              if (newGrouped[videoId].conversations.length === 0) {
-                delete newGrouped[videoId];
-              }
-            }
-          });
-          
-          return newGrouped;
-        });
-      } else {
-        toast.error('Failed to delete chat. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error deleting chat:', error);
-      toast.error('An error occurred while deleting the chat.');
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   /**

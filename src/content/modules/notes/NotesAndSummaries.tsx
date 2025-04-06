@@ -62,15 +62,11 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
 
   // Setup synchronization and listeners for real-time updates
   useEffect(() => {
-    let syncCleanup: (() => void) | null = null;
     let broadcastCleanup: (() => void) | null = null;
 
     async function initializeSync() {
       try {
-        // Initialize data sync with Firestore (this also sets up broadcast listener internally)
-        syncCleanup = await BackgroundMessaging.initializeDataSync();
-        
-        // Setup additional listener for localStorage broadcast events
+        // רק מקשיבים להודעות שידור, ללא סינכרון או ריענון טוקנים
         broadcastCleanup = BackgroundMessaging.setupBroadcastListener((message) => {
           handleBroadcastMessage(message);
         });
@@ -84,12 +80,11 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
         window.addEventListener('message', messageHandler);
         
         return () => {
-          if (syncCleanup) syncCleanup();
           if (broadcastCleanup) broadcastCleanup();
           window.removeEventListener('message', messageHandler);
         };
       } catch (error) {
-        console.error('WordStream: Error initializing sync in NotesAndSummaries:', error);
+        console.error('WordStream: Error initializing in NotesAndSummaries:', error);
         return () => {};
       }
     }
@@ -218,37 +213,24 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
   // Load notes when component mounts
   useEffect(() => {
     loadAllNotes();
-    
-    // Check connection to Firestore
-    BackgroundMessaging.checkFirestoreConnection()
-      .then(status => {
-        console.log('WordStream: Firestore connection status:', status);
-        if (!status.connected && status.error) {
-          console.warn(`WordStream: Firestore connection issue: ${status.error}`);
-        }
-      })
-      .catch(err => {
-        console.error('WordStream: Error checking Firestore connection:', err);
-      });
   }, []);
 
-  // Force sync notes with Firestore
+  // Force sync notes with Firestore - גרסה פשוטה
   const syncWithFirestore = async () => {
     try {
       setIsSyncing(true);
-      console.log('WordStream: Syncing notes with Firestore');
       
-      // במקום גישה ישירה לfirestoreService, השתמש ב-BackgroundMessaging
-      const connectionStatus = await BackgroundMessaging.checkFirestoreConnection();
-      
-      if (!connectionStatus.connected || !connectionStatus.authenticated) {
-        setError('Connection error: Unable to access user account or server');
+      // בדיקה אם המשתמש מחובר
+      const authState = await BackgroundMessaging.getAuthState();
+      if (!authState.isAuthenticated) {
+        setError('No authenticated user. Please sign in first.');
         setIsSyncing(false);
         return;
       }
       
+      // רענון רשימת ההערות
+      await loadAllNotes();
       setIsSyncing(false);
-      loadAllNotes();
     } catch (error) {
       console.error('WordStream: Error syncing with Firestore:', error);
       setError('Error syncing notes');
@@ -282,12 +264,12 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
           
           // Ensure notes are sorted by timestamp (newest first)
           if (video.notes && Array.isArray(video.notes)) {
-            video.notes = video.notes.sort((a, b) => {
+            video.notes = video.notes.sort((a: Note, b: Note) => {
               return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
             });
             
             // Process each note to ensure it has all required fields
-            video.notes = video.notes.map(note => {
+            video.notes = video.notes.map((note: Note) => {
               // Add formatted time display if videoTime exists
               if (note.videoTime && !note.formattedTime) {
                 note.formattedTime = formatVideoTime(note.videoTime);
@@ -382,7 +364,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
   };
 
   // Delete a video's notes
-  const deleteVideoNotes = (videoId: string, event: React.MouseEvent) => {
+  const deleteVideoNotes = async (videoId: string, event: React.MouseEvent) => {
     try {
       event.stopPropagation();
       
@@ -390,28 +372,36 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
         return;
       }
       
-      // מחיקה מהרשימה המקומית
+      // בדיקת אימות לפני המחיקה
+      const authState = await BackgroundMessaging.getAuthState();
+      if (!authState.isAuthenticated) {
+        setError('You must be signed in to delete notes.');
+        return;
+      }
+      
+      setIsLoading(true);
+      
+      // מחיקה מקומית - להסיר מהרשימה טרם המחיקה בשרת
       const updatedVideos = videosWithNotes.filter(video => video.videoId !== videoId);
       setVideosWithNotes(updatedVideos);
       
-      // שליחת אירוע מחיקה לרקע
-      const message = {
-        action: 'deleteAllNotesForVideo',
-        videoId
-      };
-      
-      // שלח הודעה לbackground script דרך BackgroundMessaging
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError || !response || !response.success) {
-          console.error('WordStream: Error deleting video notes:', chrome.runtime.lastError || response?.error);
-          setError('Error deleting notes');
-          // רענן את הרשימה במקרה של כישלון
-          loadAllNotes();
-        }
-      });
+      try {
+        // שימוש בפונקציה מהרקע למחיקת כל ההערות
+        const result = await BackgroundMessaging.deleteAllNotesForVideo(videoId);
+        
+        // הצלחה - מחיקה מהשרת
+        console.log(`WordStream: Successfully deleted notes for video ${videoId}`, result);
+      } catch (error) {
+        // כישלון - לרענן מחדש את הרשימה
+        console.error('WordStream: Error deleting video notes:', error);
+        setError('Error deleting notes');
+        loadAllNotes();
+      }
     } catch (error) {
-      console.error('WordStream: Error deleting video notes:', error);
-      setError('Error deleting notes');
+      console.error('WordStream: Error in deleteVideoNotes:', error);
+      setError('Failed to delete notes');
+    } finally {
+      setIsLoading(false);
     }
   };
 

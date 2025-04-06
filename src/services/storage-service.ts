@@ -14,14 +14,13 @@ import AuthManager from '@/core/auth-manager';
  */
 async function requireAuth(): Promise<boolean> {
   try {
-    // Quick check with AuthManager
+    // Check with AuthManager
     if (AuthManager.isAuthenticated()) {
       return true;
     }
     
-    // If we didn't find a user immediately, try checking in storage (async operation)
-    const user = await AuthManager.checkStorageAuth();
-    return !!user;
+    // Check via background messaging
+    return await BackgroundMessaging.isAuthenticated();
   } catch (error) {
     console.warn('WordStream: Auth check error:', error);
     return false;

@@ -17,6 +17,27 @@ import { getAuth, User } from 'firebase/auth';
 // Initialize Firebase Auth
 const auth = getAuth();
 
+// הגדרת מאזין לשינויי מצב אימות - יתבצע בכל פעם שהסרביס וורקר מתעורר
+auth.onAuthStateChanged((user) => {
+  if (user) {
+    console.log('WordStream: User authenticated in background:', user.uid);
+    // שמירת מידע מינימלי נדרש לשימוש בין סבבי השירות וורקר
+    chrome.storage.local.set({
+      'wordstream_auth_state': 'authenticated',
+      'wordstream_user_id': user.uid,
+      'wordstream_user_email': user.email,
+      'wordstream_auth_last_update': Date.now()
+    });
+  } else {
+    console.log('WordStream: User not authenticated in background');
+    chrome.storage.local.set({
+      'wordstream_auth_state': 'unauthenticated',
+      'wordstream_user_id': null,
+      'wordstream_auth_last_update': Date.now()
+    });
+  }
+});
+
 // API Configurations
 let GOOGLE_TRANSLATE_API_KEY: string = 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM';
 // Gemini API keys - we'll get these dynamically later
@@ -334,6 +355,15 @@ interface GeminiResponse {
  */
 async function getGeminiApiKey(): Promise<string> {
   try {
+    console.log('WordStream: Attempting to retrieve Gemini API key from storage');
+    
+    // Check if we're in a service worker context
+    const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
+    if (!isServiceWorker) {
+      console.warn('WordStream: Not in service worker context - using default API key');
+      return DEFAULT_GEMINI_API_KEY;
+    }
+    
     // Try to get the API key from storage
     const result = await chrome.storage.local.get(['gemini_api_key']);
     
@@ -641,61 +671,20 @@ checkFirestoreConnection().then(status => {
 });
 
 /**
- * Checks and attempts to refresh authentication if needed
- * @returns Promise resolving to authentication status
+ * בדיקת מצב האימות - גרסה פשוטה שנסמכת על auth.currentUser
  */
 async function checkAndRefreshAuthentication(): Promise<boolean> {
   try {
     console.log('WordStream: Checking authentication state');
     
-    // Check if user is authenticated
-    const currentUser = auth.currentUser as User | null;
-    if (!currentUser) {
-      console.warn('WordStream: No authenticated user found during refresh check');
-      
-      // Check if token is in process of refreshing (avoid duplicate calls)
-      const refreshStatusData = await chrome.storage.local.get(['auth_refresh_in_progress']);
-      if (refreshStatusData && refreshStatusData.auth_refresh_in_progress) {
-        const timestamp = refreshStatusData.auth_refresh_in_progress;
-        // If refresh has been in progress for less than 30 seconds, wait
-        if (Date.now() - timestamp < 30000) {
-          console.log('WordStream: Authentication refresh already in progress, waiting');
-          return false;
-        } else {
-          // Clear stuck refresh flag
-          await chrome.storage.local.remove(['auth_refresh_in_progress']);
-        }
-      }
-      
-      // Set flag that we're refreshing auth
-      await chrome.storage.local.set({ 'auth_refresh_in_progress': Date.now() });
-      
-      try {
-        console.log('WordStream: Attempting to refresh authentication');
-        // At this point we have no current user, so we can't refresh the token
-        console.warn('WordStream: No user to refresh token for');
-        
-        // Clear refresh flag
-        await chrome.storage.local.remove(['auth_refresh_in_progress']);
-        return false;
-      } catch (refreshError) {
-        console.error('WordStream: Error refreshing authentication:', refreshError);
-        
-        // Clear refresh flag
-        await chrome.storage.local.remove(['auth_refresh_in_progress']);
-        return false;
-      }
+    // פשוט לבדוק אם יש משתמש מחובר
+    if (auth.currentUser) {
+      console.log('WordStream: User is authenticated:', auth.currentUser.uid);
+      return true;
     }
     
-    // User is authenticated, try to refresh the token
-    try {
-      await currentUser.getIdToken(true);
-      console.log('WordStream: Authentication token refreshed successfully');
-      return true;
-    } catch (tokenError) {
-      console.error('WordStream: Error refreshing authentication token:', tokenError);
-      return false;
-    }
+    console.warn('WordStream: No authenticated user found');
+    return false;
   } catch (error) {
     console.error('WordStream: Error in authentication check:', error);
     return false;
@@ -705,15 +694,13 @@ async function checkAndRefreshAuthentication(): Promise<boolean> {
 // Utility to wrap Firebase operations with authentication check
 async function withAuth<T>(operation: () => Promise<T>, actionName: string): Promise<T | { error: string }> {
   try {
-    // First check if user is authenticated and refresh if needed
-    const isAuthenticated = await checkAndRefreshAuthentication();
-    
-    if (!isAuthenticated) {
-      console.error(`WordStream: Cannot perform ${actionName} - authentication failed`);
-      return { error: 'No authenticated user' };
+    // בדיקה פשוטה אם יש משתמש מחובר
+    if (!auth.currentUser) {
+      console.warn(`WordStream: Cannot perform ${actionName} - user not authenticated`);
+      return { error: 'User not authenticated' };
     }
     
-    // Now try the operation
+    // ביצוע הפעולה עם המשתמש המחובר
     return await operation();
   } catch (error) {
     console.error(`WordStream: Error in ${actionName}:`, error);
@@ -794,11 +781,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           email: auth.currentUser?.email,
           displayName: auth.currentUser?.displayName,
           photoURL: auth.currentUser?.photoURL
-        } : null
+        } : null,
+        timestamp: Date.now()
       });
     } catch (error) {
       console.error('WordStream: Error getting auth state:', error);
       safeRespond({ isAuthenticated: false, error: safeStringifyError(error) });
+    }
+    return true;
+  }
+  
+  // טיפול בבקשות אימות נוספות
+  if (message.action === 'VERIFY_AUTH') {
+    if (auth.currentUser) {
+      safeRespond({ 
+        verified: true, 
+        userInfo: {
+          uid: auth.currentUser.uid,
+          email: auth.currentUser.email
+        }
+      });
+    } else {
+      // בדיקה במאגר לוקאלי אם ידוע על משתמש מחובר
+      chrome.storage.local.get(['wordstream_auth_state', 'wordstream_user_id'], (result) => {
+        if (result.wordstream_auth_state === 'authenticated' && result.wordstream_user_id) {
+          safeRespond({ 
+            verified: 'stored_only',
+            userInfo: {
+              uid: result.wordstream_user_id
+            },
+            message: 'User found in storage but not in active Firebase session'
+          });
+        } else {
+          safeRespond({ 
+            verified: false,
+            message: 'No authenticated user found'
+          });
+        }
+      });
     }
     return true;
   }
