@@ -1,392 +1,178 @@
-/// <reference types="chrome"/>
+/**
+ * Background Script
+ * Responsible for all Firebase operations in the extension
+ */
 
-import { LanguageCode } from '@/config/supported-languages';
-import { normalizeLanguageCode } from '@/services/caption-detectors/shared/language-map';
-import { GEMINI_CONFIG } from '@/services/gemini/gemini-service';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '@/core/firebase/config';
-import { initializeApp } from "firebase/app";
-import { getAuth, User, Auth, signInWithCredential, GoogleAuthProvider, UserCredential } from "firebase/auth";
 import { 
-  initializeFirestoreSync, 
-  syncBetweenStorageAndFirestore, 
-  migrateStorageDataToFirestore, 
-  checkIfMigrationNeeded,
-  saveWord,
-  saveChat,
-  deleteWord,
-  deleteChat,
-  saveNote,
-  deleteNote,
-  saveUserStats
-} from '@/core/firebase/firestore';
+  getWords, saveWord, deleteWord, 
+  getNotes, saveNote, deleteNote, getAllVideosWithNotes,
+  getChats, saveChat, deleteChat,
+  getUserStats, saveUserStats, checkFirestoreConnection,
+  getDocument, saveDocument, formatErrorForLog,
+  getCurrentUserId,
+  deleteAllNotesForVideo
+} from './firebase-service';
+import { getAuth, User } from 'firebase/auth';
 
-// Authentication support - removed onSignInChanged as it's not available in chrome.identity
+// Initialize Firebase Auth
+const auth = getAuth();
 
-// Initialize extension
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('WordStream: Background script installed and running');
-  
-  // Initialize default settings if they don't exist
-  chrome.storage.sync.get(['settings'], (result) => {
-    if (!result.settings) {
-      const defaultSettings = {
-        targetLanguage: 'en',
-        autoTranslate: true,
-        notifications: true,
-        darkMode: false
-      };
-      
-      chrome.storage.sync.set({ settings: defaultSettings }, () => {
-        console.log('WordStream: Default settings initialized');
-      });
-    }
-  });
-});
+// API Configurations
+let GOOGLE_TRANSLATE_API_KEY: string = 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM';
+// Gemini API keys - we'll get these dynamically later
+let GEMINI_API_KEY: string | null = null;
+// Using the advanced Gemini 2.5 Pro Preview model
+const GEMINI_MODEL = 'gemini-2.5-pro-preview-03-25';
+// Fallback to the best stable model if the preview isn't available
+const GEMINI_FALLBACK_MODEL = 'gemini-1.5-pro-latest';
 
-// Add persistent connection check
-let isBackgroundActive = true;
+// Default API keys (will be replaced with actual keys)
+const DEFAULT_GEMINI_API_KEY = 'AIzaSyB5Qy1TjKY62TwHiGHFvpFF6LfkUhIavm8';
 
-chrome.runtime.onConnect.addListener((port) => {
-  console.log('WordStream: New connection established', port.name);
-  
-  port.onDisconnect.addListener(() => {
-    console.log('WordStream: Connection disconnected', port.name);
-  });
-});
+// Firebase API domains that might need special monitoring
+const FIREBASE_DOMAINS = [
+  'firestore.googleapis.com', 
+  'identitytoolkit.googleapis.com', 
+  'securetoken.googleapis.com',
+  'googleapis.com'
+];
 
-// שמירת מצב האימות הנוכחי
-let isAuthenticated = false;
+// Monitoring variables to detect Firebase issues
+let firebaseNetworkErrors = 0;
+const MAX_FIREBASE_ERRORS = 5;
+const RESET_ERROR_COUNT_INTERVAL = 10 * 60 * 1000; // 10 minutes
+let lastFirebaseRecoveryAttempt = 0;
+const MIN_RECOVERY_INTERVAL = 2 * 60 * 1000; // 2 minutes
 
-// פונקציה להשגת אובייקט האימות של Firebase
-function getFirebaseAuth(): Auth {
-  return auth; // משתמש באובייקט auth המיובא מ-config
-}
+// Pattern to identify Firebase authentication and network errors
+const networkErrorPattern = /network error|timeout|connection|unavailable|failed to fetch|no internet|offline/i;
+const authErrorPattern = /auth|token|permission|unauthorized|unauthenticated|not allowed/i;
 
-// פונקציה להתחברות באמצעות טוקן
-async function signInWithToken(token: string): Promise<UserCredential> {
-  // Initialize Firebase if not initialized
-  const auth = getFirebaseAuth();
-  
-  // Call Firebase signIn
-  return signInWithCredential(auth, GoogleAuthProvider.credential(token));
-}
-
-// מאזין למצב ההתחברות - אחראי על ניהול מצב האימות בכל התוסף
-function setupAuthListener() {
-  const auth = getFirebaseAuth();
-  
-  onAuthStateChanged(auth, (user: User | null) => {
-    console.log('WordStream Background: Auth state changed to', user ? 'authenticated' : 'unauthenticated');
-    
-    // עדכון מצב האימות הגלובלי
-    isAuthenticated = !!user;
-    
-    // שמירת מצב האימות ב-storage.local לגישה אמינה וקבועה
-    chrome.storage.local.set({ isAuthenticated });
-    
-    // Initialize Firestore sync when user is authenticated
-    if (isAuthenticated && user) {
-      // Initialize the two-way sync
-      initializeFirestoreSync();
-      
-      // Check if we need to migrate data
-      checkAndMigrateData(user.uid);
-    }
-    
-    // שידור מצב האימות לכל תבי התוכן הפתוחים
-    broadcastAuthStateChange();
-  });
-}
-
-// Check if data migration is needed and perform it if necessary
-async function checkAndMigrateData(userId: string) {
+/**
+ * Initialize API keys from the configuration file
+ */
+async function initializeApiKeys() {
   try {
-    const needsMigration = await checkIfMigrationNeeded();
+    // Fetch API keys from the api-keys.json file
+    const apiKeysResponse = await fetch(chrome.runtime.getURL('api-keys.json'));
     
-    if (needsMigration) {
-      console.log('WordStream Background: Data migration needed, starting migration process');
-      const migrationResult = await migrateStorageDataToFirestore();
-      
-      if (migrationResult) {
-        console.log('WordStream Background: Data migration completed successfully');
-        // Notify all windows/tabs about the successful migration
-        chrome.runtime.sendMessage({ 
-          action: 'DATA_MIGRATION_COMPLETED',
-          success: true
-        }).catch(() => {/* Ignore errors for inactive contexts */});
-      } else {
-        console.error('WordStream Background: Data migration failed');
+    if (!apiKeysResponse.ok) {
+      console.error('WordStream: Failed to load API keys configuration');
+      return;
+    }
+    
+    const apiKeys = await apiKeysResponse.json();
+    
+    // Update API keys
+    if (apiKeys.google) {
+      if (apiKeys.google.translate) {
+        GOOGLE_TRANSLATE_API_KEY = apiKeys.google.translate;
+        console.log('WordStream: Loaded Translate API key:', GOOGLE_TRANSLATE_API_KEY.substring(0, 6) + '...');
       }
-    } else {
-      console.log('WordStream Background: No data migration needed');
+      
+      if (apiKeys.google.gemini) {
+        GEMINI_API_KEY = apiKeys.google.gemini;
+        // Make sure it's not null for TypeScript
+        if (GEMINI_API_KEY) {
+          // Save to storage for future use
+          await chrome.storage.local.set({ 'gemini_api_key': GEMINI_API_KEY });
+          console.log('WordStream: Loaded Gemini API key:', GEMINI_API_KEY.substring(0, 6) + '...');
+        }
+      }
+    }
+    
+    // Save Firebase API key to storage if available
+    if (apiKeys.firebase && apiKeys.firebase.apiKey) {
+      await chrome.storage.local.set({ 'firebase_api_key': apiKeys.firebase.apiKey });
+      console.log('WordStream: Saved Firebase API key to storage');
     }
   } catch (error) {
-    console.error('WordStream Background: Error checking/performing data migration', error);
+    console.error('WordStream: Error initializing API keys:', error);
   }
-}
-
-// פונקציה לשידור מצב האימות לכל תבי התוכן
-async function broadcastAuthStateChange() {
-  try {
-    // שליחת הודעה לכל תבי התוכן הפתוחים
-    const tabs = await chrome.tabs.query({});
-    
-    tabs.forEach(tab => {
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, {
-          action: 'AUTH_STATE_CHANGED',
-          isAuthenticated
-        }).catch((err) => {
-          // שגיאות תקשורת עם תבי תוכן לא פעילים הן צפויות ולא דורשות טיפול מיוחד
-          console.debug('WordStream Background: Failed to send auth state to tab', tab.id, err);
-        });
-      }
-    });
-    
-    console.log(`WordStream Background: Broadcasted auth state (${isAuthenticated ? 'authenticated' : 'unauthenticated'}) to ${tabs.length} tabs`);
-  } catch (error) {
-    console.error('WordStream Background: Error broadcasting auth state', error);
-  }
-}
-
-// Handle messages from content scripts and popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('WordStream: Background script received message:', request.action || request.type);
-  
-  // Handle Firestore data operations
-  if (request.action === 'SAVE_WORD') {
-    handleSaveWord(request.wordData)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'DELETE_WORD') {
-    handleDeleteWord(request.wordId)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'SAVE_CHAT') {
-    handleSaveChat(request.chatData)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'DELETE_CHAT') {
-    handleDeleteChat(request.chatId)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'SAVE_NOTE') {
-    handleSaveNote(request.noteData, request.videoId)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'DELETE_NOTE') {
-    handleDeleteNote(request.noteId)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'SAVE_STATS') {
-    handleSaveStats(request.statsData)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  if (request.action === 'SYNC_DATA') {
-    syncBetweenStorageAndFirestore()
-      .then(() => sendResponse({ success: true }))
-      .catch(error => sendResponse({ success: false, error: safeStringifyError(error) }));
-    return true;
-  }
-  
-  // New handler for getting auth state
-  if (request.action === 'GET_AUTH_STATE') {
-    console.log('WordStream Background: Auth state requested, current state:', isAuthenticated);
-    sendResponse({ isAuthenticated });
-    return true;
-  }
-  
-  // New handler for auth state updates from popup/hooks
-  if (request.action === 'AUTH_STATE_UPDATED') {
-    console.log('WordStream Background: Auth state update received:', request.isAuthenticated);
-    isAuthenticated = request.isAuthenticated;
-    
-    // Broadcast to content scripts
-    broadcastAuthStateChange();
-    
-    sendResponse({ success: true });
-    return true;
-  }
-  
-  if (request.action === 'OPEN_POPUP') {
-    // Open the extension popup
-    console.log('WordStream: Opening popup');
-    if (chrome.action && chrome.action.openPopup) {
-      chrome.action.openPopup();
-    } else {
-      // Fallback for browsers that don't support openPopup
-      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
-    }
-    return true;
-  }
-  
-  if (request.action === 'googleAuth') {
-    // We can't use chrome.identity in background in MV3, so we'll just respond with an error
-    console.log('WordStream: Google auth requested from background, but it\'s not supported in MV3');
-    sendResponse({ 
-      success: false, 
-      error: 'Chrome identity API not available in background. Auth must be performed from popup or tab' 
-    });
-    return true;
-  }
-  
-  if (request.action === 'processAuthToken') {
-    // Process token received from popup
-    try {
-      console.log('WordStream: Processing auth token received from popup');
-      const { token } = request;
-      if (!token) {
-        sendResponse({ success: false, error: 'No token provided' });
-        return true;
-      }
-      
-      sendResponse({ success: true, token });
-    } catch (error) {
-      console.error('WordStream: Error processing auth token:', error);
-      sendResponse({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error processing token' 
-      });
-    }
-    return true;
-  }
-  
-  if (request.action === 'translate') {
-    handleTranslation(request.data)
-      .then(response => sendResponse(response))
-      .catch(error => {
-        console.error('WordStream: Translation error:', error);
-        sendResponse({ success: false, error: safeStringifyError(error) });
-      });
-    return true; // Keep the message channel open for async response
-  }
-  
-  if (!isBackgroundActive) {
-    console.error('WordStream: Background script is not active');
-    sendResponse({ success: false, error: 'Background script is not active' });
-    return false;
-  }
-
-  if (request.type === 'PING') {
-    sendResponse({ success: true, message: 'Background script is active' });
-    return true; // Will respond asynchronously
-  }
-  
-  if (request.type === 'TRANSLATE_WORD') {
-    handleTranslation(request.payload).then(sendResponse);
-    return true; // Will respond asynchronously
-  }
-  
-  if (request.type === 'GOOGLE_AUTH') {
-    handleGoogleAuth(request.interactive).then(sendResponse);
-    return true; // Will respond asynchronously
-  }
-  
-  if (request.action === 'gemini') {
-    console.log('WordStream: Processing Gemini request', { 
-      message: request.message,
-      historyLength: request.history?.length,
-      videoId: request.videoId 
-    });
-    
-    handleGeminiRequest(request)
-      .then((result) => {
-        console.log('WordStream: Gemini response generated successfully');
-        sendResponse(result);
-      })
-      .catch(error => {
-        console.error('WordStream: Error generating Gemini response:', error);
-        sendResponse({ 
-          success: false, 
-          answer: null,
-          error: error instanceof Error ? error.message : 'Unknown error processing Gemini request'
-        });
-      });
-    return true; // Will respond asynchronously
-  }
-  
-  if (request.type === 'UPDATE_LANGUAGE_SETTINGS') {
-    handleLanguageSettingsUpdate(request.payload)
-      .then((result) => {
-        console.log('WordStream: Language settings update result', result);
-        sendResponse(result);
-      })
-      .catch(error => {
-        console.error('WordStream: Language settings update error', error);
-        sendResponse({ 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Unknown error updating language settings'
-        });
-      });
-    return true;
-  }
-
-  // הוספת טיפול בשאילתות לגבי מצב האימות הנוכחי
-  if (request.action === 'GET_CURRENT_AUTH_STATE') {
-    console.log('WordStream Background: Sending current auth state:', isAuthenticated);
-    sendResponse({ isAuthenticated });
-    return true;
-  }
-
-  // If no handlers matched
-  return false;
-});
-
-// Handle Google authentication - simplified approach
-interface AuthResponse {
-  success: boolean;
-  token?: string;
-  error?: string;
 }
 
 /**
- * Original function that used chrome.identity - REPLACED
- * This will not be used anymore - we'll perform auth in popup
+ * Sets up monitoring for Firebase auth-related requests
+ * Automatically detects failures and attempts recovery
  */
-async function handleGoogleAuth(interactive = true): Promise<AuthResponse> {
-  console.log('WordStream: Background handling Google auth is not supported in MV3');
-  return { 
-    success: false, 
-    error: 'Chrome identity API not available in background. Auth must be performed from popup or tab' 
-  };
+function setupFirebaseRequestMonitoring() {
+  if (!chrome || !chrome.webRequest || !chrome.webRequest.onCompleted || !chrome.webRequest.onErrorOccurred) {
+    console.warn('WordStream: Web request API not available for Firebase monitoring');
+    return;
+  }
+
+  // Configuration for monitoring
+  const firebaseUrls = [
+    "*://*.firebaseio.com/*",
+    "*://*.firebaseapp.com/*",
+    "*://firestore.googleapis.com/*",
+    "*://identitytoolkit.googleapis.com/*",
+    "*://securetoken.googleapis.com/*",
+  ];
+
+  // Listen for Firebase request errors
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      // Check if this is related to Firebase
+      if (isFirebaseRequest(details.url)) {
+        console.warn(`WordStream: Firebase request error: ${details.error} for ${details.url}`);
+        
+        // Count network-related errors
+        if (networkErrorPattern.test(details.error)) {
+          firebaseNetworkErrors++;
+          console.warn(`WordStream: Firebase network error count: ${firebaseNetworkErrors}/${MAX_FIREBASE_ERRORS}`);
+          
+          // If we've seen too many errors, try recovery
+          if (firebaseNetworkErrors >= MAX_FIREBASE_ERRORS) {
+            // Only attempt recovery if enough time has passed since last attempt
+            const now = Date.now();
+            if (now - lastFirebaseRecoveryAttempt > MIN_RECOVERY_INTERVAL) {
+              lastFirebaseRecoveryAttempt = now;
+              recoverFromFirebaseConnectionFailure();
+            }
+          }
+        }
+      }
+    },
+    { urls: firebaseUrls }
+  );
+
+  // Listen for successful requests to reset error counter
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      // If we see a successful Firebase request, reset the error counter
+      if (isFirebaseRequest(details.url) && details.statusCode >= 200 && details.statusCode < 300) {
+        if (firebaseNetworkErrors > 0) {
+          console.log('WordStream: Resetting Firebase error count after successful request');
+          firebaseNetworkErrors = 0;
+        }
+      }
+    },
+    { urls: firebaseUrls }
+  );
+
+  // Periodically reset error counter to avoid false positives
+  setInterval(() => {
+    if (firebaseNetworkErrors > 0) {
+      console.log('WordStream: Resetting Firebase error count after interval');
+      firebaseNetworkErrors = 0;
+    }
+  }, RESET_ERROR_COUNT_INTERVAL);
 }
 
-interface TranslationRequest {
-  text: string;
-  timestamp?: string;
-  targetLang?: LanguageCode;
+/**
+ * Checks if a URL is a Firebase-related request
+ * @param url URL to check
+ * @returns Boolean indicating if URL is Firebase-related
+ */
+function isFirebaseRequest(url: string): boolean {
+  return url.includes('firebase') || 
+         url.includes('firestore') || 
+         url.includes('identitytoolkit') || 
+         url.includes('securetoken');
 }
 
-interface TranslationResponse {
-  success: boolean;
-  translation?: string;
-  detectedSourceLanguage?: string;
-  error?: string;
-}
-
-// פונקציית עזר לטיפול בשגיאות
+// Helper function to format errors safely
 function safeStringifyError(error: unknown): string {
   try {
     if (error instanceof Error) {
@@ -411,9 +197,24 @@ function safeStringifyError(error: unknown): string {
   }
 }
 
-// Use a constant API key
-const GOOGLE_TRANSLATE_API_KEY = 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM';
+// Interface for translation requests
+interface TranslationRequest {
+  text: string;
+  timestamp?: string;
+  targetLang?: string;
+}
 
+// Interface for translation responses
+interface TranslationResponse {
+  success: boolean;
+  translation?: string;
+  detectedSourceLanguage?: string;
+  error?: string;
+}
+
+/**
+ * Handle translation requests
+ */
 async function handleTranslation(data: TranslationRequest): Promise<TranslationResponse> {
   try {
     // Validate input
@@ -435,8 +236,8 @@ async function handleTranslation(data: TranslationRequest): Promise<TranslationR
     const settings = settingsResult.settings || { targetLanguage: 'en' };
     let targetLang = data.targetLang || settings.targetLanguage || 'en';
     
-    // Ensure target language is in correct format and normalized
-    targetLang = normalizeLanguageCode(targetLang.toLowerCase().trim());
+    // Ensure target language is in correct format
+    targetLang = targetLang.toLowerCase().trim();
     
     console.log('WordStream: Using target language for translation:', targetLang);
 
@@ -444,7 +245,6 @@ async function handleTranslation(data: TranslationRequest): Promise<TranslationR
     const requestUrl = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_TRANSLATE_API_KEY}`;
     console.log('WordStream: Sending translation request to Google API');
     
-    // הבקשה הבסיסית שעבדה
     try {
       const response = await fetch(requestUrl, {
         method: 'POST',
@@ -499,64 +299,13 @@ async function handleTranslation(data: TranslationRequest): Promise<TranslationR
   }
 }
 
-async function handleLanguageSettingsUpdate(settings: { targetLanguage: string }): Promise<{ success: boolean; error?: string }> {
-  try {
-    console.log('WordStream: Updating language settings', settings);
-    
-    if (!settings.targetLanguage) {
-      throw new Error('Target language is required');
-    }
-
-    const result = await chrome.storage.sync.get(['settings']);
-    console.log('WordStream: Current settings', result.settings);
-    
-    const currentSettings = result.settings || {};
-    const targetLanguage = settings.targetLanguage.toLowerCase().trim();
-    
-    if (!targetLanguage) {
-      throw new Error('Invalid target language format');
-    }
-
-    const newSettings = {
-      ...currentSettings,
-      targetLanguage
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      chrome.storage.sync.set({ settings: newSettings }, () => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve();
-        }
-      });
-    });
-    
-    // Verify the update
-    const verifyResult = await chrome.storage.sync.get(['settings']);
-    console.log('WordStream: Verified settings after update', verifyResult.settings);
-    
-    if (verifyResult.settings?.targetLanguage !== targetLanguage) {
-      throw new Error('Failed to verify settings update');
-    }
-    
-    return { success: true };
-  } catch (error) {
-    console.error('WordStream: Error updating language settings:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
-}
-
-// הוספת ממשק להודעה בהיסטוריה
+// Interface for Gemini chat message
 interface HistoryMessage {
   role: string;
   content: string;
 }
 
-// עדכון ממשק GeminiRequest כדי לכלול את videoContext
+// Interface for Gemini request
 interface GeminiRequest {
   action: string;
   message: string;
@@ -573,26 +322,67 @@ interface GeminiRequest {
   model?: string;
 }
 
+// Interface for Gemini response
 interface GeminiResponse {
   success: boolean;
   answer?: string;
   error?: string;
 }
 
-// הגדרת קבועים לשימוש ב-API
-const GEMINI_API_KEY = GEMINI_CONFIG.apiKey;
-// הוספת קבועים למודלים
-const GEMINI_MODEL_PRIMARY = GEMINI_CONFIG.model;
-const GEMINI_MODEL_FALLBACK = GEMINI_CONFIG.fallbackModel;
-const GEMINI_MODEL_SECONDARY_FALLBACK = GEMINI_CONFIG.secondaryFallbackModel;
-// שימוש באינדקס API הסטנדרטי
-const API_VERSIONS = ['v1'];
+/**
+ * Get Gemini API key from storage or set a default if not available
+ */
+async function getGeminiApiKey(): Promise<string> {
+  try {
+    // Try to get the API key from storage
+    const result = await chrome.storage.local.get(['gemini_api_key']);
+    
+    if (result && result.gemini_api_key) {
+      console.log('WordStream: Retrieved Gemini API key from storage');
+      return result.gemini_api_key;
+    }
+    
+    // If no key found, try to use the Firebase API key which might work
+    // This is a temporary fallback
+    try {
+      const firebaseResult = await chrome.storage.local.get(['firebase_api_key']);
+      if (firebaseResult && firebaseResult.firebase_api_key) {
+        // Store it for future use
+        await chrome.storage.local.set({ gemini_api_key: firebaseResult.firebase_api_key });
+        console.log('WordStream: Using Firebase API key for Gemini API');
+        return firebaseResult.firebase_api_key;
+      }
+    } catch (error) {
+      console.warn('WordStream: Error accessing Firebase API key:', error);
+    }
+    
+    // If we still don't have a key, use the default key
+    console.warn('WordStream: No API key found, using default key (might not work)');
+    return DEFAULT_GEMINI_API_KEY;
+  } catch (error) {
+    console.error('WordStream: Error getting Gemini API key from storage:', error);
+    return DEFAULT_GEMINI_API_KEY;
+  }
+}
 
+// Initialize the Gemini API key
+getGeminiApiKey().then(key => {
+  GEMINI_API_KEY = key;
+  console.log('WordStream: Initialized Gemini API key:', key.substring(0, 6) + '...');
+});
+
+/**
+ * Handle Gemini AI chat requests
+ */
 async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiResponse> {
+  // Get API key dynamically if not already set
+  if (!GEMINI_API_KEY) {
+    GEMINI_API_KEY = await getGeminiApiKey();
+  }
+  
   const apiKey = GEMINI_API_KEY;
-  const GEMINI_MODEL = request.model || GEMINI_MODEL_PRIMARY;
-  const FALLBACK_MODEL = GEMINI_MODEL_FALLBACK;
-  const SECONDARY_FALLBACK_MODEL = GEMINI_MODEL_SECONDARY_FALLBACK;
+  const geminiModel = request.model || GEMINI_MODEL;
+  const fallbackModel = GEMINI_FALLBACK_MODEL;
   
   if (!apiKey) {
     console.error('[WordStream] Gemini API key is missing');
@@ -600,89 +390,35 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
   }
 
   try {
-    console.log(`[WordStream] Processing Gemini request with model: ${GEMINI_MODEL}`);
+    console.log(`[WordStream] Processing Gemini request with model: ${geminiModel}`);
     
-    // בדיקת API קיים ונגיש - נסיון לקבל את רשימת המודלים הזמינים
-    console.log('[WordStream] Checking available models');
-    const listModelsEndpoint = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-    const listModelsResponse = await fetch(listModelsEndpoint);
-    const modelsData = await listModelsResponse.json();
+    // Check if using the preview model and adjust API version accordingly
+    const isPreviewModel = geminiModel.includes('preview') || geminiModel.includes('2.5');
+    const apiVersion = isPreviewModel ? 'v1beta' : 'v1';
     
-    // רשימת מודלים זמינים עבור הדיבוג
-    if (modelsData.models) {
-      const availableModels = modelsData.models.map((m: any) => m.name);
-      console.log('[WordStream] Available models:', availableModels.join(', '));
-      
-      // בדוק אם המודל העיקרי זמין
-      if (!availableModels.includes(GEMINI_MODEL)) {
-        console.warn(`[WordStream] Primary model ${GEMINI_MODEL} not found in available models. Will try fallback model.`);
-      }
-    } else {
-      console.warn('[WordStream] Could not retrieve models list:', modelsData);
-    }
+    // Create endpoint for the model
+    const endpoint = `https://generativelanguage.googleapis.com/${apiVersion}/models/${geminiModel}:generateContent?key=${apiKey}`;
     
-    // יצירת endpoint דינמי לפי המודל הנבחר
-    // נשתמש ב-endpoint סטנדרטי של gemini במקום הגרסה הישנה
-    const apiVersion = API_VERSIONS[0];
-    const endpoint = `https://generativelanguage.googleapis.com/${apiVersion}/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    
-    // ייצור ההקשר משופר עם פרטי הסרטון
-    let contextPrompt = `You are WordStream's AI Assistant, a versatile, Claude-like educational assistant that helps users learn while watching videos. Follow these important guidelines:
+    // Create context prompt with information about WordStream and the video
+    let contextPrompt = `You are WordStream's AI Assistant, a versatile educational assistant that helps users learn while watching videos. Follow these guidelines:
 
-    1. RESPONSE STRUCTURE & ANSWER DEPTH:
-       - ALWAYS ANSWER FIRST, THEN CHECK USER SATISFACTION - Never respond with a question first unless absolutely necessary.
-       - Provide the best possible answer based on available data before asking if further clarification is needed.
-       - Do not shorten responses arbitrarily—answer as completely as possible.
-       - For complex topics, start with a complete answer and offer further depth if needed.
-       - For straightforward factual questions, provide a concise answer first and offer an option to elaborate if the user is interested.
-       - Never skip directly to asking a question without providing substantial information first.
+    1. RESPONSE STRUCTURE:
+       - Always answer directly first, then check if further clarification is needed
+       - For complex topics, provide complete answers with clear organization
+       - Use user's language - if they write in Hebrew, respond in Hebrew
     
-    2. LANGUAGE & USER ADAPTATION:
-       - AUTOMATICALLY RESPOND IN THE USER'S LANGUAGE - If they write in Hebrew, respond in Hebrew; if English, respond in English.
-       - Never change languages unless explicitly requested by the user.
-       - Maintain awareness of the last 5-7 user messages to prevent redundant explanations.
-       - If the user follows up on a previous topic, understand and continue naturally.
-       - Extend memory retention when the user continues on the same topic, but reset context smoothly when a completely new topic is introduced.
+    2. VIDEO CONTEXT AWARENESS:
+       - Recognize whether questions relate to the video or are general
+       - Provide video-specific insights when relevant
     
-    3. VIDEO-RELATED QUESTIONS:
-       - Recognize whether a question is about the video or general and respond accordingly.
-       - When answering timestamped video-related questions, analyze transcript context if available and provide specific insights rather than generic explanations.
-       - If direct video content is unavailable, infer meaning based on related context without speculating. Offer an educated guess only if clearly indicated as such.
+    3. LANGUAGE LEARNING FOCUS:
+       - Provide educational insights like usage examples and pronunciation notes
+       - Adapt complexity based on user proficiency
+    `;
     
-    4. STRUCTURED RESPONSES & FORMATTING:
-       - Use clean, easy-to-read formatting with clear paragraphs or bullet points.
-       - Break down complex topics with headings for longer explanations.
-       - Highlight important keywords to make scanning easier.
-       - Provide full, structured responses by default unless the user requests a summary.
-    
-    5. HANDLING UNCERTAINTY & EDGE CASES:
-       - Never give false information—if you don't have enough data, offer related insights instead.
-       - Minimize "I don't know" responses by attempting to infer meaning and offer the most relevant answer possible.
-       - If uncertain, ask clarifying questions instead of giving vague responses.
-    
-    6. CONVERSATIONAL FLOW & ENGAGEMENT:
-       - Never drop topics abruptly.
-       - If a user moves between subjects, acknowledge the transition while keeping responses fluid.
-       - Limit follow-up prompts to once per conversation unless the user actively engages. If the user ignores a follow-up twice, stop prompting for further engagement.
-    
-    7. LANGUAGE LEARNING FOCUS:
-       - Adapt response complexity based on user proficiency. For beginners, simplify explanations; for advanced users, offer in-depth linguistic details.
-       - Provide educational insights like usage examples, synonyms, or pronunciation notes.
-       - Relate explanations to real-world usage scenarios to make learning practical.
-    
-    8. INTEGRATION WITH EXTENSION FEATURES:
-       - Only mention WordStream features when relevant to the conversation—avoid forcing feature suggestions unless they directly benefit the user's current request.
-       - Offer learning tips that complement the extension's capabilities.
-    
-    9. PERSONALIZED LEARNING GUIDANCE:
-       - Recognize repeated topics from the same user and build upon previous explanations.
-       - Provide encouragement that motivates continued learning.
-    
-    Remember: Always answer first, then check satisfaction. Respond in the user's language. Maintain context with short responses. Structure information clearly. Handle uncertainty gracefully. Keep conversations flowing naturally. Focus on language learning value.`;
-    
-    // הוסף פרטי הסרטון להקשר
+    // Add video context if available
     if (request.videoTitle) {
-      contextPrompt += `\n\nThe user is watching the following video: "${request.videoTitle}"`;
+      contextPrompt += `\n\nThe user is watching: "${request.videoTitle}"`;
     }
     
     if (request.videoContext) {
@@ -697,10 +433,10 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
       }
     }
     
-    // יצירת payload עם ההיסטוריה אם היא קיימת
+    // Create messages array from history
     let messages: Array<{ role: string; parts: Array<{ text: string }> }> = [];
     
-    // הוסף הודעות מההיסטוריה
+    // Add messages from history
     if (request.history && request.history.length > 0) {
       messages = request.history.map(msg => ({
         role: msg.role,
@@ -708,26 +444,27 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
       }));
     }
     
-    // הוסף את ההודעה הנוכחית של המשתמש
+    // Add current user message
     messages.push({
       role: "user",
       parts: [{ text: request.message }]
     });
     
+    // Create payload
     const payload = {
       contents: [
         {
           role: "user",
           parts: [{ text: contextPrompt }]
         },
-        ...messages.slice(-30) // הגדלנו את מספר ההודעות מ-20 ל-30 לזיכרון משופר של שיחות ארוכות
+        ...messages.slice(-30) // Use the last 30 messages for context
       ],
       generationConfig: {
-        temperature: 0.75, // איזון בין יצירתיות לדיוק
+        temperature: 0.75,
         topK: 40,
         topP: 0.92,
-        maxOutputTokens: 8192, // הגדלת אורך התשובה המקסימלי לתשובות ארוכות ומפורטות יותר
-        stopSequences: [] // מאפשר לסיים תשובות בצורה טבעית יותר
+        maxOutputTokens: 8192,
+        stopSequences: []
       },
       safetySettings: [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
@@ -738,45 +475,58 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
     };
 
     console.log(`[WordStream] Sending request to Gemini API: ${endpoint}`);
-    // לוגים מורחבים לצורך דיבוג
-    console.log('[WordStream] Gemini payload:', JSON.stringify(payload, null, 2).substring(0, 500) + '...');
     
-    const response = await fetch(endpoint, {
+    // Create timeout promise
+    const timeoutPromise = new Promise<Response>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Request to Gemini API timed out after 30 seconds'));
+      }, 30000); // 30 second timeout
+    });
+    
+    // Make the API request with timeout
+    const fetchPromise = fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
+    
+    // Race the fetch against the timeout
+    const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
 
     if (!response.ok) {
       const errorData = await response.text();
       console.error(`[WordStream] Gemini API error (${response.status}):`, errorData);
       
-      // בדוק אם זו שגיאת 404 ונסה ליפול חזרה למודל הראשון
-      if (response.status === 404 && GEMINI_MODEL !== FALLBACK_MODEL) {
-        console.log(`[WordStream] Trying primary fallback model: ${FALLBACK_MODEL}`);
+      // If a rate limit error, wait briefly and retry once
+      if (response.status === 429) {
+        console.log('[WordStream] Rate limit hit, waiting 2 seconds and retrying once');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return handleGeminiRequest(request);
+      }
+      
+      // If using preview model and it fails, try the fallback model
+      if (isPreviewModel) {
+        console.log(`[WordStream] Preview model failed, trying fallback model: ${fallbackModel}`);
         
-        // קרא שוב לפונקציה עם מודל אחר
         const fallbackRequest = {
           ...request,
-          model: FALLBACK_MODEL
+          model: fallbackModel
         };
         
         return handleGeminiRequest(fallbackRequest);
       }
-      
-      // בדוק אם זו שגיאת 404 עם מודל הגיבוי הראשון ונסה ליפול חזרה למודל הגיבוי השני
-      if (response.status === 404 && GEMINI_MODEL === FALLBACK_MODEL && FALLBACK_MODEL !== SECONDARY_FALLBACK_MODEL) {
-        console.log(`[WordStream] Trying secondary fallback model: ${SECONDARY_FALLBACK_MODEL}`);
+      // Try the most basic fallback model as a last resort
+      else if (geminiModel !== 'gemini-1.0-pro') {
+        console.log(`[WordStream] Trying original fallback model: gemini-1.0-pro`);
         
-        // קרא שוב לפונקציה עם מודל הגיבוי השני
-        const secondaryFallbackRequest = {
+        const legacyFallbackRequest = {
           ...request,
-          model: SECONDARY_FALLBACK_MODEL
+          model: 'gemini-1.0-pro'
         };
         
-        return handleGeminiRequest(secondaryFallbackRequest);
+        return handleGeminiRequest(legacyFallbackRequest);
       }
       
       return { 
@@ -785,8 +535,20 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
       };
     }
 
-    const data = await response.json();
-    console.log('[WordStream] Gemini API response:', data);
+    // Parse response with timeout protection
+    let data;
+    try {
+      const responseText = await response.text();
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('[WordStream] Error parsing Gemini API response:', parseError);
+      return { 
+        success: false, 
+        error: `Error parsing response: ${parseError instanceof Error ? parseError.message : 'Invalid JSON'}` 
+      };
+    }
+    
+    console.log('[WordStream] Gemini API response received');
     
     if (!data.candidates || data.candidates.length === 0 || !data.candidates[0].content) {
       return { 
@@ -795,8 +557,23 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
       };
     }
 
-    // חלץ את התשובה מהמודל
+    // Extract the answer from the response
     const answer = data.candidates[0].content.parts[0].text;
+    
+    // Cache successful response in localStorage (if available)
+    try {
+      const cacheKey = `gemini_cache_${Buffer.from(request.message).toString('base64').substring(0, 50)}`;
+      await chrome.storage.local.set({ 
+        [cacheKey]: {
+          answer,
+          timestamp: Date.now(),
+          model: geminiModel
+        }
+      });
+    } catch (cacheError) {
+      // Non-critical error, just log it
+      console.warn('[WordStream] Failed to cache Gemini response:', cacheError);
+    }
     
     return {
       success: true,
@@ -804,6 +581,23 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
     };
   } catch (error) {
     console.error('[WordStream] Error in Gemini request:', error);
+    
+    // Check if we have a cached version as fallback for this query
+    try {
+      const cacheKey = `gemini_cache_${Buffer.from(request.message).toString('base64').substring(0, 50)}`;
+      const cache = await chrome.storage.local.get([cacheKey]);
+      
+      if (cache && cache[cacheKey] && (Date.now() - cache[cacheKey].timestamp) < 86400000) { // 24 hours
+        console.log('[WordStream] Using cached response as fallback');
+        return {
+          success: true,
+          answer: cache[cacheKey].answer + "\n\n(Note: This is a cached response as we couldn't reach the AI service)"
+        };
+      }
+    } catch (cacheError) {
+      console.warn('[WordStream] Failed to retrieve cached response:', cacheError);
+    }
+    
     return { 
       success: false, 
       error: `Error processing request: ${error instanceof Error ? error.message : 'Unknown error'}` 
@@ -811,136 +605,435 @@ async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiRespon
   }
 }
 
-// Initialize the auth listener
-setupAuthListener();
-
-// Handle saving word to Firestore
-async function handleSaveWord(wordData: any): Promise<{ success: boolean; id?: string; error?: string }> {
+// Initialize extension
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('WordStream extension installed/updated:', details.reason);
+  
+  // Clear all caches on extension update
+  if (details.reason === 'update' || details.reason === 'install') {
+    console.log('WordStream: Clearing extension caches');
+    try {
+      chrome.storage.local.clear();
+      console.log('WordStream: Caches cleared');
+    } catch (error) {
+      console.error('WordStream: Error clearing caches:', error);
+    }
+  }
+  
+  // Initialize Firebase and authenticate with increased timeouts
   try {
-    if (!wordData || !wordData.originalWord) {
-      return { success: false, error: 'Invalid word data' };
+    setupFirebaseRequestMonitoring();
+    // Initialize API keys with a retry mechanism
+    initializeApiKeys()
+      .then(() => console.log('WordStream: API keys initialized successfully'))
+      .catch((error) => console.error('WordStream: Error initializing API keys:', error));
+  } catch (error) {
+    console.error('WordStream: Error during initialization:', error);
+  }
+});
+
+// Log startup message
+console.log('WordStream background service worker started');
+
+// Check connection status on startup
+checkFirestoreConnection().then(status => {
+  console.log('Initial Firestore connection status:', status);
+});
+
+/**
+ * Checks and attempts to refresh authentication if needed
+ * @returns Promise resolving to authentication status
+ */
+async function checkAndRefreshAuthentication(): Promise<boolean> {
+  try {
+    console.log('WordStream: Checking authentication state');
+    
+    // Check if user is authenticated
+    const currentUser = auth.currentUser as User | null;
+    if (!currentUser) {
+      console.warn('WordStream: No authenticated user found during refresh check');
+      
+      // Check if token is in process of refreshing (avoid duplicate calls)
+      const refreshStatusData = await chrome.storage.local.get(['auth_refresh_in_progress']);
+      if (refreshStatusData && refreshStatusData.auth_refresh_in_progress) {
+        const timestamp = refreshStatusData.auth_refresh_in_progress;
+        // If refresh has been in progress for less than 30 seconds, wait
+        if (Date.now() - timestamp < 30000) {
+          console.log('WordStream: Authentication refresh already in progress, waiting');
+          return false;
+        } else {
+          // Clear stuck refresh flag
+          await chrome.storage.local.remove(['auth_refresh_in_progress']);
+        }
+      }
+      
+      // Set flag that we're refreshing auth
+      await chrome.storage.local.set({ 'auth_refresh_in_progress': Date.now() });
+      
+      try {
+        console.log('WordStream: Attempting to refresh authentication');
+        // At this point we have no current user, so we can't refresh the token
+        console.warn('WordStream: No user to refresh token for');
+        
+        // Clear refresh flag
+        await chrome.storage.local.remove(['auth_refresh_in_progress']);
+        return false;
+      } catch (refreshError) {
+        console.error('WordStream: Error refreshing authentication:', refreshError);
+        
+        // Clear refresh flag
+        await chrome.storage.local.remove(['auth_refresh_in_progress']);
+        return false;
+      }
     }
     
-    const wordId = await saveWord(wordData);
-    
-    if (wordId) {
-      return { success: true, id: wordId };
-    } else {
-      return { success: false, error: 'Failed to save word' };
+    // User is authenticated, try to refresh the token
+    try {
+      await currentUser.getIdToken(true);
+      console.log('WordStream: Authentication token refreshed successfully');
+      return true;
+    } catch (tokenError) {
+      console.error('WordStream: Error refreshing authentication token:', tokenError);
+      return false;
     }
   } catch (error) {
-    console.error('WordStream: Error saving word:', error);
-    return { success: false, error: safeStringifyError(error) };
+    console.error('WordStream: Error in authentication check:', error);
+    return false;
   }
 }
 
-// Handle deleting word from Firestore
-async function handleDeleteWord(wordId: string): Promise<{ success: boolean; error?: string }> {
+// Utility to wrap Firebase operations with authentication check
+async function withAuth<T>(operation: () => Promise<T>, actionName: string): Promise<T | { error: string }> {
   try {
-    if (!wordId) {
-      return { success: false, error: 'Invalid word ID' };
+    // First check if user is authenticated and refresh if needed
+    const isAuthenticated = await checkAndRefreshAuthentication();
+    
+    if (!isAuthenticated) {
+      console.error(`WordStream: Cannot perform ${actionName} - authentication failed`);
+      return { error: 'No authenticated user' };
     }
     
-    const result = await deleteWord(wordId);
-    
-    return { success: result };
+    // Now try the operation
+    return await operation();
   } catch (error) {
-    console.error('WordStream: Error deleting word:', error);
-    return { success: false, error: safeStringifyError(error) };
-  }
-}
-
-// Handle saving chat to Firestore
-async function handleSaveChat(chatData: any): Promise<{ success: boolean; id?: string; error?: string }> {
-  try {
-    if (!chatData || !chatData.conversationId) {
-      return { success: false, error: 'Invalid chat data' };
-    }
-    
-    const chatId = await saveChat(chatData);
-    
-    if (chatId) {
-      return { success: true, id: chatId };
-    } else {
-      return { success: false, error: 'Failed to save chat' };
-    }
-  } catch (error) {
-    console.error('WordStream: Error saving chat:', error);
-    return { success: false, error: safeStringifyError(error) };
-  }
-}
-
-// Handle deleting chat from Firestore
-async function handleDeleteChat(chatId: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    if (!chatId) {
-      return { success: false, error: 'Invalid chat ID' };
-    }
-    
-    const result = await deleteChat(chatId);
-    
-    return { success: result };
-  } catch (error) {
-    console.error('WordStream: Error deleting chat:', error);
-    return { success: false, error: safeStringifyError(error) };
-  }
-}
-
-// Handle saving note to Firestore
-async function handleSaveNote(noteData: any, videoId: string): Promise<{ success: boolean; id?: string; error?: string }> {
-  try {
-    if (!noteData || !videoId) {
-      return { success: false, error: 'Invalid note data or video ID' };
-    }
-    
-    // Merge videoId into noteData
-    const noteWithVideoId = {
-      ...noteData,
-      videoId
+    console.error(`WordStream: Error in ${actionName}:`, error);
+    return { 
+      error: error instanceof Error ? error.message : 'Unknown error'
     };
-    
-    const noteId = await saveNote(noteWithVideoId);
-    
-    if (noteId) {
-      return { success: true, id: noteId };
-    } else {
-      return { success: false, error: 'Failed to save note' };
-    }
-  } catch (error) {
-    console.error('WordStream: Error saving note:', error);
-    return { success: false, error: safeStringifyError(error) };
   }
 }
 
-// Handle deleting note from Firestore
-async function handleDeleteNote(noteId: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    if (!noteId) {
-      return { success: false, error: 'Invalid note ID' };
+// Register message listener for Firebase operations
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('Background script received message:', message.action || message.type);
+  
+  // Create a safe response function to handle potential port closed errors
+  const safeRespond = (response: any) => {
+    try {
+      sendResponse(response);
+    } catch (error) {
+      console.warn('WordStream: Error sending response, port may be closed:', error);
     }
+  };
+  
+  // Handle translation requests
+  if (message.action === 'translate') {
+    handleTranslation(message.data)
+      .then(response => safeRespond(response))
+      .catch(error => {
+        console.error('WordStream: Translation error:', error);
+        safeRespond({ success: false, error: safeStringifyError(error) });
+      });
+    return true; // Keep the message channel open for async response
+  }
+  
+  // Handle legacy translation requests
+  if (message.type === 'TRANSLATE_WORD') {
+    handleTranslation(message.payload)
+      .then(safeRespond)
+      .catch(error => {
+        console.error('WordStream: Translation error:', error);
+        safeRespond({ success: false, error: safeStringifyError(error) });
+      });
+    return true;
+  }
+  
+  // Handle Gemini chat requests
+  if (message.action === 'gemini') {
+    console.log('WordStream: Processing Gemini request', { 
+      message: message.message,
+      historyLength: message.history?.length,
+      videoId: message.videoId 
+    });
     
-    const result = await deleteNote(noteId);
+    handleGeminiRequest(message)
+      .then((result) => {
+        console.log('WordStream: Gemini response generated successfully');
+        safeRespond(result);
+      })
+      .catch(error => {
+        console.error('WordStream: Error generating Gemini response:', error);
+        safeRespond({ 
+          success: false, 
+          answer: null,
+          error: error instanceof Error ? error.message : 'Unknown error processing Gemini request'
+        });
+      });
+    return true; // Will respond asynchronously
+  }
+  
+  // Handle authentication state requests
+  if (message.action === 'GET_AUTH_STATE') {
+    try {
+      const isAuthenticated = !!auth.currentUser;
+      
+      safeRespond({ 
+        isAuthenticated, 
+        userInfo: isAuthenticated ? {
+          uid: auth.currentUser?.uid,
+          email: auth.currentUser?.email,
+          displayName: auth.currentUser?.displayName,
+          photoURL: auth.currentUser?.photoURL
+        } : null
+      });
+    } catch (error) {
+      console.error('WordStream: Error getting auth state:', error);
+      safeRespond({ isAuthenticated: false, error: safeStringifyError(error) });
+    }
+    return true;
+  }
+  
+  // Handle data initialization
+  if (message.action === 'initializeDataSync') {
+    try {
+      safeRespond({
+        success: true,
+        cleanup: () => {
+          // Optional cleanup operations
+          console.log('WordStream: Data sync initialized');
+        }
+      });
+    } catch (error) {
+      console.error('WordStream: Error initializing data sync:', error);
+      safeRespond({ success: false, error: safeStringifyError(error) });
+    }
+    return true;
+  }
+  
+  // Handle different message actions
+  switch (message.action) {
+    case 'getCurrentUserId':
+      withAuth(() => getCurrentUserId(), 'getCurrentUserId')
+        .then(safeRespond);
+      return true;
+      
+    case 'getWords':
+      withAuth(() => getWords(), 'getWords')
+        .then(safeRespond);
+      return true;
+      
+    case 'saveWord':
+      withAuth(() => saveWord(message.data), 'saveWord')
+        .then(safeRespond);
+      return true;
+      
+    case 'deleteWord':
+      withAuth(() => deleteWord(message.id), 'deleteWord')
+        .then(safeRespond);
+      return true;
+      
+    case 'getNotes':
+      withAuth(() => getNotes(message.videoId), 'getNotes')
+        .then(safeRespond);
+      return true;
+      
+    case 'saveNote':
+      withAuth(() => saveNote(message.data), 'saveNote')
+        .then(safeRespond);
+      return true;
+      
+    case 'deleteNote':
+      withAuth(() => deleteNote(message.id), 'deleteNote')
+        .then(safeRespond);
+      return true;
+      
+    case 'getAllVideosWithNotes':
+      withAuth(() => getAllVideosWithNotes(), 'getAllVideosWithNotes')
+        .then(safeRespond);
+      return true;
+      
+    case 'getChats':
+      withAuth(() => getChats(), 'getChats')
+        .then(safeRespond);
+      return true;
+      
+    case 'saveChat':
+      withAuth(() => saveChat(message.data), 'saveChat')
+        .then(safeRespond);
+      return true;
+      
+    case 'deleteChat':
+      withAuth(() => deleteChat(message.id), 'deleteChat')
+        .then(safeRespond);
+      return true;
+      
+    case 'getUserStats':
+      withAuth(() => getUserStats(), 'getUserStats')
+        .then(safeRespond);
+      return true;
+      
+    case 'saveUserStats':
+      withAuth(() => saveUserStats(message.data), 'saveUserStats')
+        .then(safeRespond);
+      return true;
+      
+    case 'checkFirestoreConnection':
+      withAuth(() => checkFirestoreConnection(), 'checkFirestoreConnection')
+        .then(safeRespond);
+      return true;
+      
+    case 'getDocument':
+      withAuth(() => getDocument(message.collection, message.id), 'getDocument')
+        .then(safeRespond);
+      return true;
+      
+    case 'saveDocument':
+      withAuth(() => saveDocument(message.collection, message.id, message.data), 'saveDocument')
+        .then(safeRespond);
+      return true;
     
-    return { success: result };
-  } catch (error) {
-    console.error('WordStream: Error deleting note:', error);
-    return { success: false, error: safeStringifyError(error) };
+    case 'deleteAllNotesForVideo':
+      if (message.videoId) {
+        withAuth(() => deleteAllNotesForVideo(message.videoId), 'deleteAllNotesForVideo')
+          .then(safeRespond);
+      } else {
+        safeRespond({ success: false, deletedCount: 0, error: 'Missing videoId' });
+      }
+      return true;
+      
+    case 'PING':
+      safeRespond({ success: true, message: 'Background script is active' });
+      return true;
+      
+    case 'REFRESH_FIREBASE_CONNECTION':
+      withAuth(() => recoverFromFirebaseConnectionFailure(), 'REFRESH_FIREBASE_CONNECTION')
+        .then(safeRespond);
+      return true;
+      
+    default:
+      console.log('Unknown message action:', message.action || message.type);
+      safeRespond({ error: 'Unknown action' });
+      return false;
+  }
+});
+
+/**
+ * Helper function to handle async operations and respond to the sender
+ */
+function handleAsyncOperation(promise: Promise<any>, sendResponse: (response: any) => void) {
+  promise
+    .then(result => {
+      sendResponse(result);
+    })
+    .catch(error => {
+      console.error('WordStream: Error in async operation:', error);
+      sendResponse({ error: safeStringifyError(error) });
+    });
+}
+
+// Add a network connectivity checker to help with retries
+async function checkInternetConnection(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch('https://www.gstatic.com/generate_204', {
+      method: 'HEAD',
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch (e) {
+    console.warn('WordStream: Network check failed:', e);
+    return navigator.onLine; // Fallback to navigator.onLine
   }
 }
 
-// Handle saving stats to Firestore
-async function handleSaveStats(statsData: any): Promise<{ success: boolean; error?: string }> {
+/**
+ * Recovers from Firebase connection failure
+ * Clears caches and attempts to reconnect
+ */
+async function recoverFromFirebaseConnectionFailure() {
+  console.log('WordStream: Attempting to recover from Firebase connection failure');
+  
   try {
-    if (!statsData) {
-      return { success: false, error: 'Invalid stats data' };
+    // Clear all Firebase-related caches
+    await clearCaches();
+    
+    // Check internet connection
+    const isOnline = await checkInternetConnection();
+    if (!isOnline) {
+      console.warn('WordStream: Cannot recover - device is offline');
+      return;
     }
     
-    const result = await saveUserStats(statsData);
+    // Attempt to reinitialize Firebase
+    // We'll refresh the page which will trigger reinitialization
+    console.log('WordStream: Requesting all tabs to refresh Firebase connections');
     
-    return { success: result };
+    // Reset error count
+    firebaseNetworkErrors = 0;
+    
+    // Send message to all tabs to refresh connections
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach((tab) => {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, { action: 'REFRESH_FIREBASE_CONNECTION' })
+            .catch(() => {
+              // Ignore errors for inactive tabs that can't receive messages
+            });
+        }
+      });
+    });
   } catch (error) {
-    console.error('WordStream: Error saving stats:', error);
-    return { success: false, error: safeStringifyError(error) };
+    console.error('WordStream: Error recovering from connection failure:', error);
+  }
+}
+
+/**
+ * Clears extension caches to fix authentication issues
+ */
+async function clearCaches() {
+  console.log('WordStream: Clearing caches to improve recovery chances');
+  
+  try {
+    // Clear local storage caches
+    const keysToRemove = [
+      'wordstream_user_id',
+      'wordstream_user_id_timestamp',
+      'wordstream_stats_cache',
+      'wordstream_stats_cache_timestamp',
+      'wordstream_auth_state',
+    ];
+    
+    await chrome.storage.local.remove(keysToRemove);
+    
+    // Find and clear all cache timestamp entries
+    const items = await chrome.storage.local.get(null);
+    const timestampKeys = Object.keys(items).filter(key => 
+      key.includes('cache') || key.includes('timestamp') || key.includes('token')
+    );
+    
+    if (timestampKeys.length > 0) {
+      await chrome.storage.local.remove(timestampKeys);
+      console.log(`WordStream: Cleared ${timestampKeys.length} cache-related entries`);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('WordStream: Error clearing caches:', error);
+    return false;
   }
 }
 

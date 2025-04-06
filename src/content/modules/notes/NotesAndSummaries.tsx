@@ -1,15 +1,37 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { format } from 'date-fns';
+import { enUS } from 'date-fns/locale';
 import { Note, VideoNote, VideoWithNotes, NotesStorage } from '@/features/notes/types';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/Spinner';
 import { File, ChevronLeft, FileText, Download, DownloadCloud, Trash2, ExternalLink, Clock, Calendar, Video, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
-import * as FirestoreService from '@/core/firebase/firestore';
-import { format as formatDate } from 'date-fns';
+import * as BackgroundMessaging from '@/utils/background-messaging';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 import { saveAs } from 'file-saver';
 
 interface NotesAndSummariesProps {
   onBack: () => void;
+}
+
+// Helper function to safely format dates
+function formatDate(date: Date | string | number | null | undefined, formatStr: string): string {
+  try {
+    if (!date) return 'N/A';
+    
+    // If it's a string, try to convert it to a Date
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    
+    // Check if it's a valid date
+    if (dateObj instanceof Date && isNaN(dateObj.getTime())) {
+      return 'Invalid date';
+    }
+    
+    return format(dateObj, formatStr, { locale: enUS });
+  } catch (error) {
+    console.error('Error formatting date:', error);
+    return 'Error formatting date';
+  }
 }
 
 export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
@@ -22,6 +44,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
   const [isDeletingNote, setIsDeletingNote] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<'list' | 'video'>('list');
   
   // Handle click outside to close export menu
   useEffect(() => {
@@ -37,25 +60,46 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
     };
   }, []);
 
-  // Setup broadcast listener for realtime updates
+  // Setup synchronization and listeners for real-time updates
   useEffect(() => {
-    // Setup listener for localStorage broadcast events
-    const unsubscribeStorage = FirestoreService.setupBroadcastListener((message) => {
-      handleBroadcastMessage(message);
-    });
+    let syncCleanup: (() => void) | null = null;
+    let broadcastCleanup: (() => void) | null = null;
+
+    async function initializeSync() {
+      try {
+        // Initialize data sync with Firestore (this also sets up broadcast listener internally)
+        syncCleanup = await BackgroundMessaging.initializeDataSync();
+        
+        // Setup additional listener for localStorage broadcast events
+        broadcastCleanup = BackgroundMessaging.setupBroadcastListener((message) => {
+          handleBroadcastMessage(message);
+        });
+        
+        // Setup listener for window message events
+        const messageHandler = (event: MessageEvent) => {
+          if (!event.data || typeof event.data !== 'object') return;
+          handleBroadcastMessage(event.data);
+        };
+        
+        window.addEventListener('message', messageHandler);
+        
+        return () => {
+          if (syncCleanup) syncCleanup();
+          if (broadcastCleanup) broadcastCleanup();
+          window.removeEventListener('message', messageHandler);
+        };
+      } catch (error) {
+        console.error('WordStream: Error initializing sync in NotesAndSummaries:', error);
+        return () => {};
+      }
+    }
     
-    // Setup listener for window message events
-    const messageHandler = (event: MessageEvent) => {
-      if (!event.data || typeof event.data !== 'object') return;
-      handleBroadcastMessage(event.data);
-    };
-    
-    window.addEventListener('message', messageHandler);
+    // Call the async initialization function
+    const cleanup = initializeSync();
     
     // Cleanup on unmount
     return () => {
-      unsubscribeStorage();
-      window.removeEventListener('message', messageHandler);
+      cleanup.then(cleanupFn => cleanupFn && cleanupFn());
     };
   }, []);
   
@@ -176,7 +220,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
     loadAllNotes();
     
     // Check connection to Firestore
-    FirestoreService.checkFirestoreConnection()
+    BackgroundMessaging.checkFirestoreConnection()
       .then(status => {
         console.log('WordStream: Firestore connection status:', status);
         if (!status.connected && status.error) {
@@ -190,129 +234,105 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
 
   // Force sync notes with Firestore
   const syncWithFirestore = async () => {
-    setIsSyncing(true);
-    
     try {
-      // First check connection
-      const status = await FirestoreService.checkFirestoreConnection();
+      setIsSyncing(true);
+      console.log('WordStream: Syncing notes with Firestore');
       
-      if (!status.connected) {
-        setError(`Cannot sync with Firestore: ${status.error}`);
+      // במקום גישה ישירה לfirestoreService, השתמש ב-BackgroundMessaging
+      const connectionStatus = await BackgroundMessaging.checkFirestoreConnection();
+      
+      if (!connectionStatus.connected || !connectionStatus.authenticated) {
+        setError('Connection error: Unable to access user account or server');
         setIsSyncing(false);
         return;
       }
       
-      // First try to sync existing notes
-      await FirestoreService.forceResyncNotes();
-      
-      // Then reload all notes to get the latest
-      await loadAllNotes();
-      
-      console.log('WordStream: Notes sync completed successfully');
-    } catch (err) {
-      console.error('WordStream: Error syncing with Firestore:', err);
-      setError(`Failed to sync with Firestore: ${err}`);
-    } finally {
+      setIsSyncing(false);
+      loadAllNotes();
+    } catch (error) {
+      console.error('WordStream: Error syncing with Firestore:', error);
+      setError('Error syncing notes');
       setIsSyncing(false);
     }
   };
 
   // Load all notes from Firestore and local storage
   const loadAllNotes = async () => {
-    setIsLoading(true);
-    setError(null);
-
     try {
-      // First load from Firestore
-      let videosData: VideoWithNotes[] = [];
+      setIsLoading(true);
+      setSelectedVideo(null);
       
-      try {
-        // Check connection to Firestore
-        const status = await FirestoreService.checkFirestoreConnection();
-        
-        if (status.connected) {
-          // Get all videos with notes from Firestore
-          const allVideos = await FirestoreService.getAllVideosWithNotes();
-          if (Array.isArray(allVideos) && allVideos.length > 0) {
-            videosData = allVideos;
+      // Get notes using background messaging
+      const videosWithNotes = await BackgroundMessaging.getAllVideosWithNotes();
+      
+      if (videosWithNotes && videosWithNotes.length > 0) {
+        // Make sure each video has title and URL
+        const processedVideos = videosWithNotes.map(video => {
+          // Ensure video title exists and is properly formatted
+          if (!video.videoTitle || video.videoTitle === 'Unknown Video') {
+            // Try to extract title from URL or videoId
+            const videoId = video.videoId;
+            video.videoTitle = video.videoTitle || `Video: ${videoId}`;
           }
-        } else {
-          console.warn('WordStream: Cannot load from Firestore -', status.error);
-        }
-      } catch (firestoreErr) {
-        console.warn('WordStream: Error loading notes from Firestore:', firestoreErr);
-        // Continue to try local storage as fallback
-      }
-      
-      // Then also load from local storage to catch any that might not be synced yet
-      chrome.storage.local.get(['notes_storage'], (result) => {
-        if (chrome.runtime.lastError) {
-          setError(`Error loading notes: ${chrome.runtime.lastError.message}`);
-          setIsLoading(false);
-          return;
-        }
-
-        const notesStorage: NotesStorage = result.notes_storage || {};
-        
-        // Convert object to array and sort by lastUpdated (most recent first)
-        const videosList = Object.values(notesStorage)
-          .filter(video => video && video.lastUpdated)
-          .sort((a, b) => {
-            const timeA = a?.lastUpdated ? new Date(a.lastUpdated).getTime() : 0;
-            const timeB = b?.lastUpdated ? new Date(b.lastUpdated).getTime() : 0;
-            return timeB - timeA;
-          });
           
-        // Merge with Firestore data (Firestore data takes precedence)
-        const mergedVideos = [...videosList];
-        
-        // Add videos that are in Firestore but not in local storage
-        videosData.forEach(firestoreVideo => {
-          const localVideo = mergedVideos.find(v => v.videoId === firestoreVideo.videoId);
+          // Ensure video URL exists
+          if (!video.videoURL && video.videoId) {
+            video.videoURL = `https://www.youtube.com/watch?v=${video.videoId}`;
+          }
           
-          if (!localVideo) {
-            mergedVideos.push(firestoreVideo);
-          } else {
-            // Merge notes from both sources, favoring Firestore data
-            const mergedNotes = [...localVideo.notes];
-            
-            firestoreVideo.notes.forEach(firestoreNote => {
-              const localNoteIndex = mergedNotes.findIndex(n => n.id === firestoreNote.id);
-              
-              if (localNoteIndex >= 0) {
-                // If the note exists locally, update it with Firestore data
-                mergedNotes[localNoteIndex] = firestoreNote;
-              } else {
-                // If it doesn't exist locally, add it
-                mergedNotes.push(firestoreNote);
-              }
+          // Ensure notes are sorted by timestamp (newest first)
+          if (video.notes && Array.isArray(video.notes)) {
+            video.notes = video.notes.sort((a, b) => {
+              return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
             });
             
-            // Update the local video with merged notes
-            const videoIndex = mergedVideos.findIndex(v => v.videoId === firestoreVideo.videoId);
-            if (videoIndex >= 0) {
-              mergedVideos[videoIndex] = {
-                ...mergedVideos[videoIndex],
-                notes: mergedNotes
-              };
-            }
+            // Process each note to ensure it has all required fields
+            video.notes = video.notes.map(note => {
+              // Add formatted time display if videoTime exists
+              if (note.videoTime && !note.formattedTime) {
+                note.formattedTime = formatVideoTime(note.videoTime);
+              }
+              
+              return note;
+            });
           }
+          
+          return video;
         });
         
-        // Sort again after merging
-        mergedVideos.sort((a, b) => {
-          const timeA = a?.lastUpdated ? new Date(a.lastUpdated).getTime() : 0;
-          const timeB = b?.lastUpdated ? new Date(b.lastUpdated).getTime() : 0;
-          return timeB - timeA;
-        });
-        
-        setVideosWithNotes(mergedVideos);
-        setIsLoading(false);
-      });
-    } catch (err) {
-      console.error('WordStream: Error in loadAllNotes:', err);
-      setError(`Failed to load notes: ${err}`);
+        setVideosWithNotes(processedVideos);
+        setMode('list');
+        setError(null);
+      } else {
+        setVideosWithNotes([]);
+        setError('No notes found');
+      }
+      
       setIsLoading(false);
+    } catch (loadError) {
+      console.error('WordStream: Error loading notes:', loadError);
+      setError('Error loading notes');
+      setIsLoading(false);
+    }
+  };
+
+  // Format video time (seconds) to HH:MM:SS format
+  const formatVideoTime = (seconds: number): string => {
+    try {
+      if (isNaN(seconds)) return 'N/A';
+      
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      
+      if (hours > 0) {
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      } else {
+        return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+    } catch (error) {
+      console.error('Error formatting video time:', error);
+      return 'N/A';
     }
   };
 
@@ -328,85 +348,70 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
 
   // Delete individual note
   const deleteNote = async (noteId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    
-    if (!noteId || !selectedVideo) return;
-    
-    if (window.confirm('Are you sure you want to delete this note?')) {
-      setIsDeletingNote(noteId);
+    try {
+      event.stopPropagation();
       
-      try {
-        // Delete from Firestore
-        const success = await FirestoreService.deleteNote(noteId, selectedVideo.videoId);
-        
-        if (success) {
-          // Update selected video
-          setSelectedVideo(prev => {
-            if (!prev) return null;
-            return {
-              ...prev,
-              notes: prev.notes.filter(note => note.id !== noteId)
-            };
-          });
-          
-          // Update videos list
-          setVideosWithNotes(prevVideos => {
-            return prevVideos.map(video => {
-              if (video.videoId === selectedVideo.videoId) {
-                return {
-                  ...video,
-                  notes: video.notes.filter(note => note.id !== noteId)
-                };
-              }
-              return video;
-            });
-          });
-        } else {
-          console.error('WordStream: Failed to delete note:', noteId);
-          alert('Failed to delete note. Please try again.');
-        }
-      } catch (error) {
-        console.error('WordStream: Error deleting note:', error);
-        alert('An error occurred while deleting the note. Please try again.');
-      } finally {
-        setIsDeletingNote(null);
+      if (!window.confirm('Are you sure you want to delete this note?')) {
+        return;
       }
+      
+      // מחיקה מקומית
+      if (selectedVideo) {
+        const filteredNotes = selectedVideo.notes.filter(note => note.id !== noteId);
+        setSelectedVideo({
+          ...selectedVideo,
+          notes: filteredNotes
+        });
+      }
+      
+      // במקום גישה ישירה לfirestoreService, השתמש ב-BackgroundMessaging
+      const success = await BackgroundMessaging.deleteNote(noteId);
+      
+      if (!success) {
+        console.error('WordStream: Failed to delete note from Firestore');
+        setError('Error deleting note');
+        // במקרה של שגיאה, רענן את הרשימה
+        if (selectedVideo) {
+          viewVideoNotes(selectedVideo);
+        }
+      }
+    } catch (error) {
+      console.error('WordStream: Error deleting note:', error);
+      setError('Error deleting note');
     }
   };
 
   // Delete a video's notes
   const deleteVideoNotes = (videoId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    
-    if (window.confirm('Are you sure you want to delete all notes for this video?')) {
-      // First update the UI
-      const updatedVideos = videosWithNotes.filter(v => v.videoId !== videoId);
-      setVideosWithNotes(updatedVideos);
+    try {
+      event.stopPropagation();
       
-      // If the deleted video was selected, go back to list
-      if (selectedVideo?.videoId === videoId) {
-        setSelectedVideo(null);
+      if (!window.confirm(`Are you sure you want to delete all notes for this video?`)) {
+        return;
       }
       
-      // Delete from Firestore
-      FirestoreService.deleteAllNotesForVideo(videoId)
-        .then(deletedCount => {
-          console.log(`WordStream: Deleted ${deletedCount} notes for video ${videoId}`);
-        })
-        .catch(err => {
-          console.error('WordStream: Error deleting video notes from Firestore:', err);
-        });
+      // מחיקה מהרשימה המקומית
+      const updatedVideos = videosWithNotes.filter(video => video.videoId !== videoId);
+      setVideosWithNotes(updatedVideos);
       
-      // Delete from local storage
-      chrome.storage.local.get(['notes_storage'], (result) => {
-        const notesStorage: NotesStorage = result.notes_storage || {};
-        
-        // Delete the video entry
-        delete notesStorage[videoId];
-        
-        // Save updated storage
-        chrome.storage.local.set({ notes_storage: notesStorage });
+      // שליחת אירוע מחיקה לרקע
+      const message = {
+        action: 'deleteAllNotesForVideo',
+        videoId
+      };
+      
+      // שלח הודעה לbackground script דרך BackgroundMessaging
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          console.error('WordStream: Error deleting video notes:', chrome.runtime.lastError || response?.error);
+          setError('Error deleting notes');
+          // רענן את הרשימה במקרה של כישלון
+          loadAllNotes();
+        }
       });
+    } catch (error) {
+      console.error('WordStream: Error deleting video notes:', error);
+      setError('Error deleting notes');
     }
   };
 
@@ -710,7 +715,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
                     <circle cx="12" cy="12" r="10"></circle>
                     <polyline points="12 6 12 12 16 14"></polyline>
                   </svg>
-                  {new Date(selectedVideo.lastUpdated).toLocaleDateString()}
+                  {formatDate(new Date(selectedVideo.lastUpdated), 'dd/MM/yyyy HH:mm')}
                 </span>
                 <span className="inline-flex items-center">
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
@@ -794,7 +799,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
                   >
                     <div className="p-3 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
                       <div className="text-sm text-gray-500 dark:text-slate-400">
-                        {new Date(note.timestamp).toLocaleString()}
+                        {formatDate(new Date(note.timestamp), 'dd/MM/yyyy HH:mm')}
                       </div>
                       <div className="flex items-center gap-2">
                         {note.videoTime !== undefined && (
@@ -864,7 +869,7 @@ export function NotesAndSummaries({ onBack }: NotesAndSummariesProps) {
                 </div>
                 
                 <div className="text-sm text-gray-500 dark:text-slate-400 mb-2">
-                  {new Date(video.lastUpdated).toLocaleString()}
+                  {formatDate(new Date(video.lastUpdated), 'dd/MM/yyyy HH:mm')}
                 </div>
                 
                 <div className="flex items-center text-gray-500 dark:text-slate-400 text-sm">

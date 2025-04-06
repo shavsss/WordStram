@@ -1,91 +1,70 @@
-import { Note } from '@/features/notes/types';
-import { Chat, VideoMetadata } from '@/types';
-import { getCurrentUser } from '@/core/firebase/auth';
-import * as FirestoreService from '@/core/firebase/firestore';
+import { debounce } from '@/utils/function-utils';
+import { Word } from '@/types/word';
+import * as BackgroundMessaging from '@/utils/background-messaging';
 
 /**
- * Syncs notes between local storage and Firestore
- * Implements two-way synchronization with conflict resolution
+ * Synchronizes notes between local storage and server
+ * Attempts to sync notes with Firestore if connection is available
+ * @returns Promise<void>
  */
-export async function syncNotesBetweenStorageAndFirestore(): Promise<boolean> {
+export async function syncNotes(): Promise<void> {
   try {
-    console.log('WordStream: Syncing notes between storage and Firestore');
-    
-    // Use the new generic sync function with 'notes' type
-    await FirestoreService.syncBetweenStorageAndFirestore('notes');
-    return true;
+    // Initiate synchronization of notes between local storage and Firestore
+    await BackgroundMessaging.initializeDataSync();
   } catch (error) {
     console.error('WordStream: Error syncing notes:', error);
-    return false;
   }
 }
 
 /**
- * Syncs chats between local storage and Firestore
- * Implements two-way synchronization with conflict resolution
+ * Synchronizes chats between local storage and server
+ * Attempts to sync chats with Firestore if connection is available
+ * @returns Promise<void>
  */
-export async function syncChatsBetweenStorageAndFirestore(): Promise<boolean> {
+export async function syncChats(): Promise<void> {
   try {
-    console.log('WordStream: Syncing chats between storage and Firestore');
-    
-    // Use the new generic sync function with 'chats' type
-    await FirestoreService.syncBetweenStorageAndFirestore('chats');
-    return true;
+    // Initiate synchronization of chats between local storage and Firestore
+    await BackgroundMessaging.initializeDataSync();
   } catch (error) {
     console.error('WordStream: Error syncing chats:', error);
-    return false;
   }
 }
 
 /**
- * Synchronizes all data types between local storage and Firestore
- * @returns Promise resolving to a boolean indicating if all syncs were successful
+ * Synchronizes all data between local storage and server
+ * Attempts to sync data with Firestore if connection is available
+ * @returns Promise<void>
  */
-export async function syncAllData(): Promise<boolean> {
+export async function syncAllData(): Promise<void> {
   try {
-    console.log('WordStream: Starting comprehensive data sync');
-    
-    // Sync all data types using the generic sync function
-    await FirestoreService.syncBetweenStorageAndFirestore('chats');
-    console.log('WordStream: Chats sync completed');
-    
-    await FirestoreService.syncBetweenStorageAndFirestore('notes');
-    console.log('WordStream: Notes sync completed');
-    
-    await FirestoreService.syncBetweenStorageAndFirestore('words');
-    console.log('WordStream: Words sync completed');
-    
-    return true;
+    // Initiate synchronization of all data between local storage and Firestore
+    await BackgroundMessaging.initializeDataSync();
   } catch (error) {
-    console.error('WordStream: Error during data sync:', error);
-    return false;
+    console.error('WordStream: Error syncing all data:', error);
   }
 }
 
 /**
- * Synchronizes data for a specific video
- * @param videoId ID of the video to sync data for
- * @returns Promise resolving to a boolean indicating if sync was successful
+ * Ensures all data is synchronized between local storage and server upon reconnection
+ * @returns Promise<void>
  */
-export async function syncVideoData(videoId: string): Promise<boolean> {
-  if (!videoId) {
-    console.warn('WordStream: Cannot sync video data - missing videoId');
-    return false;
-  }
-  
+export async function syncDataOnReconnect(): Promise<void> {
   try {
-    console.log(`WordStream: Starting sync for video ${videoId}`);
+    // Check if there is a connection and valid authentication
+    const connectionStatus = await BackgroundMessaging.checkFirestoreConnection();
     
-    // Sync all data types that could be related to a video
-    await FirestoreService.syncBetweenStorageAndFirestore('notes');
-    console.log(`WordStream: Notes sync completed for video ${videoId}`);
-    
-    await FirestoreService.syncBetweenStorageAndFirestore('chats');
-    console.log(`WordStream: Chats sync completed for video ${videoId}`);
-    
-    return true;
+    if (connectionStatus.connected && connectionStatus.authenticated) {
+      console.log('WordStream: Reconnected to Firestore, syncing data...');
+      
+      // Initiate synchronization of all data
+      await BackgroundMessaging.initializeDataSync();
+    }
   } catch (error) {
-    console.error(`WordStream: Error syncing data for video ${videoId}:`, error);
-    return false;
+    console.error('WordStream: Error syncing data on reconnect:', error);
   }
-} 
+}
+
+// Debounced versions of sync functions for better performance
+export const debouncedSyncNotes = debounce(syncNotes, 2000);
+export const debouncedSyncChats = debounce(syncChats, 2000);
+export const debouncedSyncAllData = debounce(syncAllData, 2000); 

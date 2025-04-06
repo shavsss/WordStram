@@ -1,13 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { countries } from '@/data/countries';
-import { debugFirestoreStructure, debugChats } from '@/core/firebase/firestore';
-import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import * as FirestoreService from '@/core/firebase/firestore';
-import { getCurrentUser } from '@/core/firebase/auth';
-import { useFirestore } from '@/contexts/FirestoreContext';
-import { syncAllData } from '@/services/firebase-sync';
 
 interface AuthPanelProps {
   onClose: () => void;
@@ -31,16 +25,11 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [showDebugOptions, setShowDebugOptions] = useState(true);
-  const [isDebugLoading, setDebugLoading] = useState(false);
   
   // Additional user info for registration
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
   const [country, setCountry] = useState('');
-  
-  // Get FirestoreContext
-  const firestoreContext = useFirestore();
   
   const { 
     isAuthenticated,
@@ -110,6 +99,11 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
   
   if (!isVisible) return null;
   
+  // If user is authenticated, don't show the auth panel
+  if (isAuthenticated) {
+    return null;
+  }
+  
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -161,10 +155,6 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
     }
   };
   
-  const handleSignOut = async () => {
-    await signOut();
-  };
-  
   // Reset additional fields when switching between sign in and sign up
   const toggleSignUp = () => {
     setIsSignUp(!isSignUp);
@@ -185,342 +175,6 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
     // Keep the email filled if available
     // Don't reset password field since it's not used in reset mode
   };
-  
-  // Handler for the debug structure button
-  const handleDebugStructure = async () => {
-    if (!isAuthenticated || !currentUser) {
-      toast.error('You must be logged in to debug Firestore structure');
-      return;
-    }
-    
-    try {
-      toast.info('Checking Firestore structure, check console for details...');
-      const results = await debugFirestoreStructure();
-      toast.success(`Debug complete! Found: ${results.collections.videos || 0} videos, ${results.collections.notes || 0} notes, and ${results.collections.chats || 0} chats`);
-    } catch (error) {
-      console.error('Error in debug:', error);
-      toast.error('Error checking structure');
-    }
-  };
-  
-  // Handler for the debug chats button
-  const handleDebugChats = async () => {
-    if (!isAuthenticated || !currentUser) {
-      toast.error('You must be logged in to debug chats');
-      return;
-    }
-    
-    try {
-      toast.info('Checking chats in Firestore, check console for details...');
-      const results = await debugChats();
-      toast.success(`Chats debug complete! Found: ${results.total} chats across ${Object.keys(results.byVideoId).length} videos`);
-    } catch (error) {
-      console.error('Error in chats debug:', error);
-      toast.error('Error checking chats');
-    }
-  };
-  
-  // Add function for data sync
-  const handleSyncData = async () => {
-    try {
-      setIsLoading(true);
-      toast.info('מתחיל סנכרון נתונים דו-כיווני');
-      
-      // Attempt full synchronization using FirestoreContext
-      console.log('WordStream: Starting full data sync');
-      
-      // בדיקה שהקונטקסט קיים
-      if (firestoreContext) {
-        const syncSuccess = await firestoreContext.forceSyncAll();
-        if (syncSuccess) {
-          toast.success('סנכרון הושלם בהצלחה');
-        } else {
-          toast.warning('סנכרון הושלם חלקית - יתכן שחלק מהנתונים לא סונכרנו');
-        }
-      } else {
-        // גיבוי במקרה שאין קונטקסט - שימוש ישיר בשירות ה-Firestore
-        await syncAllData();
-        
-        // Check and debug data structure
-        const currentUser = getCurrentUser();
-        if (currentUser) {
-          const results = await debugFirestoreStructure();
-          toast.success(`סנכרון הושלם! נמצאו ${results.collections.videos || 0} סרטונים, ${results.collections.notes || 0} הערות, ${results.collections.chats || 0} צ'אטים`);
-        } else {
-          toast.error('לא ניתן לבצע סנכרון: משתמש לא מחובר');
-        }
-      }
-    } catch (error) {
-      console.error('WordStream: Sync error:', error);
-      toast.error('שגיאה בסנכרון נתונים');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  // פונקצית סנכרון מחדש של הצ'אטים
-  const handleForceResyncChats = async () => {
-    setDebugLoading(true);
-    try {
-      const { forceResyncChats } = await import('@/core/firebase/firestore');
-      const result = await forceResyncChats();
-      alert(result 
-        ? "סנכרון מחדש של הצ'אטים הושלם בהצלחה!" 
-        : "סנכרון הצ'אטים נכשל, אנא בדוק את הלוגים לפרטים נוספים.");
-    } catch (error) {
-      console.error('Error force resyncing chats:', error);
-      alert("שגיאה בניסיון לסנכרן צ'אטים: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
-    } finally {
-      setDebugLoading(false);
-    }
-  };
-  
-  // פונקציית סנכרון מחדש של ההערות
-  const handleForceResyncNotes = async () => {
-    setDebugLoading(true);
-    try {
-      const { forceResyncNotes } = await import('@/core/firebase/firestore');
-      const result = await forceResyncNotes();
-      alert(result 
-        ? "סנכרון מחדש של ההערות הושלם בהצלחה!" 
-        : "סנכרון ההערות נכשל, אנא בדוק את הלוגים לפרטים נוספים.");
-    } catch (error) {
-      console.error('Error force resyncing notes:', error);
-      alert("שגיאה בניסיון לסנכרן הערות: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
-    } finally {
-      setDebugLoading(false);
-    }
-  };
-
-  // פונקצית בדיקת מצב פיירסטור
-  const handleDebugFirestoreState = async () => {
-    setDebugLoading(true);
-    try {
-      const { debugFirestoreState } = await import('@/core/firebase/firestore');
-      const debugInfo = await debugFirestoreState();
-      console.log('🔍 מצב סנכרון פיירבייס:', debugInfo);
-      
-      // הצג סיכום בסיסי למשתמש
-      let summary = "סיכום מצב הסנכרון:\n\n";
-      
-      if (debugInfo.error) {
-        summary += `❌ שגיאה: ${debugInfo.error}\n`;
-      } else {
-        summary += `✅ משתמש: ${debugInfo.userId}\n`;
-        summary += `📁 מסמכים בפיירסטור:\n`;
-        summary += `- צ'אטים: ${debugInfo.collections.chats.count || 0} (${debugInfo.collections.chats.exists ? 'קיים' : 'לא קיים'})\n`;
-        summary += `- מילים: ${debugInfo.collections.words.count || 0} (${debugInfo.collections.words.exists ? 'קיים' : 'לא קיים'})\n`;
-        summary += `- הערות: ${debugInfo.collections.notes.count || 0} (${debugInfo.collections.notes.exists ? 'קיים' : 'לא קיים'})\n`;
-        summary += `- סטטיסטיקות: ${debugInfo.collections.stats?.exists ? 'קיים' : 'לא קיים'}\n\n`;
-        
-        summary += `📋 נתונים באחסון מקומי:\n`;
-        summary += `- צ'אטים: ${debugInfo.localStorage.chats?.count || 0} (${debugInfo.localStorage.chats?.exists ? 'קיים' : 'לא קיים'})\n`;
-        summary += `- מילים: ${debugInfo.localStorage.words?.count || 0} (${debugInfo.localStorage.words?.exists ? 'קיים' : 'לא קיים'})\n`;
-        summary += `- הערות: ${debugInfo.localStorage.notes?.count || 0} (${debugInfo.localStorage.notes?.exists ? 'קיים' : 'לא קיים'})\n`;
-      }
-      
-      summary += "\nלפרטים נוספים בדוק את הקונסול.";
-      alert(summary);
-    } catch (error) {
-      console.error('Error checking Firestore state:', error);
-      alert("שגיאה בבדיקת מצב הסנכרון: " + (error instanceof Error ? error.message : "שגיאה לא ידועה"));
-    } finally {
-      setDebugLoading(false);
-    }
-  };
-  
-  // When user is authenticated, show profile info and actions
-  if (isAuthenticated) {
-    return (
-      <div
-        className={`auth-panel bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 transition-opacity duration-300 ${
-          isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-      >
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold text-gray-800 dark:text-white">פרופיל משתמש</h2>
-          {!isPopup && (
-            <button
-              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-              onClick={onClose}
-              aria-label="Close"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          )}
-        </div>
-
-        <div className="mb-6">
-          <p className="text-gray-700 dark:text-gray-300 text-center mb-2">
-            מחובר כ-{currentUser?.email}
-          </p>
-          <div className="flex flex-col space-y-3">
-            <button
-              className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50"
-              onClick={handleSignOut}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  בתהליך...
-                </span>
-              ) : (
-                'התנתקות'
-              )}
-            </button>
-            
-            {/* New Sync Data Button */}
-            <button
-              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
-              onClick={handleSyncData}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  מסנכרן...
-                </span>
-              ) : (
-                'סנכרון נתונים'
-              )}
-            </button>
-            
-            <button
-              className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50"
-              onClick={handleDebugStructure}
-              disabled={isLoading}
-            >
-              בדיקת מבנה נתונים
-            </button>
-            
-            <button
-              className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50"
-              onClick={handleDebugChats}
-              disabled={isLoading}
-            >
-              בדיקת צ'אטים
-            </button>
-          </div>
-        </div>
-
-        // Developer options at the bottom
-        <div className="mt-6 border-t border-gray-200 pt-4">
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-3">אפשרויות מפתח</h3>
-          <div className="grid grid-cols-1 gap-3">
-            <button 
-              onClick={handleDebugFirestoreState}
-              disabled={isDebugLoading}
-              className="w-full py-2 px-4 bg-gray-600 hover:bg-gray-700 text-white rounded transition duration-200"
-            >
-              {isDebugLoading ? 'בודק...' : 'בדוק מצב סנכרון'}
-            </button>
-            
-            <button 
-              onClick={handleForceResyncChats}
-              disabled={isDebugLoading}
-              className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded transition duration-200"
-            >
-              {isDebugLoading ? 'מסנכרן...' : 'סנכרן צאטים מחדש'}
-            </button>
-            
-            <button 
-              onClick={handleForceResyncNotes}
-              disabled={isDebugLoading}
-              className="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition duration-200"
-            >
-              {isDebugLoading ? 'מסנכרן...' : 'סנכרן הערות מחדש'}
-            </button>
-            
-            <button
-              className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
-              onClick={handleSyncData}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  מסנכרן...
-                </span>
-              ) : (
-                'סנכרון נתונים'
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
   
   // Authentication form
   return (
@@ -568,45 +222,52 @@ export function AuthPanel({ onClose, isVisible, isPopup = false }: AuthPanelProp
       {error && (
         <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
           <div className="flex items-center mb-1">
-            <svg className="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 mr-2 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
             </svg>
-            <strong>We encountered an issue</strong>
+            <strong className="font-medium">We encountered an issue</strong>
           </div>
-          <p className="ml-7">{error}</p>
+          <p className="ml-7 mb-2">{error}</p>
           
-          {/* Show password reset button if account is locked */}
-          {error.includes('account is locked') || error.includes('temporarily locked') ? (
-            <div className="mt-3 flex flex-col gap-2">
+          {/* Render appropriate action buttons based on the error type */}
+          <div className="ml-7 mt-2">
+            {/* Password reset option - for account locked or password errors */}
+            {(error.includes('password') || error.includes('locked') || error.includes('many attempts')) && (
               <button 
                 onClick={() => switchToResetMode()}
-                className="w-full text-sm bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-3 rounded-md transition-colors"
+                className="w-full text-sm bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-3 rounded-md transition-colors mb-2"
               >
-                Reset Password
+                Reset My Password
               </button>
-              <button 
-                onClick={() => {
-                  setEmail('');
-                  setPassword('');
-                  signOut();
-                }}
-                className="w-full text-sm bg-white border border-red-300 text-red-700 py-1.5 px-3 rounded-md hover:bg-red-50 transition-colors"
-              >
-                Clear and Try Different Account
-              </button>
-            </div>
-          ) : (
+            )}
+            
+            {/* Configuration errors */}
+            {error.includes('configuration') && (
+              <div className="text-xs mt-1 text-red-600">
+                <p>The application is experiencing connection issues. Please try again later.</p>
+              </div>
+            )}
+            
+            {/* Network errors */}
+            {error.includes('internet') && (
+              <div className="text-xs mt-1 text-red-600">
+                <p>Please check your internet connection and try again.</p>
+              </div>
+            )}
+            
+            {/* Clear form and try again button for general errors */}
             <button 
               onClick={() => {
                 setEmail('');
                 setPassword('');
+                if (isSignUp) setConfirmPassword('');
                 signOut();
               }}
-              className="w-full mt-2 text-sm bg-white border border-red-300 text-red-700 py-1.5 px-3 rounded-md hover:bg-red-50 transition-colors"
+              className="w-full text-sm border border-red-300 text-red-700 py-1.5 px-3 rounded-md hover:bg-red-50 transition-colors"
             >
-              Clear and Try Again
+              Clear Form & Try Again
             </button>
-          )}
+          </div>
         </div>
       )}
       

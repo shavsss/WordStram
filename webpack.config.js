@@ -12,7 +12,8 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: '[name].js',
-    clean: true
+    clean: true,
+    pathinfo: false
   },
   target: 'web',
   module: {
@@ -58,21 +59,37 @@ module.exports = {
   plugins: [
     new CopyPlugin({
       patterns: [
-        { from: 'public' },
-        { from: 'src/firebase-cors-override.js', to: 'firebase-cors-override.js' },
+        { from: 'public/popup.html', to: 'popup.html' },
+        { from: 'public/popup.css', to: 'popup.css' },
+        { from: 'public/content.css', to: 'content.css' },
+        { from: 'public/icons', to: 'icons' },
+        { from: 'public/manifest.json', to: 'manifest.json' },
+        { from: 'public/api-keys.json', to: 'api-keys.json' }
       ],
     }),
     new webpack.DefinePlugin({
       'process.env': '{}',
       'process': '{}'
     }),
+    new webpack.optimize.MinChunkSizePlugin({
+      minChunkSize: 10000000 // גדול מאוד כדי למנוע פיצול
+    }),
   ],
   optimization: {
+    splitChunks: false,
+    runtimeChunk: false,
+    concatenateModules: true,
+    minimize: true,
+    providedExports: true,
+    usedExports: true,
     minimizer: [
       new TerserPlugin({
         terserOptions: {
           format: {
             comments: false
+          },
+          compress: {
+            drop_console: false
           }
         },
         extractComments: false
@@ -80,7 +97,9 @@ module.exports = {
     ]
   },
   performance: {
-    hints: false
+    hints: false,
+    maxAssetSize: 4000000,
+    maxEntrypointSize: 4000000
   },
   devtool: 'cheap-source-map'
 }; 

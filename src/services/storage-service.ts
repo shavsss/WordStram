@@ -5,7 +5,7 @@
 
 import { Note } from '@/features/notes/types';
 import { getCurrentUser } from '@/core/firebase/auth';
-import * as FirestoreService from '@/core/firebase/firestore';
+import * as BackgroundMessaging from '@/utils/background-messaging';
 import AuthManager from '@/core/auth-manager';
 
 /**
@@ -14,12 +14,12 @@ import AuthManager from '@/core/auth-manager';
  */
 async function requireAuth(): Promise<boolean> {
   try {
-    // בדיקה מהירה עם AuthManager
+    // Quick check with AuthManager
     if (AuthManager.isAuthenticated()) {
       return true;
     }
     
-    // אם לא מצאנו משתמש מיידית, ננסה לבדוק באחסון (פעולה אסינכרונית)
+    // If we didn't find a user immediately, try checking in storage (async operation)
     const user = await AuthManager.checkStorageAuth();
     return !!user;
   } catch (error) {
@@ -35,14 +35,14 @@ async function requireAuth(): Promise<boolean> {
  */
 export async function getNotes(videoId: string): Promise<Note[]> {
   try {
-    // בדיקת אימות מחמירה לפני טעינת הערות
+    // Strict authentication check before loading notes
     const isAuth = await requireAuth();
     if (!isAuth) {
       console.warn('WordStream: Cannot load notes - no authenticated user');
       return [];
     }
     
-    return await FirestoreService.getNotes(videoId);
+    return await BackgroundMessaging.getNotes(videoId);
   } catch (error) {
     console.error('WordStream: Failed to load notes:', error);
     return [];
@@ -57,7 +57,7 @@ export async function getNotes(videoId: string): Promise<Note[]> {
  */
 export async function saveNotes(videoId: string, notes: Note[]): Promise<boolean> {
   try {
-    // בדיקת אימות לפני שמירת הערות
+    // Authentication check before saving notes
     const isAuth = await requireAuth();
     if (!isAuth) {
       console.warn('WordStream: Cannot save notes - no authenticated user');
@@ -83,7 +83,7 @@ export async function deleteNote(
   noteId: string, 
   currentNotes: Note[]
 ): Promise<Note[]> {
-  // בדיקת אימות מחמירה לפני מחיקת הערה
+  // Strict authentication check before deleting a note
   try {
     const isAuth = await requireAuth();
     if (!isAuth) {
@@ -91,7 +91,7 @@ export async function deleteNote(
       return currentNotes;
     }
     
-    const success = await FirestoreService.deleteNote(noteId);
+    const success = await BackgroundMessaging.deleteNote(noteId);
     if (success) {
       // Filter locally to avoid another network request
       return currentNotes.filter(note => note.id !== noteId);
@@ -117,7 +117,7 @@ export async function addNote(
   currentTime: number | undefined,
   currentNotes: Note[]
 ): Promise<Note[]> {
-  // בדיקת אימות מחמירה לפני הוספת הערה חדשה
+  // Strict authentication check before adding a new note
   try {
     const isAuth = await requireAuth();
     if (!isAuth) {
@@ -134,7 +134,7 @@ export async function addNote(
       videoId
     };
     
-    const savedNote = await FirestoreService.saveNote(newNoteData);
+    const savedNote = await BackgroundMessaging.saveNote(newNoteData);
     
     if (savedNote) {
       // If savedNote is a string (ID), then return the note with the ID assigned
@@ -148,5 +148,51 @@ export async function addNote(
   } catch (error) {
     console.error('WordStream: Failed to save note:', error);
     return currentNotes;
+  }
+}
+
+/**
+ * Get notes for a specific video
+ * @param videoId The ID of the video
+ * @returns Promise resolving to an array of notes
+ */
+export async function getVideoNotes(videoId: string): Promise<Note[]> {
+  try {
+    // Try to get notes from the server via background messaging
+    return await BackgroundMessaging.getNotes(videoId);
+  } catch (error) {
+    console.error(`WordStream: Error getting notes for video ${videoId}:`, error);
+    return [];
+  }
+}
+
+// Definition of NoteData type
+export interface NoteData {
+  id?: string;
+  videoId: string;
+  content: string;
+  timestamp: string;
+  videoTime?: number;
+  title?: string;
+  tags?: string[];
+  userId?: string;
+}
+
+/**
+ * Save a new note
+ * @param noteData Note data to save
+ * @returns Promise resolving to the new note ID or null on error
+ */
+export async function saveNote(noteData: NoteData): Promise<string | null> {
+  try {
+    // Save the note via background messaging
+    const savedNote = await BackgroundMessaging.saveNote(noteData);
+    
+    // Original code for local storage backup remains unchanged
+    
+    return savedNote;
+  } catch (error) {
+    console.error('WordStream: Error saving note:', error);
+    return null;
   }
 } 

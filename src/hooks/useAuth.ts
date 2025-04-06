@@ -10,8 +10,9 @@ import {
   getCurrentUser,
   subscribeToAuthChanges
 } from '@/core/firebase/auth';
-import { syncBetweenStorageAndFirestore } from '@/core/firebase/firestore';
+import { syncBetweenStorageAndFirestore } from '@/core/firebase';
 import AuthManager from '@/core/auth-manager';
+import { processAuthError } from '@/utils/firebase-error-messages';
 
 // Constants for login security
 const MAX_FAILED_ATTEMPTS = 5; // Maximum failed login attempts before locking
@@ -115,11 +116,13 @@ export function useAuth() {
       }));
       return false;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const friendlyErrorMessage = processAuthError(error);
+      console.error('Auth error:', error);
+      
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage 
+        error: friendlyErrorMessage 
       }));
       return false;
     }
@@ -151,11 +154,13 @@ export function useAuth() {
       }));
       return false;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const friendlyErrorMessage = processAuthError(error);
+      console.error('Google auth error:', error);
+      
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage 
+        error: friendlyErrorMessage 
       }));
       return false;
     }
@@ -176,11 +181,13 @@ export function useAuth() {
       updateGlobalAuthState(result.user);
       return true;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const friendlyErrorMessage = processAuthError(error);
+      console.error('Registration error:', error);
+      
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage 
+        error: friendlyErrorMessage 
       }));
       return false;
     }
@@ -200,11 +207,13 @@ export function useAuth() {
       });
       updateGlobalAuthState(null);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const friendlyErrorMessage = processAuthError(error);
+      console.error('Sign out error:', error);
+      
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage 
+        error: friendlyErrorMessage 
       }));
     }
   };
@@ -221,11 +230,13 @@ export function useAuth() {
       }));
       return true;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const friendlyErrorMessage = processAuthError(error);
+      console.error('Password reset error:', error);
+      
       setAuthState(prev => ({ 
         ...prev, 
         isLoading: false, 
-        error: errorMessage 
+        error: friendlyErrorMessage 
       }));
       return false;
     }

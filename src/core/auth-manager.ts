@@ -8,49 +8,49 @@ import {
   setDoc
 } from '@/core/firebase/firestore';
 
-// האובייקט המרכזי שינהל את האימות
+// Central object that manages authentication
 const AuthManager = {
   /**
-   * קבל את המשתמש הנוכחי מכל מקור אפשרי
+   * Get the current user from any possible source
    */
   getCurrentUser(): User | null {
-    // 1. נסה להשיג מ-Firebase
+    // 1. Try to get from Firebase
     const firebaseUser = getFirebaseCurrentUser();
     if (firebaseUser) {
       this.updateAuthState(firebaseUser);
       return firebaseUser;
     }
 
-    // 2. נסה להשיג מהאובייקט הגלובלי
+    // 2. Try to get from global object
     if (typeof window !== 'undefined' && window.WordStream?.currentUser) {
       return window.WordStream.currentUser as User;
     }
 
-    // 3. נסה להשיג מאחסון מקומי (אסינכרוני, אבל מחזיר null בינתיים)
+    // 3. Try to get from local storage (async, but returns null for now)
     this.checkStorageAuth();
     
     return null;
   },
 
   /**
-   * בדוק אם המשתמש מאומת
+   * Check if user is authenticated
    */
   isAuthenticated(): boolean {
     return !!this.getCurrentUser();
   },
 
   /**
-   * עדכן את מצב האימות בכל המקומות הרלוונטיים
+   * Update authentication state in all relevant places
    */
   updateAuthState(user: User | null): void {
-    // עדכן את האובייקט הגלובלי
+    // Update global object
     if (typeof window !== 'undefined') {
       if (!window.WordStream) {
         window.WordStream = {};
       }
       
       if (user) {
-        // שמור מידע מינימלי נדרש
+        // Store minimum required information
         window.WordStream.currentUser = {
           uid: user.uid,
           email: user.email,
@@ -64,34 +64,25 @@ const AuthManager = {
       }
     }
 
-    // שמור באחסון מקומי
+    // Save to local storage
     this.saveToStorage(user);
   },
 
   /**
-   * שמור מידע אימות באחסון מקומי
+   * Save authentication information to local storage
    */
-  saveToStorage(user: User | null): void {
+  async saveToStorage(user: User | null): Promise<void> {
     try {
-      // שמור ב-localStorage
-      if (typeof localStorage !== 'undefined') {
-        if (user) {
-          localStorage.setItem('wordstream_auth_state', 'authenticated');
-          localStorage.setItem('wordstream_user_info', JSON.stringify({
+      // Save to chrome.storage.local
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        const data = user ? {
+          wordstream_auth_state: 'authenticated',
+          wordstream_user_info: {
             uid: user.uid,
             email: user.email,
             displayName: user.displayName,
             photoURL: user.photoURL
-          }));
-        } else {
-          localStorage.removeItem('wordstream_auth_state');
-          localStorage.removeItem('wordstream_user_info');
-        }
-      }
-
-      // שמור ב-chrome.storage.local
-      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        const data = user ? {
+          },
           isAuthenticated: true,
           userInfo: {
             uid: user.uid,
@@ -101,12 +92,23 @@ const AuthManager = {
           },
           lastAuthCheck: new Date().toISOString()
         } : {
+          wordstream_auth_state: null,
+          wordstream_user_info: null,
           isAuthenticated: false,
           userInfo: null,
           lastAuthCheck: new Date().toISOString()
         };
 
-        chrome.storage.local.set(data);
+        await new Promise<void>((resolve, reject) => {
+          chrome.storage.local.set(data, () => {
+            if (chrome.runtime.lastError) {
+              console.warn('WordStream AuthManager: Error saving auth state:', chrome.runtime.lastError);
+              reject(chrome.runtime.lastError);
+            } else {
+              resolve();
+            }
+          });
+        });
       }
     } catch (error) {
       console.warn('WordStream AuthManager: Error saving auth state:', error);
@@ -114,20 +116,31 @@ const AuthManager = {
   },
 
   /**
-   * בדוק אימות באחסון ועדכן את המצב הגלובלי אם נמצא
+   * Check storage for authentication and update global state if found
    */
   async checkStorageAuth(): Promise<User | null> {
     try {
-      // נסה להשיג מ-chrome.storage.local
+      // Try to get from chrome.storage.local
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        const result = await new Promise<{isAuthenticated?: boolean, userInfo?: any}>((resolve) => {
-          chrome.storage.local.get(['isAuthenticated', 'userInfo'], (data) => {
-            resolve(data);
+        const result = await new Promise<any>((resolve) => {
+          chrome.storage.local.get([
+            'isAuthenticated', 
+            'userInfo', 
+            'wordstream_auth_state', 
+            'wordstream_user_info'
+          ], (data) => {
+            if (chrome.runtime.lastError) {
+              console.warn('WordStream: Error accessing storage:', chrome.runtime.lastError);
+              resolve({});
+            } else {
+              resolve(data);
+            }
           });
         });
         
+        // Check in new structure
         if (result.isAuthenticated && result.userInfo) {
-          // עדכן את האובייקט הגלובלי
+          // Update global object
           if (typeof window !== 'undefined') {
             if (!window.WordStream) {
               window.WordStream = {};
@@ -138,17 +151,12 @@ const AuthManager = {
           
           return result.userInfo as User;
         }
-      }
-      
-      // נסה להשיג מ-localStorage
-      if (typeof localStorage !== 'undefined') {
-        const authState = localStorage.getItem('wordstream_auth_state');
-        const userInfo = localStorage.getItem('wordstream_user_info');
         
-        if (authState === 'authenticated' && userInfo) {
-          const user = JSON.parse(userInfo);
+        // Check in old structure
+        if (result.wordstream_auth_state === 'authenticated' && result.wordstream_user_info) {
+          const user = result.wordstream_user_info;
           
-          // עדכן את האובייקט הגלובלי
+          // Update global object
           if (typeof window !== 'undefined') {
             if (!window.WordStream) {
               window.WordStream = {};
@@ -176,28 +184,44 @@ const AuthManager = {
       // Check if there's a current user
       const user = this.getCurrentUser();
       if (!user) {
-        console.warn('WordStream AuthManager: No user to refresh token');
+        console.warn('WordStream AuthManager: No user found to refresh authentication token');
         return false;
+      }
+
+      // Check if we have a recently refreshed token in cache
+      try {
+        const tokenCache = await chrome.storage.local.get(['wordstream_auth_token', 'wordstream_auth_token_timestamp']);
+        const tokenTimestamp = tokenCache.wordstream_auth_token_timestamp || 0;
+        const now = Date.now();
+        
+        // If token was refreshed less than 5 minutes ago, consider it valid
+        if (tokenCache.wordstream_auth_token && (now - tokenTimestamp < 5 * 60 * 1000)) {
+          console.log('WordStream AuthManager: Using cached token (refreshed within last 5 minutes)');
+          return true;
+        }
+      } catch (cacheError) {
+        console.warn('WordStream AuthManager: Error checking token cache:', cacheError);
+        // Continue with normal token refresh
       }
 
       // More aggressive approach - try to reload the user if possible
       if (auth.currentUser) {
         try {
-          console.log('WordStream AuthManager: Reload existing user');
+          console.log('WordStream AuthManager: Reloading existing user for fresh authentication state');
           await auth.currentUser.reload();
           
           // After reload, double-check currentUser still exists
           if (!auth.currentUser) {
-            console.warn('WordStream AuthManager: User disappeared after reload');
+            console.warn('WordStream AuthManager: User account no longer exists after reload');
             return false;
           }
         } catch (reloadError) {
-          console.warn('WordStream AuthManager: Error reloading user:', reloadError);
+          console.warn('WordStream AuthManager: Error reloading user - potential authentication issue:', reloadError);
           // Continue with token refresh attempt despite reload failure
         }
       } else {
         // Critical warning if no auth.currentUser
-        console.warn('WordStream AuthManager: No Firebase auth.currentUser available for token refresh');
+        console.warn('WordStream AuthManager: Firebase auth session not found - user may need to sign in again');
       }
 
       // Force token refresh and wait to ensure it propagates
@@ -206,10 +230,10 @@ const AuthManager = {
       // First try with currentUser (most reliable)
       if (auth.currentUser && typeof auth.currentUser.getIdToken === 'function') {
         try {
-          console.log('WordStream AuthManager: Forcing token refresh via Firebase auth');
+          console.log('WordStream AuthManager: Refreshing authentication token via Firebase auth');
           token = await auth.currentUser.getIdToken(true);
         } catch (firebaseTokenError) {
-          console.warn('WordStream AuthManager: Firebase token refresh failed:', firebaseTokenError);
+          console.warn('WordStream AuthManager: Firebase token refresh failed - token may be expired:', firebaseTokenError);
           // Continue with backup method
         }
       }
@@ -217,30 +241,42 @@ const AuthManager = {
       // Backup: try with our cached user object
       if (!token && typeof user.getIdToken === 'function') {
         try {
-          console.log('WordStream AuthManager: Forcing token refresh via cached user');
+          console.log('WordStream AuthManager: Attempting token refresh via cached user credentials');
           token = await user.getIdToken(true);
         } catch (userTokenError) {
-          console.warn('WordStream AuthManager: Cached user token refresh failed:', userTokenError);
+          console.warn('WordStream AuthManager: Failed to refresh authentication - user may need to sign in again:', userTokenError);
           return false;
         }
       }
       
       if (!token) {
-        console.warn('WordStream AuthManager: Failed to obtain fresh token');
+        console.warn('WordStream AuthManager: Could not obtain authentication token - please sign in again');
         return false;
       }
       
       // Wait longer for the token to propagate through Firebase systems
       await new Promise(resolve => setTimeout(resolve, 1500));
       
+      // Cache the refreshed token
+      try {
+        await chrome.storage.local.set({
+          'wordstream_auth_token': token,
+          'wordstream_auth_token_timestamp': Date.now()
+        });
+        console.log('WordStream AuthManager: Successfully cached authentication token');
+      } catch (cacheError) {
+        console.warn('WordStream AuthManager: Failed to cache authentication token:', cacheError);
+        // Non-critical error, continue
+      }
+      
       // Update auth state with refreshed user
       const refreshedUser = auth.currentUser || user;
       this.updateAuthState(refreshedUser);
       
-      console.log('WordStream AuthManager: Token refreshed successfully');
+      console.log('WordStream AuthManager: Authentication refreshed successfully');
       return true;
     } catch (error) {
-      console.warn('WordStream AuthManager: Token refresh failed:', error);
+      console.warn('WordStream AuthManager: Authentication refresh failed:', error);
       return false;
     }
   },
@@ -251,178 +287,96 @@ const AuthManager = {
    */
   async checkPermissions(): Promise<boolean> {
     try {
-      // בדוק אם המשתמש מחובר
+      // Check if user is authenticated
       if (!this.isAuthenticated()) {
-        console.warn('WordStream AuthManager: Cannot check permissions - user not authenticated');
-        return false;
+        console.warn('WordStream AuthManager: Cannot verify permissions - user not authenticated');
+        
+        // Try to reauthenticate if no user is found
+        const reauthResult = await this.reauthenticateIfNeeded();
+        if (!reauthResult) {
+          console.error('WordStream AuthManager: Reauthentication failed during permissions check');
+          return false;
+        }
+        
+        // Check again after reauthentication attempt
+        if (!this.isAuthenticated()) {
+          console.error('WordStream AuthManager: Still not authenticated after reauthentication attempt');
+          return false;
+        }
       }
       
       const user = this.getCurrentUser();
       if (!user || !user.uid) {
-        console.warn('WordStream AuthManager: Cannot check permissions - no valid user ID');
+        console.warn('WordStream AuthManager: Cannot verify permissions - invalid user ID');
         return false;
       }
       
-      // נסה לבצע פעולת קריאה בסיסית מ-Firestore כבדיקת הרשאות
+      // Try to perform a basic read operation from Firestore as a permissions check
       try {
-        console.log('WordStream AuthManager: Testing permissions with basic document read');
-        // לרוב הרשאות קריאה לפרופיל המשתמש עצמו הן המינימליות ביותר
-        await getUserProfileDocument();
-        // אם הצלחנו לקרוא, יש לנו הרשאות תקינות
-        console.log('WordStream AuthManager: Permissions check passed');
+        console.log('WordStream AuthManager: Verifying database permissions with test read');
+        // Reading user's own profile typically requires minimal permissions
+        const userProfile = await getUserProfileDocument();
+        
+        if (!userProfile) {
+          console.warn('WordStream AuthManager: Permissions check failed - could not read user profile');
+          return false;
+        }
+        
+        console.log('WordStream AuthManager: Permissions verified successfully');
         return true;
-      } catch (permError: any) {
-        // אם נתקלנו בשגיאת הרשאות, ננסה לעדכן את הטוקן ולנסות שוב
-        if (permError?.code === 'permission-denied') {
-          console.warn('WordStream AuthManager: Permission denied, attempting aggressive token refresh');
+      } catch (error) {
+        console.error('WordStream AuthManager: Permissions check failed with error:', error);
+        
+        // If we get a permission-denied error, try to refresh the token
+        if (error instanceof Error && 
+            (error.message.includes('permission-denied') || 
+             error.message.includes('unauthenticated') || 
+             error.message.includes('invalid-argument'))) {
           
-          // נסה לאתחל מחדש את כל המשתמש
-          try {
-            // 1. נסה לרענן את הטוקן
-            const tokenRefreshed = await this.verifyTokenAndRefresh();
-            
-            // 2. אם הצלחנו, נסה שוב
-            if (tokenRefreshed) {
-              try {
-                await getUserProfileDocument();
-                console.log('WordStream AuthManager: Permissions check passed after token refresh');
-                return true;
-              } catch (secondError) {
-                console.warn('WordStream AuthManager: Still no permissions after token refresh');
-              }
-            }
-          } catch (refreshError) {
-            console.warn('WordStream AuthManager: Error during permissions retry:', refreshError);
+          console.log('WordStream AuthManager: Detected permission issue, attempting to refresh token');
+          const refreshResult = await this.verifyTokenAndRefresh();
+          
+          if (refreshResult) {
+            console.log('WordStream AuthManager: Token refreshed, retrying permission check');
+            return await this.checkPermissions(); // Try again after refresh
           }
         }
         
-        console.warn('WordStream AuthManager: Permission check failed:', permError?.code || permError);
         return false;
       }
-    } catch (error: any) {
-      console.warn('WordStream AuthManager: Error during permission check:', error);
+    } catch (error) {
+      console.error('WordStream AuthManager: Error checking permissions:', error);
       return false;
     }
   },
 
   /**
-   * Try to reauthenticate automatically if needed
-   * @returns Promise resolving to whether reauthentication was successful
+   * Reauthenticate if needed (token expired or user state changed)
+   * @returns Promise resolving to success status
    */
   async reauthenticateIfNeeded(): Promise<boolean> {
     try {
-      console.log('WordStream: Starting reauthentication process');
+      console.log('WordStream AuthManager: Checking if reauthentication is needed');
       
-      // Check if we have a user and if permissions are valid
-      const initialPermissions = await this.checkPermissions();
+      // Check if there's a stored auth state in chrome.storage.local
+      const storedUser = await this.checkStorageAuth();
       
-      if (initialPermissions) {
-        console.log('WordStream: User already has valid permissions');
-        return true;
+      if (storedUser) {
+        console.log('WordStream AuthManager: Found stored user auth, refreshing token');
+        return await this.verifyTokenAndRefresh();
       }
       
-      // Get the current user from all possible sources
-      const user = this.getCurrentUser();
-      if (!user) {
-        console.warn('WordStream: No user found for reauthentication');
-        return false;
+      // If we have a current user but token might be expired
+      const currentUser = this.getCurrentUser();
+      if (currentUser) {
+        console.log('WordStream AuthManager: Current user exists, refreshing token');
+        return await this.verifyTokenAndRefresh();
       }
       
-      console.log('WordStream: Found user for reauthentication:', user.uid);
-      
-      // Try multiple reauthentication strategies
-      let success = false;
-      
-      // Strategy 1: Try to reload Firebase user
-      if (typeof auth.currentUser?.reload === 'function') {
-        try {
-          console.log('WordStream: Attempting to reload Firebase user');
-          await auth.currentUser.reload();
-          
-          // Force token refresh
-          if (typeof auth.currentUser.getIdToken === 'function') {
-            await auth.currentUser.getIdToken(true);
-          }
-          
-          // Check if reload worked
-          const checkAfterReload = await this.checkPermissions();
-          if (checkAfterReload) {
-            console.log('WordStream: User reload reauthentication succeeded');
-            return true;
-          }
-        } catch (reloadError) {
-          console.warn('WordStream: Error reloading Firebase user:', reloadError);
-        }
-      }
-      
-      // Strategy 2: Try to access the token directly if available on the user object
-      if (typeof user.getIdToken === 'function') {
-        try {
-          console.log('WordStream: Attempting direct token refresh');
-          await user.getIdToken(true);
-          
-          // Check if token refresh worked
-          const checkAfterTokenRefresh = await this.checkPermissions();
-          if (checkAfterTokenRefresh) {
-            console.log('WordStream: Direct token refresh succeeded');
-            return true;
-          }
-        } catch (tokenError) {
-          console.warn('WordStream: Error refreshing token directly:', tokenError);
-        }
-      }
-      
-      // Strategy 3: Try Chrome-specific reauthentication if in extension context
-      if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-        try {
-          console.log('WordStream: Attempting Chrome extension-specific authentication');
-          
-          // Clear and update local storage
-          localStorage.removeItem('wordstream_auth_state');
-          localStorage.setItem('wordstream_auth_state', 'refreshing');
-          
-          // Use chrome.identity if available (in extensions)
-          if (chrome.identity && typeof chrome.identity.getAuthToken === 'function') {
-            await new Promise<void>((resolve, reject) => {
-              chrome.identity.getAuthToken({ interactive: false }, (token) => {
-                if (chrome.runtime.lastError) {
-                  console.warn('WordStream: Chrome identity error:', chrome.runtime.lastError);
-                  reject(chrome.runtime.lastError);
-                } else if (token) {
-                  console.log('WordStream: Got new Chrome identity token');
-                  resolve();
-                } else {
-                  reject(new Error('No token returned'));
-                }
-              });
-            });
-          }
-          
-          // Save updated user to storage
-          this.saveToStorage(user);
-          
-          // Check if Chrome reauthentication worked
-          const checkAfterChromeAuth = await this.checkPermissions();
-          if (checkAfterChromeAuth) {
-            console.log('WordStream: Chrome-specific reauthentication succeeded');
-            return true;
-          }
-        } catch (chromeError) {
-          console.warn('WordStream: Error in Chrome-specific reauthentication:', chromeError);
-        }
-      }
-      
-      // Final check
-      const finalCheck = await this.checkPermissions();
-      if (finalCheck) {
-        console.log('WordStream: Reauthentication eventually succeeded');
-        return true;
-      }
-      
-      console.warn('WordStream: All reauthentication attempts failed, user interaction may be needed');
+      console.log('WordStream AuthManager: No stored or current user found for reauthentication');
       return false;
     } catch (error) {
-      console.warn('WordStream: Unhandled error during reauthentication:', error);
+      console.error('WordStream AuthManager: Error during reauthentication:', error);
       return false;
     }
   }
@@ -433,7 +387,10 @@ export default AuthManager;
 async function getUserProfileDocument() {
   try {
     const user = AuthManager.getCurrentUser();
-    if (!user) return null;
+    if (!user) {
+      console.warn('WordStream: Cannot get user profile - no authenticated user');
+      return null;
+    }
     
     // Use the new approach with direct Firestore functions
     const userDocRef = doc(firestore, 'users', user.uid);
@@ -443,6 +400,7 @@ async function getUserProfileDocument() {
       return { id: userDoc.id, ...userDoc.data() };
     } else {
       // Create the user document if it doesn't exist
+      console.log('WordStream: Creating new user profile document');
       const userData = {
         uid: user.uid,
         email: user.email,
@@ -455,7 +413,7 @@ async function getUserProfileDocument() {
       return userData;
     }
   } catch (error) {
-    console.error('Error getting user profile document:', error);
+    console.error('WordStream: Error accessing user profile document:', error);
     return null;
   }
 } 

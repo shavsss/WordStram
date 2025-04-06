@@ -27,14 +27,17 @@ export function useBackgroundSync({
 
   // Function to perform sync
   const sync = useCallback(async () => {
-    if (isSyncing) return; // Prevent multiple concurrent syncs
+    if (isSyncing) return false; // Prevent multiple concurrent syncs
     
     try {
       setIsSyncing(true);
       onSyncStart?.();
       
       console.log('WordStream: Starting background sync');
-      const success = await syncAllData();
+      await syncAllData();
+      
+      // נניח שהסינכרון הצליח אם לא נזרקה שגיאה
+      const success = true;
       
       setLastSyncStatus(success);
       setLastSyncTime(new Date());

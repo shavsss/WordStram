@@ -7,7 +7,7 @@
  */
 
 // React וספריות בסיס
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 
 // ספריות תאריכים
@@ -43,7 +43,7 @@ import { SavedChats } from '@/components/chats/SavedChats';
 // שירותים וטיפוסים
 import { Word } from '@/types/word';
 import { useAuth } from '@/hooks/useAuth';
-import * as FirestoreService from '@/core/firebase/firestore';
+import * as BackgroundMessaging from '@/utils/background-messaging';
 import { safeDate, safeFormatDate } from '@/utils/date-utils';
 
 // ספריות חיצוניות
@@ -605,6 +605,26 @@ export default function Popup() {
         // Apply dark mode from saved settings
         document.documentElement.classList.toggle('dark', savedSettings.darkMode);
 
+        // Initialize Firestore data sync for real-time updates
+        if (isAuthenticated) {
+          console.log('WordStream Popup: User is authenticated, initializing data sync');
+          
+          // Start data synchronization with Firestore
+          const cleanup = await BackgroundMessaging.initializeDataSync();
+          
+          // Set up broadcast listener for real-time updates
+          const broadcastCleanup = BackgroundMessaging.setupBroadcastListener(handleBroadcastMessage);
+          
+          // Return a cleanup function for when the popup is closed
+          return () => {
+            console.log('WordStream Popup: Cleaning up data sync');
+            cleanup();
+            broadcastCleanup();
+          };
+        } else {
+          console.log('WordStream Popup: User is not authenticated, loading from local storage only');
+        }
+        
         // Load words from either new format or old format
         let allWords: any[] = [];
         
@@ -747,7 +767,34 @@ export default function Popup() {
       }
     };
 
-    loadData();
+    // Load data and get cleanup function
+    const cleanupPromise = loadData();
+    
+    // Return cleanup function
+    return () => {
+      cleanupPromise.then(cleanup => {
+        if (typeof cleanup === 'function') {
+          cleanup();
+        }
+      });
+    };
+  }, [isAuthenticated]); // Re-run when authentication state changes
+
+  // Add broadcast message handler
+  const handleBroadcastMessage = useCallback((message: any) => {
+    console.log('WordStream Popup: Received broadcast message:', message);
+    
+    if (message.action === 'WORDS_UPDATED' && Array.isArray(message.words)) {
+      console.log(`WordStream Popup: Updating words from broadcast (${message.words.length} words)`);
+      setWords(message.words);
+    }
+    
+    if (message.action === 'STATS_UPDATED' && message.stats) {
+      console.log('WordStream Popup: Updating stats from broadcast');
+      setStats(message.stats);
+    }
+    
+    // Handle other message types as needed
   }, []);
 
   // Update the streak based on last active date
@@ -880,7 +927,7 @@ export default function Popup() {
       // Try to get stats from Firestore first if the user is authenticated
       if (currentUser) {
         try {
-          const firestoreStats = await FirestoreService.getUserStats();
+          const firestoreStats = await BackgroundMessaging.getUserStats();
           if (firestoreStats) {
             console.log('WordStream: Successfully loaded stats from Firestore');
             setStats(firestoreStats);
@@ -977,7 +1024,7 @@ export default function Popup() {
           } else {
             // Save updated stats to Firestore if user is authenticated
             if (currentUser) {
-              FirestoreService.saveUserStats(updatedStats).catch(err => {
+              BackgroundMessaging.saveUserStats(updatedStats).catch(err => {
                 console.error('WordStream: Error saving stats to Firestore:', err);
               });
             }
@@ -985,7 +1032,7 @@ export default function Popup() {
         });
       } else if (currentUser && result.stats) {
         // Even if no changes needed, save to Firestore for consistency
-        FirestoreService.saveUserStats(result.stats).catch(err => {
+        BackgroundMessaging.saveUserStats(result.stats).catch(err => {
           console.error('WordStream: Error saving existing stats to Firestore:', err);
         });
       }
@@ -1140,7 +1187,7 @@ export default function Popup() {
               lastActive: stats.lastActive
             };
             
-            await FirestoreService.saveUserStats(statsForFirestore);
+            await BackgroundMessaging.saveUserStats(statsForFirestore);
           }
         } catch (error) {
           console.error('Error updating storage after word deletion:', error);

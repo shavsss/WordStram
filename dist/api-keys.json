@@ -1,0 +1,15 @@
+{
+  "firebase": {
+    "apiKey": "AIzaSyAVxAdCx5JW0K7o5B53p_fThHYUPtWRQF4",
+    "authDomain": "vidlearn-ai.firebaseapp.com",
+    "projectId": "vidlearn-ai",
+    "storageBucket": "vidlearn-ai.appspot.com",
+    "messagingSenderId": "1097713470067",
+    "appId": "1:1097713470067:web:821f08db03951f83363806",
+    "measurementId": "G-PQDV30TTX1"
+  },
+  "google": {
+    "translate": "AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM",
+    "gemini": "AIzaSyAVxAdCx5JW0K7o5B53p_fThHYUPtWRQF4"
+  }
+} 

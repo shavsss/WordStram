@@ -206,6 +206,10 @@ import { NetflixCaptionDetector } from '../services/caption-detectors/netflix-de
 import { CaptionDetector } from '@/types';
 import { createRoot } from 'react-dom/client';
 import { FloatingControls } from '@/components/floating-controls/FloatingControls';
+// Import WordStreamGlobal type
+import { WordStreamGlobal } from '@/types/global';
+// הוסף ייבוא ל-BackgroundMessaging
+import * as BackgroundMessaging from '@/utils/background-messaging';
 
 // Set React and ReactDOM on the window to make them available globally
 window.React = React;
@@ -216,20 +220,9 @@ declare global {
   interface Window {
     React: typeof React;
     ReactDOM: typeof ReactDOM & { createRoot?: typeof createRoot };
-    WordStream?: {
-      Components?: {
-        FloatingControls?: typeof FloatingControls;
-      };
-      local?: any; // Add local property to type definition
-      currentUser?: any;
-      isAuthenticated?: boolean;
-    };
+    // Remove WordStream definition - it's already defined in global.d.ts
   }
 }
-
-// Set React and ReactDOM on the window to make them available globally
-window.React = React;
-window.ReactDOM = { ...ReactDOM, createRoot };
 
 // Register WordStream components on the global window object
 if (!window.WordStream) {
@@ -2392,102 +2385,67 @@ function createGeminiPanel2() {
   // Helper function to save chats in the unified format for SavedChats
   function saveChatForUnifiedStorage(userMessage: string, aiResponse: string, videoId: string, videoTitle: string) {
     try {
-      console.log('[WordStream] Saving chat for unified storage...');
-      const timestamp = new Date().toISOString();
-      const videoURL = window.location.href;
-      const chatId = `chat_${videoId}_${Date.now()}`;
+      console.log('WordStream: Saving chat conversation to unified storage');
       
-      // Create message objects
-      const messages = [
-        { role: 'user', content: userMessage, timestamp },
-        { role: 'assistant', content: aiResponse, timestamp }
-      ];
-      
-      // Save to legacy format
-      chrome.storage.local.set({ [`chat-${videoId}`]: messages }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('[WordStream] Error saving chat (legacy format):', chrome.runtime.lastError);
-        } else {
-          console.log('[WordStream] Chat saved in legacy format successfully');
-        }
-      });
-      
-      // Get current chats storage
-      chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
-        if (chrome.runtime.lastError) {
-          console.error('[WordStream] Error accessing chats storage:', chrome.runtime.lastError);
-          return;
-        }
-
-        const chatsStorage = result.chats_storage || {};
-        const videoChatsMap = result.video_chats_map || {};
-        
-        // עדכון נתוני השיחה - משתמש ב-id כמזהה העיקרי בהתאם למבנה החדש
-        chatsStorage[chatId] = {
-          id: chatId, // השתמש ב-id במקום conversationId לתאימות עם פונקציית saveChat
-          videoId,
-          videoTitle,
-          videoURL,
-          lastUpdated: new Date().toISOString(),
-          messages: messages
-        };
-        
-        // עדכון מיפוי סרטון לשיחות
-        if (!videoChatsMap[videoId]) {
-          videoChatsMap[videoId] = [];
-        }
-        
-        // וודא שה-chatId נמצא במיפוי
-        if (!videoChatsMap[videoId].includes(chatId)) {
-          videoChatsMap[videoId].push(chatId);
-        }
-        
-        // Save back to storage
-        chrome.storage.local.set({ 
-          chats_storage: chatsStorage,
-          video_chats_map: videoChatsMap
-        }, () => {
-          if (chrome.runtime.lastError) {
-            console.error('[WordStream] Error saving unified chat storage:', chrome.runtime.lastError);
-          } else {
-            console.log('[WordStream] Chat saved to unified storage successfully, chatId:', chatId);
-            
-            // Also save to Firestore if it's available
-            import('@/core/firebase/firestore').then(FirestoreService => {
-              console.log('[WordStream] Firestore module loaded, saving chat to Firebase...');
-              
-              // עדכון המבנה לפי המבנה החדש שמצפים בפונקציית saveChat
-              const chatData = {
-                id: chatId, // השתמש ב-id במקום conversationId
-                videoId,
-                videoTitle,
-                videoURL,
-                messages,
-                timestamp: timestamp, // הוסף שדה timestamp מפורש
-                updatedAt: new Date().toISOString() // הוסף שדה updatedAt מפורש
-              };
-              
-              console.log('[WordStream] Preparing to save chat data to Firestore:', chatData);
-              
-              FirestoreService.saveChat(chatData)
-                .then(savedChatId => {
-                  if (savedChatId) {
-                    console.log('[WordStream] Chat successfully saved to Firestore with ID:', savedChatId);
-                  } else {
-                    console.error('[WordStream] Failed to save chat to Firestore - no ID returned');
-                  }
-                })
-                .catch(err => {
-                  console.error('[WordStream] Error saving chat to Firestore:', err);
-                });
-            }).catch(err => {
-              console.error('[WordStream] Error importing Firestore module:', err);
-            });
+      // Create chat data
+      const chatData = {
+        conversationId: `${videoId}-${Date.now()}`,
+        videoId: videoId,
+        videoTitle: videoTitle,
+        videoURL: window.location.href,
+        lastUpdated: new Date().toISOString(),
+        messages: [
+          {
+            id: `user-${Date.now()}`,
+            role: 'user',
+            content: userMessage,
+            timestamp: new Date().toISOString()
+          },
+          {
+            id: `ai-${Date.now() + 1}`,
+            role: 'assistant',
+            content: aiResponse,
+            timestamp: new Date().toISOString()
           }
+        ]
+      };
+      
+      // במקום לייבא דינמית את FirestoreService, השתמש ב-BackgroundMessaging
+      BackgroundMessaging.saveChat(chatData)
+        .then(chatId => {
+          console.log('WordStream: Chat saved to Firestore with ID:', chatId);
+        })
+        .catch(error => {
+          console.error('WordStream: Error saving chat to Firestore:', error);
         });
-      });
+      
+      // Also save locally as a backup
+      try {
+        chrome.storage.local.get(['chats_history'], result => {
+          if (chrome.runtime.lastError) {
+            console.error('WordStream: Error accessing local chat history:', chrome.runtime.lastError);
+            return;
+          }
+          
+          const chatsHistory = result.chats_history || [];
+          chatsHistory.unshift(chatData); // Add new chat to the beginning
+          
+          // Only keep the 100 most recent chats
+          const limitedHistory = chatsHistory.slice(0, 100);
+          
+          chrome.storage.local.set({ chats_history: limitedHistory }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('WordStream: Error saving chat to local history:', chrome.runtime.lastError);
+            } else {
+              console.log('WordStream: Chat saved to local history');
+            }
+          });
+        });
+      } catch (localStorageError) {
+        console.error('WordStream: Error saving chat to local storage:', localStorageError);
+      }
     } catch (error) {
-      console.error('[WordStream] Error in saveChatForUnifiedStorage:', error);
+      console.error('WordStream: Error in saveChatForUnifiedStorage:', error);
     }
   }
   
@@ -3908,35 +3866,53 @@ function createNotesPanel() {
   
   // Helper function to save notes in the new format for Notes & Summaries
   function saveNoteForSummaries(note: any) {
-    // Get the video information
-    const videoTitle = document.title.replace(' - YouTube', '').trim();
-    const videoURL = window.location.href;
-    
+    try {
+      console.log('WordStream: Saving note to summaries:', note);
+      
+      // במקום לייבא דינמית, השתמש בפונקציה מהמודול של BackgroundMessaging
+      BackgroundMessaging.saveNote(note)
+        .then(noteId => {
+          console.log('WordStream: Note saved to Firestore with ID:', noteId);
+        })
+        .catch(error => {
+          console.error('WordStream: Error saving note to Firestore:', error);
+        });
+    } catch (error) {
+      console.error('WordStream: Error saving note for summaries:', error);
+    }
+  }
+
+  // Helper function to save to local storage only
+  function saveToLocalStorageOnly(note: any) {
     chrome.storage.local.get(['notes_storage'], (result) => {
-      const notesStorage = result.notes_storage || {};
-      
-      // Check if we already have notes for this video
-      if (!notesStorage[videoId]) {
-        // Create new entry for this video
-        notesStorage[videoId] = {
-          videoId,
-          videoTitle,
-          videoURL,
-          lastUpdated: new Date().toISOString(),
-          notes: []
-        };
+      try {
+        const notesStorage = result.notes_storage || {};
+        
+        // Check if we already have notes for this video
+        if (!notesStorage[videoId]) {
+          // Create new entry for this video
+          notesStorage[videoId] = {
+            videoId,
+            videoTitle: note.videoTitle || document.title.replace(' - YouTube', '').trim(),
+            videoURL: note.videoURL || window.location.href,
+            lastUpdated: new Date().toISOString(),
+            notes: []
+          };
+        }
+        
+        // Update the last updated timestamp
+        notesStorage[videoId].lastUpdated = new Date().toISOString();
+        
+        // Add the new note
+        notesStorage[videoId].notes.push(note);
+        
+        // Save back to storage
+        chrome.storage.local.set({ notes_storage: notesStorage }, () => {
+          console.log('[WordStream] Note saved to local storage');
+        });
+      } catch (storageError) {
+        console.error('[WordStream] Error saving note to local storage:', storageError);
       }
-      
-      // Update the last updated timestamp
-      notesStorage[videoId].lastUpdated = new Date().toISOString();
-      
-      // Add the new note
-      notesStorage[videoId].notes.push(note);
-      
-      // Save back to storage
-      chrome.storage.local.set({ notes_storage: notesStorage }, () => {
-        console.log('[WordStream] Note saved to unified storage');
-      });
     });
   }
 

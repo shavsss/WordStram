@@ -6,14 +6,14 @@ import { Button } from '@/components/ui/button';
 import { format as formatDate } from 'date-fns';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 import { saveAs } from 'file-saver';
-import * as FirestoreService from '@/core/firebase/firestore';
+import * as BackgroundMessaging from '@/utils/background-messaging';
 import { toast } from 'react-toastify';
 
 interface SavedChatsProps {
   onBack: () => void;
 }
 
-// מבנה נתונים שמקבץ שיחות לפי videoId
+// Data structure to group chats by videoId
 interface GroupedChats {
   [videoId: string]: {
     videoTitle: string;
@@ -51,68 +51,71 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     };
   }, []);
 
-  // Auto-sync between Firebase and local storage and setup real-time listeners
+  // Load chats when component mounts
   useEffect(() => {
-    setIsLoading(true);
+    let isMounted = true;
     
-    const initChatSync = async () => {
+    const fetchChats = async () => {
+      setIsLoading(true);
+      
       try {
-        // 1. Initial sync between data sources
-        console.log('WordStream: Starting initial sync between storage systems');
-        // Use the messaging approach to sync
-        await chrome.runtime.sendMessage({ action: 'SYNC_DATA' });
+        // Get all chats from BackgroundMessaging service
+        const chats = await BackgroundMessaging.getChats();
         
-        // 2. Set up Firestore listener
-        console.log('WordStream: Setting up realtime chat subscription');
-        
-        const handleChatsUpdate = (chats: ChatConversation[]) => {
-          console.log(`WordStream: Received ${chats.length} chats from Firestore listener`);
-          setSavedChats(chats);
+        if (isMounted) {
+          // Ensure all chats have proper videoTitle and videoURL
+          const processedChats = (chats || []).map(chat => {
+            // Ensure video title exists
+            if (!chat.videoTitle || chat.videoTitle === 'Unknown Video') {
+              chat.videoTitle = `Video: ${chat.videoId}`;
+            }
+            
+            // Ensure video URL exists
+            if (!chat.videoURL && chat.videoId) {
+              chat.videoURL = `https://www.youtube.com/watch?v=${chat.videoId}`;
+            }
+            
+            return chat;
+          });
           
-          // 3. Update local storage with new data
-          updateLocalStorage(chats);
-        };
-        
-        // Set up real-time listener
-        const unsubscribe = FirestoreService.subscribeToAllChats(handleChatsUpdate);
-        unsubscribeRef.current = unsubscribe;
+          setSavedChats(processedChats);
+          updateLocalStorage(processedChats);
+          setIsLoading(false);
+        }
       } catch (error) {
-        console.error('WordStream: Error setting up chat sync:', error);
-        setError('Error syncing chats. Please try again later.');
-        
-        // On sync failure, try to load from local storage
-        loadFromLocalStorage();
-      } finally {
-        setIsLoading(false);
+        console.error('Error loading chats:', error);
+        if (isMounted) {
+          setError('Failed to load chats. Please try again.');
+          setIsLoading(false);
+          
+          // Attempt to load from local storage as fallback
+          loadFromLocalStorage();
+        }
       }
     };
     
-    initChatSync();
+    fetchChats();
     
-    // Clean up listener when component unmounts
     return () => {
-      console.log('WordStream: Cleaning up chats subscription');
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-      }
+      isMounted = false;
     };
   }, []);
-  
-  // פונקציה לעדכון האחסון המקומי
+
+  // Function to update local storage
   const updateLocalStorage = (chats: ChatConversation[]) => {
     try {
-      // בניית מבנה האחסון הנדרש
+      // Build required storage structure
       const chatsStorage: ChatsStorage = {};
       const videoChatsMap: VideoChatsMap = {};
       
-      // מבנה הנתונים באחסון המקומי
+      // Structure data for local storage
       chats.forEach(chat => {
-        const chatId = chat.id || chat.conversationId; // תמיכה בשני השדות
+        const chatId = chat.id || chat.conversationId; // Support both field names
         
-        // עדכון מאגר הצ'אטים
+        // Update chat repository
         chatsStorage[chatId] = chat;
         
-        // עדכון מיפוי סרטון-לצ'אטים
+        // Update video-to-chats mapping
         if (!videoChatsMap[chat.videoId]) {
           videoChatsMap[chat.videoId] = [];
         }
@@ -124,7 +127,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       
       console.log('WordStream: Updating local storage with synced chats');
       
-      // שמירה באחסון המקומי
+      // Save to local storage
       chrome.storage.local.set({
         chats_storage: chatsStorage,
         video_chats_map: videoChatsMap
@@ -140,7 +143,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     }
   };
   
-  // פונקציה לטעינה מהאחסון המקומי (במקרה שה-Firestore אינו זמין)
+  // Function to load from local storage (when Firestore is unavailable)
   const loadFromLocalStorage = () => {
     try {
       console.log('WordStream: Loading chats from local storage');
@@ -177,36 +180,36 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     }
   };
   
-  // קיבוץ הצ'אטים לפי videoId
+  // Group chats by videoId
   useEffect(() => {
     if (savedChats.length > 0) {
       const grouped: GroupedChats = {};
       
-      // קיבוץ הצ'אטים לפי videoId
+      // Group chats by videoId
       savedChats.forEach(chat => {
-        const chatId = chat.id || chat.conversationId; // תמיכה בשני השדות למקרה שיש נתונים ישנים
+        const chatId = chat.id || chat.conversationId; // Support both fields for backward compatibility
         
         if (!grouped[chat.videoId]) {
           grouped[chat.videoId] = {
-            videoTitle: chat.videoTitle,
-            videoURL: chat.videoURL,
+            videoTitle: chat.videoTitle || `Video: ${chat.videoId}`,
+            videoURL: chat.videoURL || `https://www.youtube.com/watch?v=${chat.videoId}`,
             lastUpdated: chat.lastUpdated,
             totalMessages: chat.messages.length,
             conversations: [chat]
           };
         } else {
-          // עדכון מידע מצטבר על הוידאו
+          // Update accumulated information about the video
           grouped[chat.videoId].conversations.push(chat);
           grouped[chat.videoId].totalMessages += chat.messages.length;
           
-          // עדכון תאריך העדכון האחרון אם יש צ'אט חדש יותר
+          // Update last update date if there is a newer chat
           if (new Date(chat.lastUpdated) > new Date(grouped[chat.videoId].lastUpdated)) {
             grouped[chat.videoId].lastUpdated = chat.lastUpdated;
           }
         }
       });
       
-      // מיון השיחות בכל וידאו לפי תאריך (החדש ביותר קודם)
+      // Sort conversations in each video by date (newest first)
       Object.keys(grouped).forEach(videoId => {
         grouped[videoId].conversations.sort((a, b) => 
           new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime()
@@ -215,19 +218,10 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       
       setGroupedChats(grouped);
       
-      // הגדרת מצב ההרחבה הראשוני - נפתח את השיחה הראשונה (החדשה ביותר)
-      if (Object.keys(expandedGroups).length === 0 && Object.keys(grouped).length > 0) {
-        // מרחיבים אוטומטית רק את הווידאו עם השיחה החדשה ביותר
-        const sortedVideos = Object.entries(grouped)
-          .sort(([, a], [, b]) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
-        
-        if (sortedVideos.length > 0) {
-          const mostRecentVideoId = sortedVideos[0][0];
-          setExpandedGroups({ [mostRecentVideoId]: true });
-        }
+      // Expand the first group by default if there are multiple videos
+      if (Object.keys(grouped).length === 1) {
+        setExpandedGroups({ [Object.keys(grouped)[0]]: true });
       }
-    } else {
-      setGroupedChats({});
     }
   }, [savedChats]);
 
@@ -272,170 +266,110 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     setSelectedChat(null);
   };
 
-  // Delete a saved chat
-  const deleteChat = async (chatId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    
-    if (window.confirm('Are you sure you want to delete this saved chat?')) {
-      console.log('WordStream: Deleting chat for id:', chatId);
-      
-      try {
-        setIsLoading(true);
-        
-        // Find the chat to delete
-        const chatToDelete = savedChats.find(chat => (chat.id || chat.conversationId) === chatId);
-        
-        if (!chatToDelete) {
-          throw new Error('Chat not found');
-        }
-        
-        // 1. Delete from Firestore - now only requires chatId
-        const success = await FirestoreService.deleteChat(chatId);
-        
-        if (!success) {
-          toast.error('Failed to delete chat from Firestore');
-        }
-        
-        // 2. Delete from local storage
-        chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
-          if (chrome.runtime.lastError) {
-            console.error('WordStream ERROR: Failed to get storage for deletion:', chrome.runtime.lastError);
-            toast.error(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
-            setIsLoading(false);
-            return;
-          }
-          
-          const chatsStorage: ChatsStorage = result.chats_storage || {};
-          const videoChatsMap: VideoChatsMap = result.video_chats_map || {};
-          const videoId = chatToDelete.videoId;
-          
-          // Delete the conversation from chat storage
-          delete chatsStorage[chatId];
-          
-          // Update video-to-chats mapping: remove the chatId from the list
-          if (videoId && videoChatsMap[videoId]) {
-            videoChatsMap[videoId] = videoChatsMap[videoId].filter(id => id !== chatId);
-            
-            // If no more chats for this video, remove the entry completely
-            if (videoChatsMap[videoId].length === 0) {
-              delete videoChatsMap[videoId];
-            }
-          }
-          
-          // Save the updated storage
-          chrome.storage.local.set({ 
-            chats_storage: chatsStorage,
-            video_chats_map: videoChatsMap 
-          }, () => {
-            if (chrome.runtime.lastError) {
-              console.error('WordStream ERROR: Error saving chats after deletion:', chrome.runtime.lastError);
-              toast.error(`Error saving: ${chrome.runtime.lastError.message}`);
-              setIsLoading(false);
-              return;
-            }
-            
-            console.log('WordStream: Chats saved successfully after deletion');
-            
-            // Update local state - check both id and conversationId for compatibility
-            setSavedChats(savedChats.filter(chat => (chat.id || chat.conversationId) !== chatId));
-            
-            // If the deleted chat was selected, go back to list
-            if ((selectedChat?.id || selectedChat?.conversationId) === chatId) {
-              setSelectedChat(null);
-            }
-            
-            toast.success('Chat deleted successfully');
-            setIsLoading(false);
-          });
-        });
-      } catch (error) {
-        console.error('WordStream ERROR: Exception in deletion process:', error);
-        toast.error(`Error during deletion: ${error}`);
-        setIsLoading(false);
+  // Function to get video title with better fallback handling
+  const getVideoTitle = (videoId: string): string => {
+    // If no grouped chats for this videoId, return a placeholder
+    if (!groupedChats[videoId]) {
+      // Check if we can find the videoId in savedChats
+      const chat = savedChats.find(c => c.videoId === videoId);
+      if (chat && chat.videoTitle) {
+        return chat.videoTitle;
       }
+      return `Video: ${videoId}`;
+    }
+    
+    // Return the title from grouped chats with fallback
+    return groupedChats[videoId].videoTitle || `Video: ${videoId}`;
+  };
+
+  /**
+   * Delete a chat
+   * @param chatId Chat ID to delete
+   */
+  const handleDeleteChat = async (chatId: string) => {
+    if (!chatId) return;
+    
+    try {
+      setIsLoading(true);
+      
+      // Delete chat using BackgroundMessaging
+      const success = await BackgroundMessaging.deleteChat(chatId);
+      
+      if (success) {
+        // Remove from local state
+        setSavedChats(prevChats => prevChats.filter(c => c.id !== chatId));
+        setGroupedChats(prevGrouped => {
+          const newGrouped = { ...prevGrouped };
+          
+          // Find which group contains this chat and remove it
+          Object.keys(newGrouped).forEach(videoId => {
+            // וודא שיש לנו מערך conversations
+            if (newGrouped[videoId] && newGrouped[videoId].conversations) {
+              newGrouped[videoId].conversations = newGrouped[videoId].conversations.filter(c => c.id !== chatId);
+              
+              // Remove empty groups
+              if (newGrouped[videoId].conversations.length === 0) {
+                delete newGrouped[videoId];
+              }
+            }
+          });
+          
+          return newGrouped;
+        });
+      } else {
+        toast.error('Failed to delete chat. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      toast.error('An error occurred while deleting the chat.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Delete all chats for a video
-  const deleteVideoChats = async (videoId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
+  /**
+   * Delete all chats for a video
+   * @param videoId Video ID to clear chats for
+   */
+  const handleClearChatsForVideo = async (videoId: string) => {
+    if (!videoId) return;
     
-    // שימוש בטואסט להצגת הודעות מצב במקום אזהרות או alerts
-    if (!groupedChats[videoId]) {
-      return;
-    }
-    
-    const chatCount = groupedChats[videoId].conversations.length;
-    
-    if (!window.confirm(`Are you sure you want to delete all ${chatCount} chats for this video?`)) {
+    if (!confirm(`Are you sure you want to delete all saved chats for "${getVideoTitle(videoId) || 'this video'}"?`)) {
       return;
     }
     
     try {
       setIsLoading(true);
-      toast.info(`Deleting ${chatCount} chats...`);
       
-      // 1. מחק את כל הצ'אטים מ-Firestore
-      const deletedCount = await FirestoreService.deleteAllChatsForVideo(videoId);
-      
-      if (deletedCount < 0) {
-        toast.error('Failed to delete all chats from Firestore');
-      } else {
-        console.log(`WordStream: Deleted ${deletedCount} chats from Firestore`);
+      // Delete all chats for video using BackgroundMessaging
+      const allChats = await BackgroundMessaging.getChats();
+      if (!allChats || allChats.length === 0) {
+        toast.error('No chats found to delete.');
+        return;
       }
       
-      // 2. מחק מאחסון מקומי
-      chrome.storage.local.get(['chats_storage', 'video_chats_map'], (result) => {
-        if (chrome.runtime.lastError) {
-          console.error('WordStream ERROR: Failed to get storage for deletion:', chrome.runtime.lastError);
-          toast.error(`Error retrieving storage: ${chrome.runtime.lastError.message}`);
-          setIsLoading(false);
-          return;
-        }
-        
-        const chatsStorage: ChatsStorage = result.chats_storage || {};
-        const videoChatsMap: VideoChatsMap = result.video_chats_map || {};
-        
-        // קבל את כל הצ'אטים שצריך למחוק
-        const chatsToDelete = savedChats.filter(chat => chat.videoId === videoId);
-        
-        // מחק את כל הצ'אטים של הווידאו הזה
-        chatsToDelete.forEach(chat => {
-          delete chatsStorage[chat.conversationId];
+      const chatsToDelete = allChats.filter(chat => chat.videoId === videoId);
+      const deletePromises = chatsToDelete.map(chat => BackgroundMessaging.deleteChat(chat.id));
+      const results = await Promise.all(deletePromises);
+      const deletedCount = results.filter(Boolean).length;
+      
+      if (deletedCount > 0) {
+        // Remove from local state
+        setSavedChats(prevChats => prevChats.filter(c => c.videoId !== videoId));
+        setGroupedChats(prevGrouped => {
+          const newGrouped = { ...prevGrouped };
+          delete newGrouped[videoId];
+          return newGrouped;
         });
         
-        // מחק את כל המיפוי לווידאו זה
-        delete videoChatsMap[videoId];
-        
-        // שמור את האחסון המעודכן
-        chrome.storage.local.set({ 
-          chats_storage: chatsStorage,
-          video_chats_map: videoChatsMap 
-        }, () => {
-          if (chrome.runtime.lastError) {
-            console.error('WordStream ERROR: Error saving storage after deletion:', chrome.runtime.lastError);
-            toast.error(`Error saving changes: ${chrome.runtime.lastError.message}`);
-            setIsLoading(false);
-            return;
-          }
-          
-          console.log('WordStream: Chats deleted successfully');
-          
-          // עדכן את המצב המקומי
-          setSavedChats(savedChats.filter(chat => chat.videoId !== videoId));
-          
-          // אם הצ'אט שנבחר שייך לווידאו זה, חזור לרשימה
-          if (selectedChat && selectedChat.videoId === videoId) {
-            setSelectedChat(null);
-          }
-          
-          toast.success(`Successfully deleted ${chatCount} chats`);
-          setIsLoading(false);
-        });
-      });
+        toast.success(`Deleted ${deletedCount} chat${deletedCount === 1 ? '' : 's'}.`);
+      } else {
+        toast.error('No chats were deleted. Please try again.');
+      }
     } catch (error) {
-      console.error('WordStream ERROR: Exception in group deletion:', error);
-      toast.error(`Error deleting chats: ${error}`);
+      console.error('Error clearing chats for video:', error);
+      toast.error('An error occurred while deleting chats.');
+    } finally {
       setIsLoading(false);
     }
   };
@@ -841,7 +775,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
                         </svg>
                       </button>
                       <button
-                        onClick={(e) => deleteVideoChats(videoId, e)}
+                        onClick={(e) => handleClearChatsForVideo(videoId)}
                         className="p-1.5 text-red-600 hover:text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/30 rounded-full transition-colors mr-2"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -886,7 +820,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
                           </div>
                           
                           <button
-                            onClick={(e) => deleteChat(chat.conversationId, e)}
+                            onClick={(e) => handleDeleteChat(chat.conversationId)}
                             className="p-1 text-red-600 hover:text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/30 rounded-full transition-colors"
                           >
                             <Trash2 size={14} />
