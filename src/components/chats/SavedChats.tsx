@@ -56,8 +56,8 @@ export function SavedChats({ onBack }: SavedChatsProps) {
     let isMounted = true;
     
     const fetchChats = async () => {
-      setIsLoading(true);
-      
+    setIsLoading(true);
+    
       try {
         // Get all chats from BackgroundMessaging service
         const chats = await BackgroundMessaging.getChats();
@@ -89,7 +89,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
           setIsLoading(false);
           
           // Attempt to load from local storage as fallback
-          loadFromLocalStorage();
+        loadFromLocalStorage();
         }
       }
     };
@@ -100,7 +100,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       isMounted = false;
     };
   }, []);
-
+  
   // Function to update local storage
   const updateLocalStorage = (chats: ChatConversation[]) => {
     try {
@@ -256,7 +256,7 @@ export function SavedChats({ onBack }: SavedChatsProps) {
           
           return newGrouped;
         });
-      } else {
+    } else {
         toast.error('Failed to delete chat. Please try again.');
       }
     } catch (error) {
@@ -346,9 +346,9 @@ export function SavedChats({ onBack }: SavedChatsProps) {
       const allChats = await BackgroundMessaging.getChats();
       if (!allChats || allChats.length === 0) {
         toast.error('No chats found to delete.');
-        return;
-      }
-      
+          return;
+        }
+        
       const chatsToDelete = allChats.filter(chat => chat.videoId === videoId);
       const deletePromises = chatsToDelete.map(chat => BackgroundMessaging.deleteChat(chat.id));
       const results = await Promise.all(deletePromises);

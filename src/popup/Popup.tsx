@@ -234,7 +234,7 @@ function DatePicker({ selectedDate, onChange, onClose }: DatePickerProps) {
  * מנהלת את התצוגה של המילים, המשחקים, הסטטיסטיקות והגדרות.
  */
 export default function Popup() {
-  const { isAuthenticated, currentUser, signOut } = useAuth();
+  const { isAuthenticated, currentUser, signOut, signInWithEmail } = useAuth();
   
   // State management
   const [words, setWords] = useState<Word[]>([]);
@@ -281,6 +281,7 @@ export default function Popup() {
 
   // New state for showing login dialog
   const [showLoginDialog, setShowLoginDialog] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // New ref for games container
   const gamesContainer = useRef<HTMLDivElement>(null);
@@ -1445,6 +1446,75 @@ export default function Popup() {
     setCurrentView('home');
   };
 
+  // האזנה לאירועי שגיאת אימות מהרקע או מקומפוננטות אחרות
+  useEffect(() => {
+    const handleAuthErrorEvent = (event: CustomEvent) => {
+      console.log('WordStream: Received auth error event in popup', event.detail);
+      
+      // הצגת דיאלוג התחברות חדש במקרה של סשן שפג
+      if (event.detail?.code === "auth/session-expired" || 
+          event.detail?.code === "auth/user-not-authenticated") {
+        setAuthError(event.detail.message || 'Your session has expired. Please sign in again.');
+        setShowLoginDialog(true);
+      }
+    };
+    
+    // הוספת מאזין לאירועי שגיאת אימות
+    window.addEventListener('wordstream-auth-error', handleAuthErrorEvent as EventListener);
+    
+    // הוספת מאזין להודעות מהרקע
+    const handleChromeMessage = (message: any) => {
+      if (message?.action === 'OPEN_AUTH_DIALOG' && message?.reason === 'session_expired') {
+        setAuthError('Your session has expired. Please sign in again.');
+        setShowLoginDialog(true);
+      }
+    };
+    
+    // אם זמין, נאזין להודעות מהרקע
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(handleChromeMessage);
+    }
+    
+    return () => {
+      // הסרת המאזינים
+      window.removeEventListener('wordstream-auth-error', handleAuthErrorEvent as EventListener);
+      
+      if (chrome?.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(handleChromeMessage);
+      }
+    };
+  }, []);
+  
+  // פונקציה לטיפול בהתחברות מחדש
+  const handleReLogin = async (email: string, password: string) => {
+    try {
+      setIsLoading(true);
+      
+      // שימוש בפונקציית ההתחברות מ-useAuth
+      const success = await signInWithEmail(email, password);
+      
+      if (success) {
+        // סגירת הדיאלוג לאחר התחברות מוצלחת
+        setShowLoginDialog(false);
+        setAuthError(null);
+        
+        // טעינה מחדש של הנתונים
+        // נשים לב ש-loadData קיימת בתוך useEffect בשורה 575
+        // נחדש את טעינת כל הקומפוננטה על ידי סימון מחדש של isLoading
+        setIsLoading(true);
+        
+        // אחרי הרנדור החדש, useEffect יפעיל את loadData מחדש
+      } else {
+        setAuthError('Login failed. Please check your email and password.');
+      }
+    } catch (error) {
+      console.error('WordStream: Re-login error:', error);
+      setAuthError(`Login error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Determine content based on current view
   let content;
   
@@ -1849,6 +1919,63 @@ export default function Popup() {
   return (
     <>
       {content}
+      
+      {/* דיאלוג התחברות מחדש */}
+      {showLoginDialog && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card text-card-foreground rounded-lg shadow-lg w-full max-w-md p-6 border border-border animate-in zoom-in-95 duration-200">
+            <h2 className="text-xl font-semibold mb-2">התחברות נדרשת</h2>
+            
+            {authError && (
+              <div className="bg-destructive/15 text-destructive rounded-md p-3 mb-4">
+                <p>{authError}</p>
+              </div>
+            )}
+            
+            <p className="text-muted-foreground mb-6">הסשן שלך פג תוקף. אנא התחבר שוב כדי להמשיך להשתמש ב-WordStream.</p>
+            
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const form = e.target as HTMLFormElement;
+              const email = (form.elements.namedItem('email') as HTMLInputElement).value;
+              const password = (form.elements.namedItem('password') as HTMLInputElement).value;
+              handleReLogin(email, password);
+            }} className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="email" className="text-sm font-medium">דוא"ל</label>
+                <input 
+                  type="email" 
+                  id="email" 
+                  name="email" 
+                  required 
+                  className="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-primary" 
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <label htmlFor="password" className="text-sm font-medium">סיסמה</label>
+                <input 
+                  type="password" 
+                  id="password" 
+                  name="password" 
+                  required 
+                  className="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-primary" 
+                />
+              </div>
+              
+              <div className="pt-2">
+                <button 
+                  type="submit" 
+                  disabled={isLoading}
+                  className="w-full bg-primary text-primary-foreground py-2 rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {isLoading ? 'מתחבר...' : 'התחבר'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }

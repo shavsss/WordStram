@@ -6,6 +6,7 @@ import { VideoMetadata } from '@/types';
 import { ChatConversation } from '@/types/chats';
 import { useAuth } from '@/hooks/useAuth';
 import * as BackgroundMessaging from '@/utils/background-messaging';
+import { handleAuthError } from '@/utils/background-messaging';
 
 interface FirestoreContextType {
   videos: VideoMetadata[];
@@ -358,7 +359,39 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
     };
   }, [currentUser]);
 
-  // Fetch chats through background messaging
+  // האזנה לאירועי שגיאת אימות
+  useEffect(() => {
+    const handleAuthErrorEvent = (event: CustomEvent) => {
+      if (event.detail?.message) {
+        // הצגת הודעת שגיאה למשתמש
+        toast.error(event.detail.message, {
+          autoClose: 5000,
+          closeOnClick: true,
+          pauseOnHover: true,
+          draggable: true,
+          position: "top-center"
+        });
+        
+        // אם המשתמש היה מחובר ועכשיו הסשן פג, להתנהג בהתאם
+        if (currentUser && event.detail.code === "auth/session-expired") {
+          // נקה את המידע המקומי ונחייב התחברות מחדש
+          setIsLoading(true);
+          setHasError(true);
+          setErrorMessage("Your session has expired. Please sign in again.");
+        }
+      }
+    };
+    
+    // הוספת מאזין לאירועי שגיאת אימות
+    window.addEventListener('wordstream-auth-error', handleAuthErrorEvent as EventListener);
+    
+    return () => {
+      // הסרת המאזין
+      window.removeEventListener('wordstream-auth-error', handleAuthErrorEvent as EventListener);
+    };
+  }, [currentUser]);
+
+  // עדכון הפונקציה fetchChats לטיפול בשגיאות אימות
   const fetchChats = useCallback(async () => {
     try {
       console.log('WordStream: Fetching chats via background messaging');
@@ -387,15 +420,21 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       updateLoadingState();
     } catch (error) {
       console.error('WordStream: Error fetching chats:', error);
+      
+      // בדיקה אם זו שגיאת אימות ותפעול בהתאם
+      const isAuthError = await handleAuthError(error);
+      
+      if (!isAuthError) {
+        // אם זו לא שגיאת אימות, לנסות לטעון מהסטורג'
+        loadFromLocalStorage();
+      }
+      
       setIsChatsLoading(false);
       updateLoadingState();
-      
-      // Try loading from storage as fallback
-      loadFromLocalStorage();
     }
   }, [safeSetChats, updateLoadingState, loadFromLocalStorage]);
 
-  // Fetch notes for a user via background messaging
+  // עדכון דומה לפונקציית fetchAllNotes
   const fetchAllNotes = useCallback(async (userId: string | undefined) => {
     if (!userId) {
       setIsNotesLoading(false);
@@ -433,15 +472,21 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       updateLoadingState();
     } catch (error) {
       console.error('WordStream: Error fetching notes:', error);
+      
+      // בדיקה אם זו שגיאת אימות ותפעול בהתאם
+      const isAuthError = await handleAuthError(error);
+      
+      if (!isAuthError) {
+        // אם זו לא שגיאת אימות, לנסות לטעון מהסטורג'
+        loadFromLocalStorage();
+      }
+      
       setIsNotesLoading(false);
       updateLoadingState();
-      
-      // Try loading from storage as fallback
-      loadFromLocalStorage();
     }
   }, [safeSetNotes, updateLoadingState, loadFromLocalStorage]);
 
-  // Fetch videos metadata via background messaging
+  // עדכון דומה לפונקציית fetchVideos
   const fetchVideos = useCallback(async () => {
     try {
       console.log('WordStream: Fetching videos metadata via background messaging');
@@ -481,8 +526,13 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
       setIsVideosLoading(false);
       updateLoadingState();
       
-      // Try loading from storage as fallback
-      loadFromLocalStorage();
+      // בדיקה אם זו שגיאת אימות ותפעול בהתאם
+      const isAuthError = await handleAuthError(error);
+      
+      if (!isAuthError) {
+        // אם זו לא שגיאת אימות, לנסות לטעון מהסטורג'
+        loadFromLocalStorage();
+      }
     }
   }, [safeSetVideos, updateLoadingState, loadFromLocalStorage, currentUser]);
 
@@ -602,7 +652,7 @@ export function FirestoreProvider({ children }: FirestoreProviderProps) {
   return (
     <FirestoreContext.Provider value={value}>
       <SafeFirestoreLoader>
-        {children}
+      {children}
       </SafeFirestoreLoader>
     </FirestoreContext.Provider>
   );

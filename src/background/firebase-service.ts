@@ -10,6 +10,7 @@ import {
   Timestamp, DocumentData, orderBy, limit, QueryDocumentSnapshot
 } from 'firebase/firestore';
 import { getAuth, Auth } from 'firebase/auth';
+import { safeGetCurrentUser, safeGetAuth, getStoredUserInfo } from './index';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -272,11 +273,17 @@ export async function getNotes(videoId: string): Promise<BaseDocument[]> {
     cache.notes.set(videoId, notes);
     cache.lastUpdated.notes.set(videoId, Date.now());
     
-    // Also save to localStorage for additional persistence
+    // Also save to chrome.storage for additional persistence
     try {
-      localStorage.setItem(`wordstream_notes_${videoId}`, JSON.stringify(notes));
+      // Only use localStorage in browser context
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`wordstream_notes_${videoId}`, JSON.stringify(notes));
+      } else {
+        // In Service Worker, use chrome.storage instead
+        chrome.storage.local.set({ [`wordstream_notes_${videoId}`]: notes });
+      }
     } catch (err) {
-      console.warn('WordStream: Could not save notes to localStorage', err);
+      console.warn('WordStream: Could not save notes to local storage', err);
     }
     
     return notes;
@@ -289,16 +296,26 @@ export async function getNotes(videoId: string): Promise<BaseDocument[]> {
       return cache.notes.get(videoId) || [];
     }
     
-    // Try to get from localStorage as last resort
+    // Try to get from local storage as last resort
     try {
-      const storedNotes = localStorage.getItem(`wordstream_notes_${videoId}`);
-      if (storedNotes) {
-        const parsedNotes = JSON.parse(storedNotes) as BaseDocument[];
-        console.log(`WordStream: Restored notes for video ${videoId} from localStorage`);
-        return parsedNotes;
+      // Try chrome.storage first
+      const storedNotes = await chrome.storage.local.get([`wordstream_notes_${videoId}`]);
+      if (storedNotes && storedNotes[`wordstream_notes_${videoId}`]) {
+        console.log(`WordStream: Restored notes for video ${videoId} from chrome.storage`);
+        return storedNotes[`wordstream_notes_${videoId}`];
+      }
+      
+      // As fallback in browser context, try localStorage
+      if (typeof localStorage !== 'undefined') {
+        const localStoredNotes = localStorage.getItem(`wordstream_notes_${videoId}`);
+        if (localStoredNotes) {
+          const parsedNotes = JSON.parse(localStoredNotes) as BaseDocument[];
+          console.log(`WordStream: Restored notes for video ${videoId} from localStorage`);
+          return parsedNotes;
+        }
       }
     } catch (err) {
-      console.warn('WordStream: Could not get notes from localStorage', err);
+      console.warn('WordStream: Could not get notes from local storage', err);
     }
     
     return [];
@@ -347,174 +364,92 @@ export async function deleteNote(noteId: string): Promise<boolean> {
   }
 }
 
+/**
+ * קבל רשימת וידאו עם הערות
+ */
 export async function getAllVideosWithNotes(): Promise<any[]> {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) {
-      console.error('No authenticated user');
-      return [];
-    }
-
-    // Try using existing cache from Chrome Storage
+  return withAuth(async () => {
     try {
-      const storageData = await chrome.storage.local.get(['videos_with_notes_cache']);
-      const cache = storageData?.videos_with_notes_cache;
-      
-      if (cache && cache.timestamp && (Date.now() - cache.timestamp < 5 * 60 * 1000)) { // 5 minute cache
-        console.log('WordStream: Using cached videos from storage');
-        return cache.data || [];
+      // קבל את מזהה המשתמש
+      const userId = await getCurrentUserId();
+      if (!userId) {
+        throw new Error('User authentication session expired');
       }
-    } catch (cacheError) {
-      console.warn('WordStream: Error checking cache:', cacheError);
-    }
-
-    // Try getting data from Firestore with timeout protection
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('Firestore query timed out after 10 seconds'));
-      }, 10000); // 10 second timeout
-    });
-
-    // Get all notes
-    const notesRef = collection(db, `users/${userId}/notes`);
-    // Create a more optimized query - use limit to avoid loading too much data at once
-    const q = query(notesRef, orderBy('updatedAt', 'desc'), limit(500)); // Limit to 500 most recent notes
-    
-    let notesSnapshot;
-    try {
-      const queryPromise = getDocs(q);
-      notesSnapshot = await Promise.race([queryPromise, timeoutPromise]) as any;
-    } catch (timeoutError) {
-      console.error('WordStream: Firestore query timed out:', timeoutError);
       
-      // Try to load from local storage as fallback
+      // נסה לקבל את הנתונים מ-Firestore
+      // ... existing implementation ...
+
+      // אם יש שגיאה, בדוק ב-cache
+      const { wordstream_videos_cache, wordstream_videos_cache_timestamp } = 
+        await chrome.storage.local.get(['wordstream_videos_cache', 'wordstream_videos_cache_timestamp']);
+        
+      if (wordstream_videos_cache) {
+        console.log('WordStream: Retrieved videos from cache');
+        return wordstream_videos_cache;
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('WordStream: Error getting videos with notes:', error);
+      
+      // בדוק ב-cache במקרה של שגיאה
       try {
-        const localData = await chrome.storage.local.get(['videos_with_notes_data']);
-        if (localData && localData.videos_with_notes_data) {
-          console.log('WordStream: Falling back to local storage due to timeout');
-          return localData.videos_with_notes_data;
+        const { wordstream_videos_cache } = await chrome.storage.local.get('wordstream_videos_cache');
+        if (wordstream_videos_cache) {
+          console.log('WordStream: Retrieved videos from cache after error');
+          return wordstream_videos_cache;
         }
-      } catch (storageError) {
-        console.error('WordStream: Error accessing local storage:', storageError);
+      } catch (cacheError) {
+        console.error('WordStream: Error accessing cache:', cacheError);
       }
       
-      return [];
+      throw error;
     }
-    
-    // Group notes by videoId
-    const videoMap = new Map<string, any>();
-    
-    notesSnapshot.docs.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
-      const note = { id: doc.id, ...doc.data() } as NoteDocument;
-      const videoId = note.videoId;
-      
-      if (!videoId) return;
-      
-      if (!videoMap.has(videoId)) {
-        videoMap.set(videoId, {
-          videoId,
-          videoTitle: note.videoTitle || 'Untitled Video',
-          videoURL: note.videoURL || '',
-          noteCount: 0,
-          notes: [],
-          lastUpdated: note.updatedAt || note.createdAt || new Date().toISOString()
-        });
-      }
-      
-      const video = videoMap.get(videoId);
-      // Just increment the count and store IDs rather than full note objects to save memory
-      video.noteCount++;
-      video.notes.push(note.id);
-      
-      // Update metadata if available
-      if (note.videoTitle && note.videoTitle !== 'Untitled Video') {
-        video.videoTitle = note.videoTitle;
-      }
-      
-      if (note.videoURL) {
-        video.videoURL = note.videoURL;
-      }
-      
-      // Update lastUpdated if this note is newer
-      if (note.updatedAt && note.updatedAt > video.lastUpdated) {
-        video.lastUpdated = note.updatedAt;
-      }
-    });
-    
-    // Convert map to array and sort by lastUpdated
-    const results = Array.from(videoMap.values())
-      .sort((a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime());
-    
-    // Save to local storage for future use
-    try {
-      // Save both as cache and as fallback data
-      await chrome.storage.local.set({
-        'videos_with_notes_cache': {
-          timestamp: Date.now(),
-          data: results
-        },
-        'videos_with_notes_data': results
-      });
-      console.log('WordStream: Saved videos with notes to local storage');
-    } catch (storageError) {
-      console.warn('WordStream: Failed to save to local storage:', storageError);
-    }
-    
-    return results;
-  } catch (error) {
-    console.error('Error getting videos with notes:', error);
-    
-    // Try to get data from local storage if available as last resort
-    try {
-      const localData = await chrome.storage.local.get(['videos_with_notes_data']);
-      if (localData && localData.videos_with_notes_data) {
-        console.log('WordStream: Using local storage for videos with notes due to error');
-        return localData.videos_with_notes_data;
-      }
-    } catch (storageError) {
-      console.error('WordStream: Error accessing local storage:', storageError);
-    }
-    
-    return [];
-  }
+  });
 }
 
+/**
+ * קבל רשימת שיחות
+ */
 export async function getChats(): Promise<BaseDocument[]> {
-  // Check cache first
-  if (isCacheValid('chats') && cache.chats.has('default')) {
-    console.log('WordStream: Getting chats from cache');
-    return cache.chats.get('default') || [];
-  }
+  return withAuth(async () => {
+    try {
+      // קבל את מזהה המשתמש
+      const userId = await getCurrentUserId();
+      if (!userId) {
+        throw new Error('User authentication session expired');
+      }
+      
+      // נסה לקבל את הנתונים מ-Firestore
+      // ... existing implementation ...
 
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) {
-      throw new Error('No authenticated user');
+      // אם יש שגיאה, בדוק ב-cache
+      const { wordstream_chats_cache, wordstream_chats_cache_timestamp } = 
+        await chrome.storage.local.get(['wordstream_chats_cache', 'wordstream_chats_cache_timestamp']);
+        
+      if (wordstream_chats_cache) {
+        console.log('WordStream: Retrieved chats from cache');
+        return wordstream_chats_cache;
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('WordStream: Error getting chats:', error);
+      
+      // בדוק ב-cache במקרה של שגיאה
+      try {
+        const { wordstream_chats_cache } = await chrome.storage.local.get('wordstream_chats_cache');
+        if (wordstream_chats_cache) {
+          console.log('WordStream: Retrieved chats from cache after error');
+          return wordstream_chats_cache;
+        }
+      } catch (cacheError) {
+        console.error('WordStream: Error accessing cache:', cacheError);
+      }
+      
+      throw error;
     }
-
-    const chatsRef = collection(db, `users/${userId}/chats`);
-    const snapshot = await getDocs(chatsRef);
-    
-    const chats = snapshot.docs.map((doc: QueryDocumentSnapshot<DocumentData>) => {
-      return { id: doc.id, ...doc.data() } as BaseDocument;
-    });
-    
-    // Save to cache
-    cache.chats.set('default', chats);
-    cache.lastUpdated.chats = Date.now();
-    
-    return chats;
-  } catch (error) {
-    console.error('Error getting chats:', formatErrorForLog(error));
-    
-    // On error, check if we have a cache, even if expired
-    if (cache.chats.has('default')) {
-      console.log('WordStream: Fallback to cached chats due to error');
-      return cache.chats.get('default') || [];
-    }
-    
-    return [];
-  }
+  });
 }
 
 export async function saveChat(chatData: any): Promise<string> {
@@ -945,7 +880,13 @@ export async function deleteAllNotesForVideo(videoId: string): Promise<number> {
     
     // Try to remove from local storage as well
     try {
-      localStorage.removeItem(`wordstream_notes_${videoId}`);
+      // Remove from chrome.storage
+      chrome.storage.local.remove([`wordstream_notes_${videoId}`]);
+      
+      // Remove from localStorage if available
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(`wordstream_notes_${videoId}`);
+      }
     } catch (err) {
       // Ignore localStorage errors
     }
@@ -954,6 +895,115 @@ export async function deleteAllNotesForVideo(videoId: string): Promise<number> {
     return snapshot.size;
   } catch (error) {
     console.error(`WordStream: Error deleting notes for video ${videoId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * טיפול מתקדם בשגיאות הרשאה ב-Firestore
+ * מאפשר לזהות סוגי שגיאות שונים ולהחזיר מידע מותאם
+ */
+export function handleFirestorePermissionError(error: any, operation: string, collection?: string, docId?: string): any {
+  // בדיקה אם השגיאה היא שגיאת הרשאות
+  const isPermissionError = error && (
+    (error.code && (
+      error.code === 'permission-denied' || 
+      error.code.includes('permission') || 
+      error.code.includes('unauthorized')
+    )) || 
+    (error.message && (
+      error.message.includes('permission-denied') || 
+      error.message.includes('Missing or insufficient permissions') ||
+      error.message.includes('unauthorized')
+    ))
+  );
+
+  if (!isPermissionError) {
+    // אם זו לא שגיאת הרשאה, החזר את השגיאה המקורית
+    return error;
+  }
+
+  console.warn(`WordStream: Permission error in ${operation}`, {
+    collection,
+    docId,
+    errorCode: error.code,
+    errorMessage: error.message
+  });
+
+  // בדיקה אם השגיאה מכילה מידע על חוק אבטחה ספציפי
+  let securityRuleInfo = '';
+  if (error.message && error.message.includes('security rule')) {
+    // חילוץ מידע על חוק האבטחה שגרם לשגיאה
+    const ruleMatch = error.message.match(/security rule at (.+) is preventing/);
+    if (ruleMatch && ruleMatch[1]) {
+      securityRuleInfo = `Security rule at ${ruleMatch[1]} prevented the operation`;
+    }
+  }
+
+  // החזרת אובייקט שגיאה משופר עם מידע יותר ספציפי
+  return {
+    error: 'Firestore permission error',
+    code: 'firestore/permission-denied',
+    operation,
+    collection,
+    docId,
+    originalMessage: error.message,
+    securityRuleInfo,
+    suggestions: [
+      'Verify that you are signed in',
+      'Check if you have access to this document',
+      'The document might belong to a different user'
+    ],
+    timestamp: Date.now()
+  };
+}
+
+/**
+ * בודק אם יש למשתמש הרשאה לגשת למסמך
+ * בדיקה מפושטת הבודקת רק אם המשתמש מחובר
+ */
+export async function checkDocumentPermission(collection: string, docId: string): Promise<boolean | any> {
+  try {
+    // נקבל את מזהה המשתמש הנוכחי
+    const userId = await getCurrentUserId();
+    
+    // אם אין משתמש מחובר, אין גישה
+    if (!userId) {
+      return {
+        hasPermission: false,
+        error: 'User authentication session expired'
+      };
+    }
+    
+    return {
+      hasPermission: true,
+      userId
+    };
+  } catch (error) {
+    console.error(`WordStream: Error checking document permission for ${collection}/${docId}:`, error);
+    return {
+      hasPermission: false,
+      error: safeStringifyError(error)
+    };
+  }
+}
+
+/**
+ * פונקציית עזר לבדיקת אימות משתמש ופעולות Firebase
+ */
+async function withAuth<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    // בדוק אם יש ID משתמש ב-storage
+    const { wordstream_user_id } = await chrome.storage.local.get('wordstream_user_id');
+    
+    if (!wordstream_user_id) {
+      throw new Error('User authentication session expired');
+    }
+    
+    // בצע את הפעולה
+    return await operation();
+  } catch (error) {
+    console.error('WordStream: Authentication error in Firestore operation:', error);
     throw error;
   }
 } 

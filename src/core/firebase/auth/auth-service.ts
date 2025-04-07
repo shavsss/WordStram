@@ -5,6 +5,7 @@
 
 import AuthManager from '@/core/auth-manager';
 import { User } from '../types';
+import { auth } from '../config';
 
 /**
  * Get the current user ID
@@ -86,6 +87,44 @@ export function getCurrentUserIdSync(): string | null {
 }
 
 /**
+ * ניסיון יזום לרענון טוקן אימות
+ * @returns Promise שמתרכז לאמת אם רענון הטוקן הצליח
+ */
+export async function refreshAuthToken(): Promise<boolean> {
+  try {
+    console.log('WordStream: Attempting to refresh auth token');
+    
+    // אם אנחנו בסביבת Service Worker בלי גישה ל-window, לנסות רענון באמצעות Firebase SDK
+    if (typeof self !== 'undefined' && typeof Window === 'undefined' && auth) {
+      // בסביבת Service Worker ננסה לגשת ל-currentUser של firebase/auth
+      const currentUser = auth.currentUser;
+      
+      if (currentUser) {
+        try {
+          // ניסיון לרענן טוקן עם Firebase
+          await currentUser.getIdToken(true);
+          console.log('WordStream: Successfully refreshed token using Firebase SDK');
+          return true;
+        } catch (tokenError) {
+          console.error('WordStream: Failed to refresh token using Firebase SDK:', tokenError);
+          // נכשל ברענון - סימן שהסשן כנראה פג באמת
+          return false;
+        }
+      } else {
+        console.warn('WordStream: No current user available to refresh token');
+        return false;
+      }
+    }
+    
+    // בסביבת דפדפן, נשתמש ב-AuthManager
+    return await AuthManager.verifyTokenAndRefresh();
+  } catch (error) {
+    console.error('WordStream: Error refreshing auth token:', error);
+    return false;
+  }
+}
+
+/**
  * Ensure we have an authenticated user, refreshing token if needed
  * @returns Promise resolving to a user ID or null
  */
@@ -99,7 +138,7 @@ export async function ensureAuthenticatedUser(): Promise<string | null> {
     }
     
     // Try to verify and refresh the token
-    const isTokenValid = await AuthManager.verifyTokenAndRefresh();
+    const isTokenValid = await refreshAuthToken();
     if (!isTokenValid) {
       console.warn('WordStream: Token validation failed');
       

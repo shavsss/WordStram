@@ -169,17 +169,17 @@ export async function initializeDataSync(): Promise<() => void> {
   try {
     // Check if user is authenticated
     const userId = await ensureAuthenticatedUser();
-    if (!userId) {
+  if (!userId) {
       console.warn('WordStream: Cannot initialize data sync - no authenticated user');
       return () => {};
-    }
+  }
 
     console.log('WordStream: Initializing Firestore data sync for all components');
     
     // Setup network status listeners for offline support
     setupNetworkListeners();
-    
-    // Setup listeners for each data type
+
+  // Setup listeners for each data type
     const wordListUnsubscribe = setupWordListListener(userId);
     const chatsUnsubscribe = setupChatsListener(userId);
     const notesUnsubscribe = setupNotesListener(userId);
@@ -236,19 +236,37 @@ function cleanupAllListeners(): void {
 }
 
 /**
- * Setup network status listeners for offline support
+ * Setup network status listeners
  */
 function setupNetworkListeners(): void {
-  // Handle online events
-  window.addEventListener('online', () => {
-    console.log('WordStream: Device is back online, processing pending operations');
-    processPendingOperations();
-  });
+  // Browser environment with window
+  if (typeof window !== 'undefined') {
+    // Handle online events
+    window.addEventListener('online', () => {
+      console.log('WordStream: Device is back online, processing pending operations');
+      processPendingOperations();
+    });
+    
+    // Handle offline events
+    window.addEventListener('offline', () => {
+      console.log('WordStream: Device is offline, operations will be queued');
+    });
+  }
   
-  // Handle offline events
-  window.addEventListener('offline', () => {
-    console.log('WordStream: Device is offline, operations will be queued');
-  });
+  // Service Worker environment or general fallback
+  // For Service Worker, the network status can be checked but not listened to with events
+  // We'll use a periodic check instead when online events aren't available
+  if (typeof navigator !== 'undefined') {
+    const checkNetworkStatus = () => {
+      if (navigator.onLine && syncState.pendingOperations.length > 0) {
+        console.log('WordStream: Periodic network check - online with pending operations');
+        processPendingOperations();
+      }
+    };
+    
+    // Set up a periodic check every 30 seconds as a fallback for environments without window events
+    setInterval(checkNetworkStatus, 30000);
+  }
 }
 
 /**
@@ -308,33 +326,81 @@ function queueOperation(type: string, data: any): void {
   
   console.log(`WordStream: Queued ${type} operation for later processing`);
   
-  // Store pending operations in localStorage for persistence
+  // Store pending operations for persistence
   try {
     const pendingOpsKey = 'wordstream_pending_operations';
-    localStorage.setItem(pendingOpsKey, JSON.stringify(syncState.pendingOperations));
+    
+    // First, always use chrome.storage which works in all contexts
+    chrome.storage.local.set({ 
+      [pendingOpsKey]: syncState.pendingOperations 
+    }).catch(error => {
+      console.warn('WordStream: Failed to save pending operations to chrome.storage:', error);
+    });
+    
+    // Additionally use localStorage in browser contexts
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(pendingOpsKey, JSON.stringify(syncState.pendingOperations));
+    }
   } catch (error) {
-    console.warn('WordStream: Failed to save pending operations to localStorage:', error);
+    console.warn('WordStream: Failed to save pending operations to storage:', error);
   }
 }
 
 /**
- * Load any pending operations from localStorage on startup
+ * Load any pending operations from storage on startup
  */
 function loadPendingOperations(): void {
-  try {
-    const pendingOpsKey = 'wordstream_pending_operations';
-    const pendingOpsJson = localStorage.getItem(pendingOpsKey);
-    
-    if (pendingOpsJson) {
-      const pendingOps = JSON.parse(pendingOpsJson);
-      if (Array.isArray(pendingOps)) {
-        syncState.pendingOperations = pendingOps;
-        console.log(`WordStream: Loaded ${pendingOps.length} pending operations from localStorage`);
+  const pendingOpsKey = 'wordstream_pending_operations';
+  
+  // Try to load from chrome.storage first
+  chrome.storage.local.get([pendingOpsKey])
+    .then(result => {
+      if (result && result[pendingOpsKey]) {
+        const pendingOps = result[pendingOpsKey];
+        if (Array.isArray(pendingOps)) {
+          syncState.pendingOperations = pendingOps;
+          console.log(`WordStream: Loaded ${pendingOps.length} pending operations from chrome.storage`);
+        }
+        return;
       }
-    }
-  } catch (error) {
-    console.warn('WordStream: Failed to load pending operations from localStorage:', error);
-  }
+      
+      // Fall back to localStorage if available
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const pendingOpsJson = localStorage.getItem(pendingOpsKey);
+          
+          if (pendingOpsJson) {
+            const pendingOps = JSON.parse(pendingOpsJson);
+            if (Array.isArray(pendingOps)) {
+              syncState.pendingOperations = pendingOps;
+              console.log(`WordStream: Loaded ${pendingOps.length} pending operations from localStorage`);
+            }
+          }
+        } catch (error) {
+          console.warn('WordStream: Failed to load pending operations from localStorage:', error);
+        }
+      }
+    })
+    .catch(error => {
+      console.warn('WordStream: Failed to load pending operations from chrome.storage:', error);
+      
+      // Fall back to localStorage if available
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const pendingOpsJson = localStorage.getItem(pendingOpsKey);
+          
+          if (pendingOpsJson) {
+            const pendingOps = JSON.parse(pendingOpsJson);
+            if (Array.isArray(pendingOps)) {
+              syncState.pendingOperations = pendingOps;
+              console.log(`WordStream: Loaded ${pendingOps.length} pending operations from localStorage`);
+            }
+          }
+        } catch (error) {
+          console.warn('WordStream: Failed to load pending operations from localStorage:', error);
+        }
+      }
+    });
 }
 
 // Load pending operations on module initialization
@@ -496,12 +562,11 @@ function setupStatsListener(userId: string) {
 }
 
 /**
- * Helper to broadcast messages to all extension contexts
  * This function handles errors gracefully and ignores common connection issues
  */
 function broadcastMessage(message: any) {
   try {
-    // Send message via postMessage to all windows
+    // בדוק אם אנחנו בסביבת דפדפן
     if (typeof window !== 'undefined') {
       console.log('WordStream: Broadcasting message:', message);
       
@@ -513,6 +578,8 @@ function broadcastMessage(message: any) {
       const timestamp = new Date().getTime();
       const broadcastKey = `wordstream_broadcast_${timestamp}`;
       
+      // Try to use localStorage if available
+      if (typeof localStorage !== 'undefined') {
       localStorage.setItem(broadcastKey, JSON.stringify({
         ...message,
         timestamp
@@ -536,6 +603,36 @@ function broadcastMessage(message: any) {
       } catch (cleanupError) {
         console.warn('WordStream: Error cleaning up broadcast messages:', cleanupError);
       }
+      }
+    }
+    
+    // בכל מקרה, שמור גם ב-chrome.storage (עובד גם בסביבת Service Worker)
+    try {
+      const timestamp = new Date().getTime();
+      const broadcastKey = `wordstream_broadcast_${timestamp}`;
+      
+      chrome.storage.local.set({
+        [broadcastKey]: {
+          ...message,
+          timestamp
+        }
+      });
+      
+      // ניקוי הודעות ישנות
+      chrome.storage.local.get(null, (items) => {
+        if (!items) return;
+        
+        const broadcastKeys = Object.keys(items)
+          .filter(key => key.startsWith('wordstream_broadcast_'))
+          .sort()
+          .reverse();
+          
+        if (broadcastKeys.length > 20) {
+          chrome.storage.local.remove(broadcastKeys.slice(20));
+        }
+      });
+    } catch (chromeError) {
+      console.warn('WordStream: Error using chrome.storage for broadcast:', chromeError);
     }
   } catch (error) {
     console.error('WordStream: Error broadcasting message:', error);
@@ -1219,11 +1316,11 @@ export function subscribeToAllChats(
  */
 export async function saveNote(note: any): Promise<string> {
   // Ensure we have an ID for the note
-  const noteId = note.id || uuidv4();
-  const noteWithId = { 
-    ...note, 
-    id: noteId,
-    timestamp: note.timestamp || new Date().toISOString(),
+    const noteId = note.id || uuidv4();
+    const noteWithId = { 
+      ...note, 
+      id: noteId,
+      timestamp: note.timestamp || new Date().toISOString(),
   };
   
   try {
@@ -1234,7 +1331,7 @@ export async function saveNote(note: any): Promise<string> {
         const userId = await ensureAuthenticatedUser();
         if (!userId) {
           console.warn('WordStream: User not authenticated, saving note to local storage only');
-          saveNoteToLocalStorage(noteWithId);
+    saveNoteToLocalStorage(noteWithId);
           queueOperation('saveNote', noteWithId);
           return noteId;
         }
@@ -1250,33 +1347,33 @@ export async function saveNote(note: any): Promise<string> {
         await setDoc(noteDocRef, noteWithId, { merge: true });
         
         // Update video references
-        if (note.videoId) {
-          try {
+    if (note.videoId) {
+      try {
             const videoDocRef = doc(firestore, 'users', userId, 'userData', 'videos', note.videoId);
-            const videoDoc = await getDoc(videoDocRef);
-            
-            if (videoDoc.exists()) {
-              // Update existing video document
-              await updateDoc(videoDocRef, {
-                lastUpdated: serverTimestamp(),
-                [`noteIds.${noteId}`]: true
-              });
-            } else {
-              // Create new video document
-              await setDoc(videoDocRef, {
-                videoId: note.videoId,
-                title: note.videoTitle || 'Unknown Video',
-                url: note.videoURL || `https://www.youtube.com/watch?v=${note.videoId}`,
-                createdAt: serverTimestamp(),
-                lastUpdated: serverTimestamp(),
-                noteIds: { [noteId]: true }
-              });
-            }
-          } catch (videoError) {
-            // Non-blocking - note is still saved
-            console.warn('WordStream: Error updating video metadata:', videoError);
-          }
+        const videoDoc = await getDoc(videoDocRef);
+        
+        if (videoDoc.exists()) {
+          // Update existing video document
+          await updateDoc(videoDocRef, {
+            lastUpdated: serverTimestamp(),
+            [`noteIds.${noteId}`]: true
+          });
+        } else {
+          // Create new video document
+          await setDoc(videoDocRef, {
+            videoId: note.videoId,
+            title: note.videoTitle || 'Unknown Video',
+            url: note.videoURL || `https://www.youtube.com/watch?v=${note.videoId}`,
+            createdAt: serverTimestamp(),
+            lastUpdated: serverTimestamp(),
+            noteIds: { [noteId]: true }
+          });
         }
+      } catch (videoError) {
+        // Non-blocking - note is still saved
+        console.warn('WordStream: Error updating video metadata:', videoError);
+      }
+    }
         
         // Update metadata
         try {

@@ -199,48 +199,117 @@ class StoreService {
    * הגדרת מאזינים לאירועים מערכתיים
    */
   private setupListeners(): void {
-    // האזנה למצב חיבור לרשת
-    window.addEventListener('online', () => {
-      this.isOnline = true;
-      this.emit('store:connectionChanged', { isOnline: true });
-      this.syncAll(); // סנכרון עם שרת כשהחיבור חוזר
-    });
-    
-    window.addEventListener('offline', () => {
-      this.isOnline = false;
-      this.emit('store:connectionChanged', { isOnline: false });
-    });
-    
-    // הגדרת ערוץ שידור בין חלונות אם פעיל
-    if (this.enableBroadcastChannel) {
-      try {
-        this.broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-        this.broadcastChannel.onmessage = (event) => this.handleBroadcastMessage(event.data);
-      } catch (error) {
-        this.logDebug('BroadcastChannel not supported', error);
-        this.enableBroadcastChannel = false;
-      }
-    }
+    // חיבור מאזין למצב הרשת
+    this.setupNetworkListeners();
     
     // האזנה למצב המשתמש אם יש אובייקט Auth
     if (this.auth) {
-      onAuthStateChanged(this.auth, (user) => {
-        // משתמש התחבר או התנתק
-        const wasLoggedIn = !!this.user;
-        const isLoggedIn = !!user;
-        this.user = user;
-        
-        if (!wasLoggedIn && isLoggedIn) {
-          // התחברות חדשה
-          this.emit('user:login', this.getUserInfo());
-          this.fetchUserData();
-        } else if (wasLoggedIn && !isLoggedIn) {
-          // התנתקות
-          this.emit('user:logout', { timestamp: new Date().toISOString() });
-          this.clearUserData();
-        }
-      });
+      this.setupAuthStateListener();
     }
+  }
+  
+  /**
+   * הגדרת מאזינים למצב הרשת
+   */
+  private setupNetworkListeners(): void {
+    // באם נמצאים בסביבת דפדפן - מאזינים לאירועי חיבור לרשת
+    if (typeof window !== 'undefined') {
+      // האזנה לאירועי רשת בסביבת דפדפן
+      window.addEventListener('online', () => {
+        this.isOnline = true;
+        this.emit('store:connectionChanged', { isOnline: true });
+        this.syncAll(); // סנכרון עם שרת כשהחיבור חוזר
+      });
+      
+      window.addEventListener('offline', () => {
+        this.isOnline = false;
+        this.emit('store:connectionChanged', { isOnline: false });
+      });
+      
+      // הגדרת ערוץ שידור בין חלונות אם פעיל
+      if (this.enableBroadcastChannel) {
+        try {
+          this.broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+          this.broadcastChannel.onmessage = (event) => this.handleBroadcastMessage(event.data);
+        } catch (error) {
+          this.logDebug('BroadcastChannel not supported', error);
+          this.enableBroadcastChannel = false;
+        }
+      }
+    } else {
+      // בסביבת Service Worker אין אירועי online/offline
+      // במקום זאת, נבדוק את מצב החיבור לפי הצורך
+      this.isOnline = navigator.onLine; // קבלת מצב חיבור ראשוני מה-navigator
+      
+      // יוצרים מנגנון בדיקה עיתי במקום האזנה לאירועים
+      const checkNetworkStatus = () => {
+        const wasOnline = this.isOnline;
+        this.isOnline = navigator.onLine;
+        
+        if (!wasOnline && this.isOnline) {
+          this.emit('store:connectionChanged', { isOnline: true });
+          this.syncAll(); // סנכרון עם שרת כשהחיבור חוזר
+        } else if (wasOnline && !this.isOnline) {
+          this.emit('store:connectionChanged', { isOnline: false });
+        }
+      };
+      
+      // בדיקה כל דקה (60 שניות * 1000 מילישניות)
+      setInterval(checkNetworkStatus, 60 * 1000);
+      
+      this.logDebug('Running in Service Worker environment - using periodic network checks');
+    }
+  }
+  
+  /**
+   * הגדרת מאזין לשינויים במצב המשתמש
+   */
+  private setupAuthStateListener(): void {
+    if (!this.auth) return;
+    
+    onAuthStateChanged(this.auth, async (user) => {
+      // משתמש התחבר או התנתק
+      const wasLoggedIn = !!this.user;
+      const isLoggedIn = !!user;
+      this.user = user;
+      
+      if (!wasLoggedIn && isLoggedIn) {
+        // התחברות חדשה
+        this.emit('user:login', this.getUserInfo());
+        this.fetchUserData();
+        
+        // שמירת המצב באחסון כרום לשימוש ע"י Service Worker
+        try {
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            await chrome.storage.local.set({
+              'wordstream_auth_state': 'authenticated',
+              'wordstream_user_info': this.getUserInfo(),
+              'wordstream_auth_timestamp': Date.now()
+            });
+            this.logDebug('Saved auth state to Chrome storage');
+          }
+        } catch (error) {
+          console.error('Failed to save auth state to Chrome storage:', error);
+        }
+      } else if (wasLoggedIn && !isLoggedIn) {
+        // התנתקות
+        this.emit('user:logout', { timestamp: new Date().toISOString() });
+        this.clearUserData();
+        
+        // עדכון האחסון של כרום
+        try {
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            await chrome.storage.local.set({
+              'wordstream_auth_state': 'unauthenticated',
+              'wordstream_auth_timestamp': Date.now()
+            });
+            this.logDebug('Updated auth state in Chrome storage - user logged out');
+          }
+        } catch (error) {
+          console.error('Failed to update auth state in Chrome storage:', error);
+        }
+      }
+    });
   }
   
   /**

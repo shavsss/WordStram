@@ -222,34 +222,27 @@ function AppWrapper() {
           }
         }
         
-        // Step 3: Verify authentication state with a longer timeout
+        // Step 3: Verify authentication state
         if (isMounted) setInitStep("Verifying authentication...");
         
         try {
-          // Try to verify and refresh the user token with a timeout
-          const authPromise = AuthManager.verifyTokenAndRefresh();
-          const authTimeoutPromise = new Promise<boolean>((resolve) => {
-            setTimeout(() => {
-              console.warn('WordStream: Auth verification timed out');
-              resolve(false);
-            }, 15000); // 15 second timeout
-          });
+          // פשוט בדוק האם יש משתמש מחובר ללא ניסיון לרענן טוקן
+          const isAuthenticated = AuthManager.isAuthenticated();
           
-          // Race the auth promise against the timeout
-          const authResult = await Promise.race([authPromise, authTimeoutPromise]);
-          
-          if (authResult) {
-            console.log('WordStream: Authentication verified successfully');
+          if (isAuthenticated) {
+            console.log('WordStream: User is authenticated');
           } else {
-            console.warn('WordStream: Authentication verification failed or timed out');
+            console.log('WordStream: No authenticated user found');
             
             // אם אין חיבור אינטרנט, הצג הודעה מותאמת
             if (!hasConnection) {
-              console.warn('WordStream: Authentication failed likely due to connection issues');
+              console.warn('WordStream: Authentication may fail due to connection issues');
             }
           }
+          
+          // אין צורך לדאוג אם המשתמש מחובר או לא, Firebase יטפל בזה דרך onAuthStateChanged
         } catch (authError) {
-          console.warn('WordStream: Auth initialization error (non-critical):', authError);
+          console.warn('WordStream: Auth check error (non-critical):', authError);
           // Continue despite auth error
         }
         
@@ -314,28 +307,28 @@ function AppWrapper() {
       </div>
     );
   }
-  
+
   return (
     <ErrorBoundary>
-      <FirestoreProvider>
-        <StoreProvider>
-          <AuthWrapper>
-            <Popup />
-          </AuthWrapper>
-          <ToastContainer 
-            position="bottom-right"
-            autoClose={3000}
-            hideProgressBar={false}
-            newestOnTop
-            closeOnClick
+    <FirestoreProvider>
+      <StoreProvider>
+        <AuthWrapper>
+          <Popup />
+        </AuthWrapper>
+        <ToastContainer 
+          position="bottom-right"
+          autoClose={3000}
+          hideProgressBar={false}
+          newestOnTop
+          closeOnClick
             rtl={true}
-            pauseOnFocusLoss
-            draggable
-            pauseOnHover
-            theme="light"
-          />
-        </StoreProvider>
-      </FirestoreProvider>
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="light"
+        />
+      </StoreProvider>
+    </FirestoreProvider>
     </ErrorBoundary>
   );
 }

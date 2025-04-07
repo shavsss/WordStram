@@ -6,35 +6,115 @@
  */
 
 /**
- * שליחת הודעה לרכיב הרקע וקבלת תשובה
+ * שליחת הודעה לרכיב הרקע וקבלת תשובה עם מנגנון ניסיון חוזר משופר
+ * Enhanced message sending with retry mechanism for auth errors
  */
-export async function sendMessageToBackground<T = any>(message: any): Promise<T> {
+export const sendMessageToBackground = async <T = any>(message: any): Promise<T> => {
   try {
-    return new Promise<T>((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        // Handle any error from chrome.runtime
-        if (chrome.runtime.lastError) {
-          console.error('WordStream: Error sending message to background:', chrome.runtime.lastError);
-          reject(new Error(chrome.runtime.lastError.message || 'Failed to communicate with background script'));
-          return;
-        }
-
-        // Handle error response
-        if (response?.error) {
-          console.error('WordStream: Background operation failed:', response.error);
-          reject(new Error(response.error));
-          return;
-        }
-
-        // Resolve with the data
-        resolve(response?.data || response);
-      });
-    });
+    // בדוק אם המשתמש מחובר
+    const { wordstream_auth_state } = await chrome.storage.local.get('wordstream_auth_state');
+    
+    // אם המשתמש לא מחובר, בדוק אם ההודעה מחייבת אימות
+    if (wordstream_auth_state !== 'authenticated' && 
+        message.requiresAuth !== false && 
+        message.action !== 'CHECK_AUTH') {
+      
+      console.error('WordStream: Cannot send message - user not authenticated');
+      throw new Error('User authentication session expired');
+    }
+    
+    // שלח את ההודעה ל-background
+    if (!chrome.runtime) {
+      throw new Error('Chrome runtime not available');
+    }
+    
+    const response = await chrome.runtime.sendMessage(message);
+    
+    // טפל בשגיאת אימות
+    if (response && response.error === 'User authentication session expired') {
+      console.error('WordStream: Authentication error from background');
+      
+      // עדכן את מצב האימות ב-storage
+      await chrome.storage.local.set({ 'wordstream_auth_state': 'unauthenticated' });
+      
+      // הודע לחלקים אחרים על שינוי מצב האימות
+      await notifyLocalAuthStateChanged(false);
+      
+      throw new Error('User authentication session expired');
+    }
+    
+    return response as T;
   } catch (error) {
-    console.error('WordStream: Error in background communication:', error);
+    console.error('WordStream: Error sending message to background:', error);
+    
+    // בדוק אם זו שגיאת אימות
+    if (error instanceof Error && 
+       (error.message.includes('authentication') || 
+        error.message.includes('session expired'))) {
+      
+      // עדכן את מצב האימות ב-storage
+      await chrome.storage.local.set({ 'wordstream_auth_state': 'unauthenticated' });
+      
+      // הודע לחלקים אחרים על שינוי מצב האימות
+      await notifyLocalAuthStateChanged(false);
+    }
+    
     throw error;
   }
+};
+
+/**
+ * הודע לחלקים אחרים באותו טאב על שינוי במצב האימות
+ */
+async function notifyLocalAuthStateChanged(isAuthenticated: boolean) {
+  try {
+    // שימוש ב-window.postMessage לתקשורת בתוך הטאב
+    window.postMessage({
+      source: 'wordstream-extension',
+      type: 'AUTH_STATE_CHANGED',
+      isAuthenticated
+    }, '*');
+  } catch (error) {
+    console.error('WordStream: Error in local auth state notification:', error);
+  }
 }
+
+/**
+ * בדוק אם קיים חיבור תקין ל-Firestore
+ */
+export const isFirestoreConnected = async (): Promise<boolean> => {
+  try {
+    const result = await sendMessageToBackground({
+      action: 'CHECK_FIRESTORE_CONNECTION',
+      requiresAuth: false
+    });
+    
+    return result && result.connected === true;
+  } catch (error) {
+    console.error('WordStream: Error checking Firestore connection:', error);
+    return false;
+  }
+};
+
+/**
+ * בדוק את מצב האימות הנוכחי
+ */
+export const checkAuthStatus = async (): Promise<{ isAuthenticated: boolean, userInfo?: any }> => {
+  try {
+    const result = await sendMessageToBackground({
+      action: 'CHECK_AUTH',
+      requiresAuth: false
+    });
+    
+    return {
+      isAuthenticated: result && result.isAuthenticated === true,
+      userInfo: result?.userInfo || null
+    };
+  } catch (error) {
+    console.error('WordStream: Error checking auth status:', error);
+    return { isAuthenticated: false };
+  }
+};
 
 /**
  * בדיקת חיבור לפיירסטור
@@ -63,6 +143,7 @@ export async function checkFirestoreConnection(): Promise<{
 
 /**
  * קבלת מידע על מצב האימות של המשתמש
+ * פונקציה פשוטה שרק מחזירה את המצב הנוכחי מ-background
  */
 export async function getAuthState(): Promise<{
   isAuthenticated: boolean;
@@ -75,12 +156,45 @@ export async function getAuthState(): Promise<{
   timestamp?: number;
 }> {
   try {
-    return await sendMessageToBackground({
+    // שלח בקשה למצב האימות מה-background script
+    const response = await sendMessageToBackground({
       action: 'GET_AUTH_STATE'
     });
+    
+    // שמירת התשובה ב-localStorage לשימוש במקרי חירום (רק אם אנחנו בסביבת דפדפן)
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem('wordstream_last_auth_check', JSON.stringify({
+          data: response,
+          timestamp: Date.now()
+        }));
+      } catch (storageError) {
+        console.warn('WordStream: Failed to cache auth state in localStorage', storageError);
+      }
+    }
+    
+    return response || { isAuthenticated: false, timestamp: Date.now() };
   } catch (error) {
-    console.error('WordStream: Failed to get auth state:', error);
-    return { isAuthenticated: false };
+    console.warn('WordStream: Failed to get auth state from background:', error);
+    
+    // נסיון לקרוא מידע מקומי במקרה שאין תקשורת עם ה-background (רק בסביבת דפדפן)
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const cachedData = localStorage.getItem('wordstream_last_auth_check');
+        if (cachedData) {
+          const parsedData = JSON.parse(cachedData);
+          if (parsedData?.data) {
+            console.log('WordStream: Using cached auth state from:', new Date(parsedData.timestamp).toLocaleString());
+            return parsedData.data;
+          }
+        }
+      } catch (storageError) {
+        console.warn('WordStream: Failed to read cached auth state', storageError);
+      }
+    }
+    
+    // ברירת מחדל - לא מחובר
+    return { isAuthenticated: false, timestamp: Date.now() };
   }
 }
 
@@ -88,25 +202,108 @@ export async function getAuthState(): Promise<{
  * קבלת מזהה המשתמש הנוכחי
  */
 export async function getCurrentUserId(): Promise<string | null> {
-  try {
-    const authState = await getAuthState();
-    return authState.isAuthenticated ? authState.userInfo?.uid || null : null;
-  } catch (error) {
-    console.error('WordStream: Failed to get current user ID:', error);
-    return null;
-  }
+  const authState = await getAuthState();
+  return authState.isAuthenticated && authState.userInfo?.uid ? authState.userInfo.uid : null;
 }
 
 /**
  * בדיקה אם המשתמש מאומת
  */
 export async function isAuthenticated(): Promise<boolean> {
+  const authState = await getAuthState();
+  return authState.isAuthenticated;
+}
+
+/**
+ * אימות המשתמש ובדיקת הרשאות
+ * מאפשר גם בדיקה האם המשתמש מורשה לבצע פעולה מסוימת 
+ */
+export async function verifyAuth(operation?: string, resourceId?: string): Promise<{
+  isAuthenticated: boolean;
+  hasPermission?: boolean;
+  userId?: string;
+  error?: string;
+}> {
   try {
+    // השג מצב אימות עדכני
     const authState = await getAuthState();
-    return authState.isAuthenticated;
+    
+    // אם המשתמש לא מאומת, החזר שגיאה
+    if (!authState.isAuthenticated || !authState.userInfo?.uid) {
+      return {
+        isAuthenticated: false,
+        error: 'User not authenticated'
+      };
+    }
+    
+    // אם נדרשת בדיקת הרשאות ספציפית
+    if (operation && resourceId) {
+      try {
+        // בדיקת הרשאות ספציפית
+        const permissionCheck = await sendMessageToBackground({
+          action: 'VERIFY_AUTH',
+          operation,
+          resourceId
+        });
+        
+        // החזר את תוצאות הבדיקה
+        return {
+          isAuthenticated: true,
+          hasPermission: permissionCheck.hasPermission !== false,
+          userId: authState.userInfo?.uid,
+          error: permissionCheck.error
+        };
+      } catch (permissionError) {
+        // טיפול בשגיאות בבדיקת הרשאות
+        console.error(`WordStream: Permission check failed for ${operation}/${resourceId}:`, permissionError);
+        
+        return {
+          isAuthenticated: true,
+          hasPermission: false,
+          userId: authState.userInfo?.uid,
+          error: permissionError instanceof Error ? 
+            permissionError.message : 
+            'Failed to verify permissions'
+        };
+      }
+    }
+    
+    // מקרה בסיסי - המשתמש מאומת, אין צורך בבדיקת הרשאות
+    return {
+      isAuthenticated: true,
+      userId: authState.userInfo?.uid
+    };
   } catch (error) {
-    console.error('WordStream: Authentication check failed:', error);
-    return false;
+    // טיפול בשגיאות כלליות
+    console.error('WordStream: Auth verification failed:', error);
+    
+    // נסיון לקרוא מידע מקומי (רק אם אנחנו בסביבת דפדפן)
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const cachedData = localStorage.getItem('wordstream_last_auth_check');
+        if (cachedData) {
+          const parsedData = JSON.parse(cachedData);
+          if (parsedData?.data?.isAuthenticated) {
+            console.log('WordStream: Using cached auth state in verifyAuth due to error');
+            return {
+              isAuthenticated: true,
+              userId: parsedData.data.userInfo?.uid,
+              error: 'Using cached authentication data due to connection issues'
+            };
+          }
+        }
+      } catch (storageError) {
+        console.warn('WordStream: Failed to read cached auth state', storageError);
+      }
+    }
+    
+    // ברירת מחדל - לא מאומת
+    return {
+      isAuthenticated: false,
+      error: error instanceof Error ? 
+        error.message : 
+        'Unknown error verifying authentication'
+    };
   }
 }
 
@@ -213,6 +410,38 @@ export async function getAllVideosWithNotes(): Promise<any[]> {
     });
   } catch (error) {
     console.error('WordStream: Failed to get videos with notes:', error);
+    
+    // Check if the error is an authentication error
+    const isAuthError = error instanceof Error && (
+      error.message.includes('authentication') || 
+      error.message.includes('auth') ||
+      error.message.includes('expired') ||
+      error.message.includes('session')
+    );
+
+    if (isAuthError) {
+      console.log('WordStream: Authentication error detected, checking local storage for cached notes');
+      
+      // Try to get data from local storage as fallback
+      try {
+        const cachedData = await new Promise<any[]>((resolve) => {
+          chrome.storage.local.get(['videosWithNotesCache'], (result) => {
+            if (result.videosWithNotesCache && Array.isArray(result.videosWithNotesCache)) {
+              console.log('WordStream: Found cached videos with notes:', result.videosWithNotesCache.length);
+              resolve(result.videosWithNotesCache);
+            } else {
+              console.log('WordStream: No cached videos with notes found');
+              resolve([]);
+            }
+          });
+        });
+        
+        return cachedData;
+      } catch (storageError) {
+        console.error('WordStream: Failed to get cached videos with notes:', storageError);
+      }
+    }
+    
     return [];
   }
 }
@@ -224,11 +453,42 @@ export async function getAllVideosWithNotes(): Promise<any[]> {
  */
 export async function getChats(): Promise<any[]> {
   try {
-    return await sendMessageToBackground({
-      action: 'getChats'
-    });
+    const response = await sendMessageToBackground({ action: 'getChats' });
+    return response || [];
   } catch (error) {
     console.error('WordStream: Failed to get chats:', error);
+    
+    // Check if the error is an authentication error
+    const isAuthError = error instanceof Error && (
+      error.message.includes('authentication') || 
+      error.message.includes('auth') ||
+      error.message.includes('expired') ||
+      error.message.includes('session')
+    );
+
+    if (isAuthError) {
+      console.log('WordStream: Authentication error detected, checking local storage for cached chats');
+      
+      // Try to get data from local storage as fallback
+      try {
+        const cachedData = await new Promise<any[]>((resolve) => {
+          chrome.storage.local.get(['chatsCache'], (result) => {
+            if (result.chatsCache && Array.isArray(result.chatsCache)) {
+              console.log('WordStream: Found cached chats:', result.chatsCache.length);
+              resolve(result.chatsCache);
+            } else {
+              console.log('WordStream: No cached chats found');
+              resolve([]);
+            }
+          });
+        });
+        
+        return cachedData;
+      } catch (storageError) {
+        console.error('WordStream: Failed to get cached chats:', storageError);
+      }
+    }
+    
     return [];
   }
 }
@@ -454,13 +714,22 @@ export async function deleteAllNotesForVideo(videoId: string): Promise<number> {
  */
 export function setupBroadcastListener(callback: (message: any) => void): () => void {
   try {
-    // Add listener for messages from browser window (between features)
-    const handleWindowMessage = (event: MessageEvent) => {
-      if (event.data && typeof event.data === 'object' && 
-         (event.data.action || event.data.type)) {
-        callback(event.data);
-      }
-    };
+    const isWorkerEnvironment = typeof window === 'undefined';
+    let messageListenerRemover: () => void = () => {};
+    
+    // Only add window message listener if we're in a browser context
+    if (!isWorkerEnvironment) {
+      // Add listener for messages from browser window (between features)
+      const handleWindowMessage = (event: MessageEvent) => {
+        if (event.data && typeof event.data === 'object' && 
+           (event.data.action || event.data.type)) {
+          callback(event.data);
+        }
+      };
+      
+      window.addEventListener('message', handleWindowMessage);
+      messageListenerRemover = () => window.removeEventListener('message', handleWindowMessage);
+    }
     
     // Listen for changes in chrome.storage
     const handleStorageChange = (changes: {[key: string]: chrome.storage.StorageChange}, areaName: string) => {
@@ -493,18 +762,164 @@ export function setupBroadcastListener(callback: (message: any) => void): () => 
     };
     
     // Add all listeners
-    window.addEventListener('message', handleWindowMessage);
     chrome.storage.onChanged.addListener(handleStorageChange);
     chrome.runtime.onMessage.addListener(handleRuntimeMessage);
     
     // Return function that removes all listeners
     return () => {
-      window.removeEventListener('message', handleWindowMessage);
+      messageListenerRemover(); // Will either remove window listener or do nothing
       chrome.storage.onChanged.removeListener(handleStorageChange);
       chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
     };
   } catch (error) {
     console.error('WordStream: Failed to setup broadcast listener:', error);
     return () => {}; // Return empty cleanup function in case of error
+  }
+}
+
+/**
+ * מטפל בשגיאות אימות מרכזיות של התוסף
+ * פונקציה מורחבת ומשודרגת לטיפול מקיף בשגיאות אימות
+ * 
+ * @param error שגיאת אימות שהתקבלה מהרקע
+ * @param retryCallback פונקציה שיש להפעיל לאחר התחברות מחדש (אופציונלי)
+ * @returns true אם זו שגיאת אימות והיא טופלה, אחרת false
+ */
+export async function handleAuthError(error: any, retryCallback?: () => Promise<any>): Promise<boolean> {
+  // בדיקה אם זו שגיאת אימות
+  if (!error || typeof error !== 'object') return false;
+  
+  // בדיקה טובה יותר של שגיאות אימות נפוצות
+  const isAuthError = 
+    (error.error === "User authentication session expired" || 
+     error.error === "User not authenticated" ||
+     error.error === "Session expired" ||
+     error.error === "Not authenticated" ||
+     error.error === "No user" ||
+     error.errorCode === "auth/session-expired" ||
+     error.errorCode === "auth/user-not-authenticated" ||
+     error.errorCode === "auth/requires-recent-login" ||
+     error.errorCode === "auth/no-current-user" ||
+     error.errorCode === "auth/user-token-expired" ||
+     error.errorCode === "auth/invalid-user-token" ||
+     (typeof error.error === 'string' && error.error.includes('authentication')) ||
+     (typeof error.message === 'string' && error.message.includes('authentication')) ||
+     (typeof error.message === 'string' && error.message.includes('auth')) ||
+     (typeof error.message === 'string' && error.message.includes('session expired')));
+  
+  if (!isAuthError) return false;
+  
+  // זו שגיאת אימות, טיפול בה
+  console.log("WordStream: Auth error detected", error);
+  
+  // ניסיון ראשון - ניקוי מטמונים מקומיים שעלולים לגרום לבעיה
+  try {
+    console.log("WordStream: Clearing auth caches to attempt automatic recovery");
+    
+    // מנקה מטמונים הקשורים לאימות מהסטורג' המקומי
+    const keysToRemove = [
+      'wordstream_auth_state_timestamp',
+      'wordstream_user_id_timestamp'
+    ];
+    
+    await chrome.storage.local.remove(keysToRemove);
+  } catch (storageError) {
+    console.error("WordStream: Failed to clear caches", storageError);
+  }
+  
+  // שמירת הפעולה שיש לבצע אחרי התחברות מחדש
+  if (retryCallback) {
+    try {
+      // לשמור את הפעולה לביצוע אחרי התחברות מחדש
+      await chrome.storage.local.set({ 
+        'wordstream_retry_after_auth': { 
+          timestamp: Date.now(),
+          action: error.action || 'unknown_action'
+        }
+      });
+      console.log("WordStream: Saved retry action for after re-authentication");
+    } catch (storageError) {
+      console.error("WordStream: Failed to save retry action", storageError);
+    }
+  }
+  
+  // בסביבת דפדפן - שולח אירוע למשתמש (אם יש חלון פתוח כלשהו)
+  if (typeof window !== 'undefined') {
+    try {
+      // שליחת אירוע שגיאת אימות לממשק המשתמש
+      window.dispatchEvent(new CustomEvent('wordstream-auth-error', { 
+        detail: {
+          message: error.message || "Your session has expired. Please sign in again.",
+          code: error.errorCode || "auth/session-expired"
+        }
+      }));
+      console.log("WordStream: Dispatched auth error event to UI");
+    } catch (eventError) {
+      console.error("WordStream: Failed to dispatch event", eventError);
+    }
+  }
+  
+  // שולח הודעה לפתיחת חלון התחברות מחדש - פועל גם בסביבת Service Worker
+  try {
+    // פתיחת popup עם טופס התחברות
+    await chrome.runtime.sendMessage({ 
+      action: 'OPEN_AUTH_DIALOG',
+      reason: 'session_expired',
+      message: error.message || "Your session has expired. Please sign in again.",
+      code: error.errorCode || "auth/session-expired"
+    });
+    console.log("WordStream: Sent message to open auth dialog");
+    
+    // אם נשלחה הודעה בהצלחה, מחכה לדיאלוג שייפתח
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // ניסיון להציג הודעה למשתמש דרך תיבת קופצת
+    try {
+      await chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: 'WordStream - התחברות נדרשת',
+        message: 'נדרשת התחברות מחדש כדי להמשיך להשתמש בתוסף',
+        priority: 2
+      });
+    } catch (notificationError) {
+      console.error("WordStream: Failed to create notification", notificationError);
+    }
+    
+  } catch (msgError) {
+    console.error("WordStream: Failed to request auth dialog", msgError);
+    
+    // אם נכשל לשלוח הודעה, ננסה לפתוח את דף ההגדרות של התוסף
+    try {
+      await chrome.runtime.openOptionsPage();
+      console.log("WordStream: Opened options page as fallback");
+    } catch (optionsError) {
+      console.error("WordStream: Failed to open options page", optionsError);
+    }
+  }
+  
+  return true;
+}
+
+/**
+ * שולח הודעה לרקע ומטפל בשגיאות אימות באופן אוטומטי
+ */
+export async function sendMessageToBackgroundWithAuth<T = any>(message: any): Promise<T> {
+  try {
+    const response = await sendMessageToBackground(message);
+    
+    // אם התקבלה שגיאת אימות, טיפול בה
+    if (response && response.error) {
+      const isHandled = await handleAuthError(response, () => sendMessageToBackgroundWithAuth(message));
+      if (isHandled) {
+        // אם השגיאה טופלה, החזרת שגיאה מתאימה
+        throw new Error(response.error);
+      }
+    }
+    
+    return response;
+  } catch (error) {
+    console.error(`WordStream: Error in ${message.action || 'unknown action'}:`, error);
+    throw error;
   }
 } 

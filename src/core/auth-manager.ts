@@ -1,52 +1,37 @@
 import { User } from 'firebase/auth';
 import { auth } from '@/core/firebase/config';
-import { getCurrentUser as getFirebaseCurrentUser } from '@/core/firebase/auth';
-import {
-  getDoc,
-  doc,
-  firestore,
-  setDoc
-} from '@/core/firebase/firestore';
+import { refreshIdToken } from '@/core/firebase/auth';
 
-// אובייקט מרכזי שמנהל אימות - גרסה פשוטה ומינימלית
+/**
+ * AuthManager - Simple authentication state manager
+ * A central point for authentication state in the application
+ */
 const AuthManager = {
   /**
-   * קבלת המשתמש הנוכחי ממקור אפשרי
+   * Get the current authenticated user
    */
   getCurrentUser(): User | null {
-    // הסתמכות בעיקר על Firebase
-    const firebaseUser = auth.currentUser || getFirebaseCurrentUser();
-    if (firebaseUser) {
-      return firebaseUser;
-    }
-
-    // כגיבוי, לנסות להשתמש באובייקט גלובלי
-    if (typeof window !== 'undefined' && window.WordStream?.currentUser) {
-      return window.WordStream.currentUser as User;
-    }
-    
-    return null;
+    return auth.currentUser;
   },
 
   /**
-   * בדיקה אם משתמש מאומת
+   * Check if a user is authenticated
    */
   isAuthenticated(): boolean {
-    return !!auth.currentUser || !!this.getCurrentUser();
+    return !!auth.currentUser;
   },
 
   /**
-   * עדכון מצב האימות בכל המקומות הרלוונטיים
+   * Update authentication state across the application
    */
   updateAuthState(user: User | null): void {
-    // עדכון אובייקט גלובלי
+    // Update global object in browser context
     if (typeof window !== 'undefined') {
       if (!window.WordStream) {
         window.WordStream = {};
       }
       
       if (user) {
-        // שמירת מידע מינימלי נדרש
         window.WordStream.currentUser = {
           uid: user.uid,
           email: user.email,
@@ -55,37 +40,41 @@ const AuthManager = {
         };
         window.WordStream.isAuthenticated = true;
       } else {
-        window.WordStream.currentUser = undefined;
+        window.WordStream.currentUser = null;
         window.WordStream.isAuthenticated = false;
       }
     }
 
-    // שמירה ב-storage
+    // Save to chrome.storage if in extension context
     this.saveToStorage(user);
   },
 
   /**
-   * שמירת מידע אימות ב-local storage
+   * Save user information to storage
    */
   async saveToStorage(user: User | null): Promise<void> {
     try {
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        const data = user ? {
-          wordstream_auth_state: 'authenticated',
-          wordstream_user_info: {
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName,
-            photoURL: user.photoURL
-          },
-          lastAuthUpdate: new Date().toISOString()
-        } : {
-          wordstream_auth_state: 'unauthenticated',
-          wordstream_user_info: null,
-          lastAuthUpdate: new Date().toISOString()
-        };
-
-        await chrome.storage.local.set(data);
+        if (user) {
+          // Save minimal user info without sensitive data
+          await chrome.storage.local.set({
+            wordstream_auth_state: 'authenticated',
+            wordstream_user_info: {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName,
+              photoURL: user.photoURL
+            },
+            wordstream_auth_timestamp: Date.now()
+          });
+        } else {
+          // Clear user data
+          await chrome.storage.local.remove([
+            'wordstream_auth_state',
+            'wordstream_user_info',
+            'wordstream_auth_timestamp'
+          ]);
+        }
       }
     } catch (error) {
       console.warn('WordStream AuthManager: Error saving auth state:', error);
@@ -93,76 +82,52 @@ const AuthManager = {
   },
 
   /**
-   * גרסה פשוטה ומינימלית של אימות הטוקן
-   * מסתמכת על Firebase Auth ולא מנסה לנהל טוקנים ידנית
+   * Verify and refresh the Firebase token if needed
    */
   async verifyTokenAndRefresh(): Promise<boolean> {
     try {
-      // פשוט לבדוק אם המשתמש מחובר דרך Firebase
-      if (auth.currentUser) {
-        console.log('WordStream AuthManager: User is authenticated via Firebase Auth');
-        return true;
+      // If no user, authentication is invalid
+      if (!this.isAuthenticated()) {
+        return false;
       }
       
-      console.warn('WordStream AuthManager: No authenticated user in Firebase Auth');
-      return false;
+      // Try to refresh the token - this will throw if token is invalid
+      const refreshedToken = await refreshIdToken();
+      return !!refreshedToken;
     } catch (error) {
-      console.warn('WordStream AuthManager: Auth check failed:', error);
+      console.error('WordStream: Token refresh failed:', error);
       return false;
     }
   },
 
   /**
-   * בדיקת הרשאות משתמש לגישה לנתוני Firestore - גרסה פשוטה
+   * Check permissions (simply verifies authentication)
    */
   async checkPermissions(): Promise<boolean> {
-    // פשוט לבדוק אם המשתמש מחובר
     return this.isAuthenticated();
   },
 
   /**
-   * לא צריך אימות מחדש כי אנחנו סומכים על Firebase
+   * Force reauthentication when needed
    */
   async reauthenticateIfNeeded(): Promise<boolean> {
-    return this.isAuthenticated();
+    // If already authenticated, just refresh token
+    if (this.isAuthenticated()) {
+      return this.verifyTokenAndRefresh();
+    }
+    
+    // Otherwise, we need to redirect to auth page
+    // This should be handled by the application components
+    return false;
   }
 };
 
 export default AuthManager;
 
 /**
- * קבלת מסמך פרופיל משתמש
+ * Verify current authentication state 
+ * Can be used to check if user session is valid
  */
-async function getUserProfileDocument() {
-  try {
-    const user = AuthManager.getCurrentUser();
-    if (!user) {
-      console.warn('WordStream: Cannot get user profile - no authenticated user');
-      return null;
-    }
-    
-    // שימוש בגישה החדשה עם פונקציות Firestore ישירות
-    const userDocRef = doc(firestore, 'users', user.uid);
-    const userDoc = await getDoc(userDocRef);
-    
-    if (userDoc.exists()) {
-      return { id: userDoc.id, ...userDoc.data() };
-    } else {
-      // יצירת מסמך משתמש אם לא קיים
-      console.log('WordStream: Creating new user profile document');
-      const userData = {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        createdAt: new Date()
-      };
-      
-      await setDoc(userDocRef, userData);
-      return userData;
-    }
-  } catch (error) {
-    console.error('WordStream: Error accessing user profile document:', error);
-    return null;
-  }
+export async function verifyAuthentication(): Promise<boolean> {
+  return AuthManager.verifyTokenAndRefresh();
 } 

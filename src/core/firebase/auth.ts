@@ -9,11 +9,20 @@ import {
   User,
   sendPasswordResetEmail,
   updateProfile,
-  UserCredential
+  UserCredential,
+  getIdToken
 } from 'firebase/auth';
 import { auth, firestore } from './config';
-import { doc, setDoc } from 'firebase/firestore';
-import { UserData } from '@/hooks/useAuth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+
+// Interface for additional user data
+export interface UserData {
+  gender?: string;
+  age?: number;
+  location?: string;
+  displayName?: string;
+  [key: string]: any;
+}
 
 /**
  * Authentication service for managing user sign-in/sign-out
@@ -21,53 +30,64 @@ import { UserData } from '@/hooks/useAuth';
 
 /**
  * Register a new user with email and password
- * and store additional user data in Firestore
+ * @param email User email
+ * @param password User password
+ * @param userData Optional additional user data
  */
-export async function registerWithEmail(email: string, password: string, userData?: UserData): Promise<UserCredential> {
-  // Create user with Firebase Auth
-  const credential = await createUserWithEmailAndPassword(auth, email, password);
-  
-  // If additional user data was provided, store it in Firestore
-  if (userData && credential.user) {
-    const { uid } = credential.user;
+export async function registerWithEmail(
+  email: string, 
+  password: string, 
+  userData?: UserData
+): Promise<UserCredential> {
+  try {
+    // Create user with Firebase Auth
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
     
-    try {
-      // Create a user document in Firestore with the additional information
-      await setDoc(doc(firestore, 'users', uid), {
-        email,
-        ...userData,
-        createdAt: new Date().toISOString()
-      });
-      
-      console.log('WordStream Auth: User profile data saved successfully');
-    } catch (error) {
-      console.error('WordStream Auth: Failed to save user profile data:', error);
-      // We don't throw here to prevent blocking the registration if profile data save fails
+    // If additional user data was provided, store it in Firestore
+    if (userData && credential.user) {
+      await storeUserProfile(credential.user.uid, { email, ...userData });
     }
+    
+    // Save auth state to storage
+    await saveAuthState(credential.user);
+    
+    return credential;
+  } catch (error) {
+    console.error('WordStream Auth: Registration failed:', error);
+    throw error;
   }
-  
-  return credential;
 }
 
 /**
  * Sign in with email and password
+ * @param email User email
+ * @param password User password
  */
 export async function signInWithEmail(email: string, password: string): Promise<UserCredential> {
-  return signInWithEmailAndPassword(auth, email, password);
+  try {
+    const credential = await signInWithEmailAndPassword(auth, email, password);
+    
+    // Save auth state to storage
+    await saveAuthState(credential.user);
+    
+    return credential;
+  } catch (error) {
+    console.error('WordStream Auth: Email sign-in failed:', error);
+    throw error;
+  }
 }
 
 /**
- * Sign in with Google using Chrome's identity API with launchWebAuthFlow
- * This opens a tab/window for authentication - THE SIMPLEST APPROACH
+ * Sign in with Google using Chrome's identity API
  */
-export async function signInWithGoogle(): Promise<UserCredential | null> {
-  console.log("WordStream: Starting Google sign-in with launchWebAuthFlow");
-
-  if (typeof chrome === 'undefined' || !chrome.identity) {
-    throw new Error("Authentication is only available in Chrome extension. Please use email and password instead.");
-  }
-
+export async function signInWithGoogle(): Promise<UserCredential> {
   try {
+    console.log("WordStream: Starting Google sign-in");
+    
+    if (typeof chrome === 'undefined' || !chrome.identity) {
+      throw new Error("Authentication is only available in Chrome extension");
+    }
+    
     // Set up the provider
     const provider = new GoogleAuthProvider();
     provider.addScope('profile');
@@ -76,14 +96,12 @@ export async function signInWithGoogle(): Promise<UserCredential | null> {
     // Create the URL for Google Sign-In
     const authURL = `https://accounts.google.com/o/oauth2/auth?client_id=${encodeURIComponent('1097713470067-g34g0oqh4o6chpjfq41nt84js3r06if1.apps.googleusercontent.com')}&response_type=token&redirect_uri=${encodeURIComponent('https://vidlearn-ai.firebaseapp.com/__/auth/handler')}&scope=${encodeURIComponent('profile email')}`;
     
-    // Launch external authentication flow in a separate tab/window
     return new Promise((resolve, reject) => {
       chrome.identity.launchWebAuthFlow({
         url: authURL,
         interactive: true
       }, async (responseUrl) => {
         if (chrome.runtime.lastError) {
-          console.error("WordStream: Error in web auth flow:", chrome.runtime.lastError);
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
@@ -92,8 +110,6 @@ export async function signInWithGoogle(): Promise<UserCredential | null> {
           reject(new Error("Google authentication canceled or failed"));
           return;
         }
-        
-        console.log("WordStream: Got response URL:", responseUrl);
         
         try {
           // Extract the access token from the URL
@@ -111,6 +127,21 @@ export async function signInWithGoogle(): Promise<UserCredential | null> {
           // Sign in with Firebase using the credential
           const result = await signInWithCredential(auth, credential);
           console.log("WordStream: Successfully signed in with Google");
+          
+          // Save auth state to storage
+          await saveAuthState(result.user);
+          
+          // Check if this is a new user and store profile if needed
+          const userDocRef = doc(firestore, 'users', result.user.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          if (!userDoc.exists()) {
+            await storeUserProfile(result.user.uid, {
+              email: result.user.email || '',
+              displayName: result.user.displayName || ''
+            });
+          }
+          
           resolve(result);
         } catch (error) {
           console.error("WordStream: Error processing auth result:", error);
@@ -118,113 +149,200 @@ export async function signInWithGoogle(): Promise<UserCredential | null> {
         }
       });
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("WordStream: Google sign-in error:", error);
-    
-    // User-friendly error messages in English
-    if (error.message?.includes('The popup was closed')) {
-      throw new Error("The sign-in window was closed. Please try again to complete authentication.");
-    } else if (error.message?.includes('unauthorized_client')) {
-      throw new Error("There's an issue with application authorization. Please contact support for assistance.");
-    } else if (error.message?.includes('network')) {
-      throw new Error("Network connection issue. Please check your internet and try again.");
-    } else if (error.message?.includes('timeout')) {
-      throw new Error("The authentication request timed out. Please try again.");
-    } else if (error.message?.includes('popup_blocked')) {
-      throw new Error("Pop-up window was blocked. Please allow pop-ups for this site and try again.");
-    }
-    
-    // Generic error message
-    throw new Error(`Authentication couldn't be completed. Please try again or use email login.`);
+    throw error;
+  }
+}
+
+/**
+ * Store a user's profile in Firestore
+ * @param uid User ID
+ * @param userData User data to store
+ */
+export async function storeUserProfile(uid: string, userData: UserData): Promise<void> {
+  try {
+    await setDoc(doc(firestore, 'users', uid), {
+      ...userData,
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    console.log('WordStream Auth: User profile data saved');
+  } catch (error) {
+    console.error('WordStream Auth: Failed to save user profile data:', error);
+    throw error;
   }
 }
 
 /**
  * Update user profile
+ * @param displayName New display name
  */
-export async function updateUserProfile(user: User, displayName: string): Promise<void> {
-  await updateProfile(user, { displayName });
-}
-
-/**
- * Logs out the current user
- */
-export async function logOut(): Promise<void> {
+export async function updateUserProfile(displayName: string): Promise<void> {
   try {
-    console.log("WordStream: Logging out user");
+    const user = auth.currentUser;
+    if (!user) throw new Error('No authenticated user');
     
-    // Standard Firebase signOut
-    await signOut(auth);
-    console.log("WordStream: User successfully logged out");
+    await updateProfile(user, { displayName });
     
-    // Clear any local session data if needed
-    localStorage.removeItem("wordstream_session");
-    sessionStorage.removeItem("wordstream_session");
+    // Also update in Firestore
+    await setDoc(doc(firestore, 'users', user.uid), {
+      displayName,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
     
+    console.log('WordStream Auth: Profile updated successfully');
   } catch (error) {
-    console.error("WordStream: Error during logout:", error);
-    throw new Error("We couldn't sign you out properly. Please refresh the page and try again.");
+    console.error('WordStream Auth: Failed to update profile:', error);
+    throw error;
   }
 }
 
 /**
- * Set up an auth state listener
+ * Log out the current user
+ */
+export async function logOut(): Promise<void> {
+  try {
+    await signOut(auth);
+    await clearAuthState();
+    console.log('WordStream Auth: User logged out successfully');
+  } catch (error) {
+    console.error('WordStream Auth: Logout failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * Subscribe to authentication state changes
+ * @param callback Function to call when auth state changes
  */
 export function subscribeToAuthChanges(callback: (user: User | null) => void): () => void {
-  console.log('WordStream Auth: Setting up auth state listener');
-  return onAuthStateChanged(auth, (user) => {
-    console.log('WordStream Auth: Auth state changed:', user ? `User ${user.email}` : 'No user');
+  return onAuthStateChanged(auth, async (user) => {
+    console.log('WordStream Auth: Auth state changed:', user ? 'User logged in' : 'User logged out');
+    
+    // Save auth state to storage when it changes
+    if (user) {
+      await saveAuthState(user);
+    } else {
+      await clearAuthState();
+    }
+    
     callback(user);
   });
 }
 
 /**
- * Get the current user
- * יכולת משופרת לגילוי משתמש מחובר במגוון סביבות
+ * Get the current authenticated user
  */
 export function getCurrentUser(): User | null {
-  // בדיקה ראשית - מתוך האובייקט auth
-  const user = auth.currentUser;
-  
-  console.log('WordStream Auth: Getting current user from auth:', user ? `User ${user.email} (uid: ${user.uid})` : 'No user in auth object');
-  
-  // בדיקה נוספת - אולי יש משתמש בזיכרון המקומי
-  try {
-    // בדיקה האם המשתמש קיים בחלון אם אנחנו בסביבת דפדפן
-    if (!user && typeof window !== 'undefined' && window.WordStream && window.WordStream.currentUser) {
-      console.log('WordStream Auth: Found user in window.WordStream:', window.WordStream.currentUser);
-      return window.WordStream.currentUser as User;
-    }
-    
-    // בדיקה באחסון מקומי של הדפדפן, אם אנחנו בסביבת דפדפן
-    if (!user && typeof localStorage !== 'undefined') {
-      const storedUser = localStorage.getItem('wordstream_user');
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser);
-          console.log('WordStream Auth: Found user in localStorage:', parsedUser);
-          return parsedUser as User;
-        } catch (parseError) {
-          console.warn('WordStream Auth: Error parsing stored user:', parseError);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('WordStream Auth: Error in additional user checks:', error);
-  }
-  
-  // בדיקת מצב האימות הכללי
-  console.log('WordStream Auth: Auth state:', auth.currentUser ? 'Authenticated' : 'Not authenticated',
-            'SignIn methods count:', auth.languageCode !== null ? 'Available' : 'Not available');
-  
-  return user;
+  return auth.currentUser;
 }
 
 /**
- * Send password reset email
+ * Refresh ID token
+ * This should be called regularly to ensure the token doesn't expire
+ */
+export async function refreshIdToken(): Promise<string | null> {
+  try {
+    const user = auth.currentUser;
+    if (!user) return null;
+    
+    // Force refresh the token
+    const token = await getIdToken(user, true);
+    console.log('WordStream Auth: Token refreshed successfully');
+    return token;
+  } catch (error) {
+    console.error('WordStream Auth: Token refresh failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Send a password reset email
+ * @param email Email address to send the password reset to
  */
 export async function resetPassword(email: string): Promise<void> {
-  console.log('WordStream Auth: Sending password reset email to:', email);
-  await sendPasswordResetEmail(auth, email);
-  console.log('WordStream Auth: Password reset email sent successfully');
+  try {
+    await sendPasswordResetEmail(auth, email);
+    console.log('WordStream Auth: Password reset email sent');
+  } catch (error) {
+    console.error('WordStream Auth: Failed to send password reset email:', error);
+    throw error;
+  }
+}
+
+/**
+ * Save authentication state to storage
+ * @param user User to save
+ */
+async function saveAuthState(user: User | null): Promise<void> {
+  if (!user) return clearAuthState();
+  
+  try {
+    // Don't store sensitive information
+    const userInfo = {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      photoURL: user.photoURL,
+      emailVerified: user.emailVerified
+    };
+    
+    // Save to chrome.storage.local for persistence across service worker restarts
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      await chrome.storage.local.set({
+        'wordstream_auth_state': 'authenticated',
+        'wordstream_user_info': userInfo,
+        'wordstream_auth_timestamp': Date.now()
+      });
+    }
+    
+    // Also update background script via messaging if in content script
+    if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.runtime?.sendMessage) {
+      try {
+        await chrome.runtime.sendMessage({
+          action: 'AUTH_STATE_UPDATED',
+          isAuthenticated: true,
+          userInfo
+        });
+      } catch (error) {
+        // Background script might not be ready yet, which is okay
+        console.log('WordStream Auth: Background not available for auth update');
+      }
+    }
+  } catch (error) {
+    console.error('WordStream Auth: Failed to save auth state:', error);
+  }
+}
+
+/**
+ * Clear authentication state from storage
+ */
+async function clearAuthState(): Promise<void> {
+  try {
+    // Clear from chrome.storage.local
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      await chrome.storage.local.remove([
+        'wordstream_auth_state',
+        'wordstream_user_info',
+        'wordstream_auth_timestamp'
+      ]);
+    }
+    
+    // Notify background script
+    if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.runtime?.sendMessage) {
+      try {
+        await chrome.runtime.sendMessage({
+          action: 'AUTH_STATE_UPDATED',
+          isAuthenticated: false,
+          userInfo: null
+        });
+      } catch (error) {
+        // Background script might not be ready yet, which is okay
+        console.log('WordStream Auth: Background not available for auth update');
+      }
+    }
+  } catch (error) {
+    console.error('WordStream Auth: Failed to clear auth state:', error);
+  }
 } 

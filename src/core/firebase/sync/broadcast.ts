@@ -6,112 +6,202 @@
 import { useEffect } from 'react';
 import { BroadcastMessage } from '../types';
 
+// Helper to detect Service Worker environment 
+const isServiceWorkerEnv = typeof self !== 'undefined' && typeof Window === 'undefined' && !('window' in self);
+
 /**
- * Send a message to all open windows and store in localStorage
- * @param message The message to broadcast
+ * Broadcast a message to all extension components
+ * Works across different contexts (tabs, background, popup)
  */
 export function broadcastMessage(message: BroadcastMessage): void {
   try {
-    // Ensure a timestamp is included
+    if (!message) {
+      console.warn('WordStream: Attempted to broadcast empty message');
+      return;
+    }
+    
+    // Add timestamp if not present
     const messageWithTimestamp = {
       ...message,
-      timestamp: message.timestamp || new Date().getTime()
+      timestamp: message.timestamp || new Date().toISOString()
     };
     
-    console.log('WordStream: Broadcasting message:', messageWithTimestamp);
+    // Save to storage for cross-context communication
+    // This works in all contexts including Service Worker
+    try {
+      const storageKey = `wordstream_broadcast_${Date.now()}`;
+      chrome.storage.local.set({ [storageKey]: messageWithTimestamp })
+        .then(() => {
+          // Clean up old broadcast messages after setting new one
+          cleanupOldBroadcastMessages();
+        })
+        .catch(error => {
+          console.error('WordStream: Error during storage cleanup after broadcast:', error);
+        });
+    } catch (storageError) {
+      console.error('WordStream: Error broadcasting via storage:', storageError);
+    }
     
-    // Send via postMessage if window is available
-    if (typeof window !== 'undefined') {
-      window.postMessage(messageWithTimestamp, '*');
-      
-      // Also save to localStorage for other tabs to pick up
-      const timestamp = new Date().getTime();
-      const broadcastKey = `wordstream_broadcast_${timestamp}`;
-      
-      localStorage.setItem(broadcastKey, JSON.stringify(messageWithTimestamp));
-      
-      // Clean up old broadcast messages
-      cleanupOldBroadcastMessages();
+    // Browser context: use postMessage for same-window communication
+    // Only attempt this in browser context where window is available
+    if (!isServiceWorkerEnv) {
+      try {
+        if (typeof window !== 'undefined') {
+          window.postMessage(messageWithTimestamp, '*');
+        }
+      } catch (postMessageError) {
+        console.warn('WordStream: Error using postMessage for broadcast:', postMessageError);
+      }
+    }
+    
+    // Use runtime messaging (works across all contexts)
+    try {
+      // Send message and ignore errors (fails silently if background isn't available)
+      chrome.runtime.sendMessage(messageWithTimestamp)
+        .catch(() => {
+          // Silently ignore errors when background isn't active
+        });
+    } catch (sendError) {
+      // Silently ignore errors in service worker context
     }
   } catch (error) {
-    console.error('WordStream: Error broadcasting message:', error);
+    console.error('WordStream: Error in broadcastMessage:', error);
   }
 }
 
 /**
- * Clean up old broadcast messages from localStorage
+ * Clean up old broadcast messages from storage
  * Keeps only the most recent 20 messages
  */
 export function cleanupOldBroadcastMessages(): void {
   try {
-    const broadcastKeys = [];
-    
-    // Find all broadcast message keys
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('wordstream_broadcast_')) {
-        broadcastKeys.push(key);
+    // If we're in a browser context with localStorage available
+    if (!isServiceWorkerEnv && typeof localStorage !== 'undefined') {
+      const broadcastKeys = [];
+      
+      // Find all broadcast message keys
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('wordstream_broadcast_')) {
+          broadcastKeys.push(key);
+        }
+      }
+      
+      // Sort by timestamp (most recent first)
+      broadcastKeys.sort().reverse();
+      
+      // Remove old messages (keep only last 20)
+      if (broadcastKeys.length > 20) {
+        broadcastKeys.slice(20).forEach(key => localStorage.removeItem(key));
       }
     }
     
-    // Sort by timestamp (most recent first)
-    broadcastKeys.sort().reverse();
-    
-    // Remove old messages (keep only last 20)
-    if (broadcastKeys.length > 20) {
-      broadcastKeys.slice(20).forEach(key => localStorage.removeItem(key));
-    }
+    // Also clean up chrome.storage (works in both browser and service worker)
+    chrome.storage.local.get(null, (allItems) => {
+      if (!allItems) return;
+      
+      const broadcastKeys = Object.keys(allItems)
+        .filter(key => key.startsWith('wordstream_broadcast_'))
+        .sort()
+        .reverse();
+      
+      if (broadcastKeys.length > 20) {
+        const keysToRemove = broadcastKeys.slice(20);
+        chrome.storage.local.remove(keysToRemove);
+      }
+    });
   } catch (cleanupError) {
     console.warn('WordStream: Error cleaning up broadcast messages:', cleanupError);
   }
 }
 
 /**
- * Set up listeners for broadcast messages from other tabs/windows
- * @param callback Function to call when a message is received
- * @returns A function to remove the listeners
+ * Setup a listener for broadcast messages
+ * Returns a cleanup function to remove the listener
  */
 export function setupBroadcastListener(callback: (message: any) => void): () => void {
-  try {
-    // Handle messages from postMessage
-    const messageHandler = (event: MessageEvent) => {
-      // Only process WordStream messages
-      if (event.data && 
-          (event.data.action && event.data.action.startsWith('WORDS') || 
-           event.data.action && event.data.action.startsWith('NOTES') ||
-           event.data.action && event.data.action.startsWith('CHATS') ||
-           event.data.action && event.data.action.startsWith('STATS') ||
-           event.data.action && event.data.action.startsWith('NOTE_'))) {
+  // Window message listener (only in browser context)
+  let messageHandler: ((event: MessageEvent) => void) | null = null;
+  
+  if (!isServiceWorkerEnv && typeof window !== 'undefined') {
+    messageHandler = (event: MessageEvent) => {
+      if (event.data && typeof event.data === 'object' && 
+         (event.data.action || event.data.type)) {
         callback(event.data);
       }
     };
     
-    // Listen for window messages
     window.addEventListener('message', messageHandler);
-    
-    // Also listen for storage events to get messages from other tabs
-    const storageHandler = (event: StorageEvent) => {
-      if (event.key && event.key.startsWith('wordstream_broadcast_') && event.newValue) {
-        try {
-          const message = JSON.parse(event.newValue);
-          callback(message);
-        } catch (parseError) {
-          console.warn('WordStream: Error parsing broadcast message:', parseError);
+  }
+  
+  // Storage change listener
+  const storageHandler = (event: StorageEvent | { key?: string; newValue?: string }) => {
+    // For chrome.storage events in Service Worker
+    if (!event.key && 'changes' in (event as any)) {
+      const changes = (event as any).changes;
+      
+      for (const key in changes) {
+        if (key.startsWith('wordstream_broadcast_') && changes[key].newValue) {
+          try {
+            const data = changes[key].newValue;
+            callback(data);
+          } catch (e) {
+            console.error('WordStream: Error processing broadcast from storage change:', e);
+          }
         }
       }
-    };
+      return;
+    }
     
+    // For native storage events in browser context
+    if (typeof event.key === 'string' && event.key.startsWith('wordstream_broadcast_')) {
+      try {
+        const data = event.newValue ? JSON.parse(event.newValue) : null;
+        if (data) {
+          callback(data);
+        }
+      } catch (e) {
+        console.error('WordStream: Error processing broadcast message from storage event:', e);
+      }
+    }
+  };
+  
+  // Add listeners (only in browser context)
+  if (!isServiceWorkerEnv && typeof window !== 'undefined') {
     window.addEventListener('storage', storageHandler);
-    
-    // Return function to remove listeners
-    return () => {
-      window.removeEventListener('message', messageHandler);
-      window.removeEventListener('storage', storageHandler);
-    };
-  } catch (error) {
-    console.error('WordStream: Error setting up broadcast listener:', error);
-    return () => {}; // Return empty cleanup function
   }
+  
+  // Also listen to chrome.storage changes (works in all contexts)
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local') {
+      for (const key in changes) {
+        if (key.startsWith('wordstream_broadcast_') && changes[key].newValue) {
+          try {
+            callback(changes[key].newValue);
+          } catch (e) {
+            console.error('WordStream: Error processing broadcast from chrome.storage:', e);
+          }
+        }
+      }
+    }
+  });
+  
+  // Return cleanup function
+  return () => {
+    if (messageHandler && !isServiceWorkerEnv && typeof window !== 'undefined') {
+      window.removeEventListener('message', messageHandler);
+    }
+    
+    if (!isServiceWorkerEnv && typeof window !== 'undefined') {
+      window.removeEventListener('storage', storageHandler);
+    }
+    
+    try {
+      chrome.storage.onChanged.removeListener(() => {});
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  };
 }
 
 /**

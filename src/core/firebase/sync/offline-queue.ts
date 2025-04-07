@@ -9,6 +9,9 @@ import { PendingOperation } from '../types';
 let pendingOperations: PendingOperation[] = [];
 const QUEUE_STORAGE_KEY = 'wordstream_pending_operations';
 
+// Helper to detect Service Worker environment
+const isServiceWorkerEnv = typeof self !== 'undefined' && typeof Window === 'undefined' && !('window' in self);
+
 /**
  * Initialize offline functionality by loading pending operations from storage
  */
@@ -59,16 +62,51 @@ export async function loadPendingOperations(): Promise<void> {
  * Set up network status listeners
  */
 export function setupNetworkListeners(): void {
-  // Handle online events
-  window.addEventListener('online', () => {
-    console.log('WordStream: Device is back online, processing pending operations');
-    processPendingOperations();
-  });
-  
-  // Handle offline events
-  window.addEventListener('offline', () => {
-    console.log('WordStream: Device is offline, operations will be queued');
-  });
+  if (isServiceWorkerEnv) {
+    // In Service Worker environment - use periodic checks instead of event listeners
+    console.log('WordStream: Setting up periodic network checks in Service Worker');
+    
+    // Initial check
+    if (navigator.onLine) {
+      processPendingOperations();
+    }
+    
+    // Check periodically every 60 seconds
+    setInterval(() => {
+      if (navigator.onLine) {
+        console.log('WordStream: Network check - device is online, processing operations');
+        processPendingOperations();
+      }
+    }, 60 * 1000);
+  } else {
+    // In browser environment - use window event listeners
+    try {
+      // Only attach event listeners if window is available
+      if (typeof window !== 'undefined') {
+        console.log('WordStream: Setting up window online/offline listeners');
+        
+        // Handle online events
+        window.addEventListener('online', () => {
+          console.log('WordStream: Device is back online, processing pending operations');
+          processPendingOperations();
+        });
+        
+        // Handle offline events
+        window.addEventListener('offline', () => {
+          console.log('WordStream: Device is offline, operations will be queued');
+        });
+      }
+    } catch (error) {
+      console.error('WordStream: Error setting up network listeners:', error);
+      
+      // Fallback to periodic checks if event listeners fail
+      setInterval(() => {
+        if (navigator.onLine) {
+          processPendingOperations();
+        }
+      }, 60 * 1000);
+    }
+  }
 }
 
 /**
