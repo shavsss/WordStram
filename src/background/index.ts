@@ -70,7 +70,7 @@ async function notifyAllTabsAboutAuthChange(isAuthenticated: boolean, user: User
     
     // Prepare the message
     const authChangeMessage = {
-      type: 'AUTH_STATE_CHANGED',
+      action: 'AUTH_STATE_CHANGED',
       isAuthenticated,
       userInfo: user ? {
         uid: user.uid,
@@ -743,35 +743,8 @@ console.log('WordStream background service worker started');
 initializeFirebase().then(() => {
   console.log('WordStream: Firebase initialization complete');
   
-  // Set up auth state listener to track user login/logout
-  if (auth) {
-    auth.onAuthStateChanged(async (user: User | null) => {
-      console.log('WordStream: Auth state changed:', user ? `User: ${user.email}` : 'No user');
-      
-      if (user) {
-        // Update stored user info when auth state changes
-        await updateStoredUserInfo(user);
-        
-        // Set up token refresh for logged in user
-        setupTokenRefreshTimer();
-        
-        // Notify all tabs about auth change
-        notifyAllTabsAboutAuthChange(true, user);
-      } else {
-        // Clear token refresh when user logs out
-        if (tokenRefreshInterval) {
-          clearInterval(tokenRefreshInterval);
-          tokenRefreshInterval = null;
-        }
-        
-        // Clear stored user info when auth state changes to logged out
-        await updateStoredUserInfo(null);
-        
-        // Notify tabs
-        notifyAllTabsAboutAuthChange(false, null);
-      }
-    });
-  }
+  // המאזין onAuthStateChanged כבר מוגדר ב-firebase-auth-helper.ts
+  // אין צורך להגדיר אותו שוב כאן
   
   // Set up request monitoring
   setupFirebaseRequestMonitoring();
@@ -785,63 +758,43 @@ initializeFirebase().then(() => {
 // Register periodic token refresh to prevent session expiration
 let tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
-// Setup refresh token timer on startup
-function setupTokenRefreshTimer() {
-  // טיימר לחידוש טוקן האימות כל 50 דקות
-  const refreshInterval = 50 * 60 * 1000; // 50 דקות בms
-  
-  console.log('WordStream: Setting up token refresh timer');
-  
-  // נקה טיימר קודם אם יש
-  if (tokenRefreshInterval) {
-    clearInterval(tokenRefreshInterval);
-    tokenRefreshInterval = null;
-  }
-  
-  // הגדרת אינטרוול חדש
-  tokenRefreshInterval = setInterval(async () => {
-    try {
-      const isSuccess = await triggerTokenRefresh();
-      if (isSuccess) {
-        console.log('WordStream: Scheduled token refresh successful');
-      } else {
-        console.warn('WordStream: Scheduled token refresh failed');
-      }
-    } catch (error) {
-      console.error('WordStream: Error during scheduled token refresh:', error);
-    }
-  }, refreshInterval);
-  
-  console.log('WordStream: Token refresh timer set');
-}
+// פונקציה זו כבר מימושת ב-firebase-auth-helper.ts ולא צריכה להיות מוגדרת כאן
+// נשאיר אותה פה לרפרנס אבל לא נקרא לה - הטיימר כבר מוגדר ב-helper
+// function setupTokenRefreshTimer() {
+//   // טיימר לחידוש טוקן האימות כל 50 דקות
+//   const refreshInterval = 50 * 60 * 1000; // 50 דקות בms
+//   
+//   console.log('WordStream: Setting up token refresh timer');
+//   
+//   // נקה טיימר קודם אם יש
+//   if (tokenRefreshInterval) {
+//     clearInterval(tokenRefreshInterval);
+//     tokenRefreshInterval = null;
+//   }
+//   
+//   // הגדרת אינטרוול חדש
+//   tokenRefreshInterval = setInterval(async () => {
+//     try {
+//       const isSuccess = await triggerTokenRefresh();
+//       if (isSuccess) {
+//         console.log('WordStream: Scheduled token refresh successful');
+//       } else {
+//         console.warn('WordStream: Scheduled token refresh failed');
+//       }
+//     } catch (error) {
+//       console.error('WordStream: Error during scheduled token refresh:', error);
+//     }
+//   }, refreshInterval);
+//   
+//   console.log('WordStream: Token refresh timer set');
+// }
 
-// Function to update stored user info
+// פונקציה זו כבר מימושת ב-firebase-auth-helper.ts כ-saveUserInfoToStorage ו-clearUserInfoFromStorage
+// לא צריך לממש אותה שוב כאן
 async function updateStoredUserInfo(user: User | null): Promise<void> {
-  if (!user) {
-    console.log('WordStream: No user to store, clearing stored auth info');
-    await chrome.storage.local.remove(['wordstream_auth_state', 'wordstream_user_info', 'wordstream_auth_timestamp']);
-    return;
-  }
-  
-  try {
-    const userInfo = {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL,
-      providerId: user.providerId
-    };
-    
-    await chrome.storage.local.set({
-      'wordstream_auth_state': 'authenticated',
-      'wordstream_user_info': userInfo,
-      'wordstream_auth_timestamp': Date.now()
-    });
-    
-    console.log('WordStream: Updated stored user info:', user.email);
-  } catch (error) {
-    console.error('WordStream: Failed to update stored user info:', error);
-  }
+  // אנחנו לא משתמשים בפונקציה זו יותר כי היא כפולה
+  // אבל משאירים אותה כאן לרפרנס
+  console.log('WordStream: updateStoredUserInfo is deprecated, using firebase-auth-helper instead');
 }
 
 // Safely access the Firebase auth object

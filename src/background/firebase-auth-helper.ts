@@ -18,6 +18,9 @@ let auth: Auth | null = null;
 // Token refresh interval
 let tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
+// Alarm name constants
+const TOKEN_REFRESH_ALARM = 'wordstream_token_refresh_alarm';
+
 /**
  * Initialize Firebase Auth and set up token refresh
  */
@@ -38,10 +41,67 @@ export async function initializeFirebaseAuth(app: FirebaseApp): Promise<Auth> {
     // Set up token refresh
     setupTokenRefresh();
     
+    // Set up Chrome alarms listener for reliable token refresh
+    setupAlarmListener();
+    
     return auth;
   } catch (error) {
     console.error('WordStream: Error initializing Firebase Auth:', error);
     throw error;
+  }
+}
+
+/**
+ * Set up listener for Chrome alarms
+ * This ensures token refresh happens even when service worker is idle/suspended
+ */
+function setupAlarmListener(): void {
+  if (!chrome.alarms) {
+    console.warn('WordStream: Chrome alarms API not available');
+    return;
+  }
+  
+  // Clear any existing alarm listener
+  try {
+    chrome.alarms.onAlarm.removeListener(handleAlarm);
+  } catch (e) {
+    // Ignore errors if there's no existing listener
+  }
+  
+  // Set up alarm listener
+  chrome.alarms.onAlarm.addListener(handleAlarm);
+  
+  console.log('WordStream: Alarm listener set up');
+}
+
+/**
+ * Handle alarm events
+ */
+async function handleAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
+  if (alarm.name === TOKEN_REFRESH_ALARM) {
+    console.log('WordStream: Token refresh alarm triggered');
+    
+    try {
+      if (auth && auth.currentUser) {
+        // Force token refresh
+        const token = await getIdToken(auth.currentUser, true);
+        console.log('WordStream: Token refreshed successfully via alarm');
+        
+        // Update token timestamp in storage
+        await chrome.storage.local.set({
+          'wordstream_token_refresh_time': Date.now()
+        });
+        
+        // Notify tabs that token has been refreshed
+        broadcastTokenRefresh(token);
+      } else {
+        console.log('WordStream: Token refresh alarm skipped - no user');
+        // Clear the alarm if there's no user
+        chrome.alarms.clear(TOKEN_REFRESH_ALARM);
+      }
+    } catch (error) {
+      console.error('WordStream: Token refresh via alarm failed:', error);
+    }
   }
 }
 
@@ -64,6 +124,9 @@ function setupAuthStateListener(): void {
       // Ensure token refresh is set up
       setupTokenRefresh();
       
+      // Set up alarm for token refresh
+      setupTokenRefreshAlarm();
+      
       // Notify all tabs about authentication
       broadcastAuthState(true, getUserInfo(user));
     } else {
@@ -75,8 +138,50 @@ function setupAuthStateListener(): void {
       // Clear token refresh
       clearTokenRefresh();
       
+      // Clear token refresh alarm
+      clearTokenRefreshAlarm();
+      
       // Notify all tabs
       broadcastAuthState(false, null);
+    }
+  });
+}
+
+/**
+ * Set up Chrome alarm for token refresh
+ */
+function setupTokenRefreshAlarm(): void {
+  if (!chrome.alarms) {
+    console.warn('WordStream: Chrome alarms API not available');
+    return;
+  }
+  
+  // Clear any existing alarm
+  chrome.alarms.clear(TOKEN_REFRESH_ALARM, (wasCleared) => {
+    if (wasCleared) {
+      console.log('WordStream: Cleared existing token refresh alarm');
+    }
+    
+    // Create a new alarm that fires every 45 minutes (less than token expiry)
+    chrome.alarms.create(TOKEN_REFRESH_ALARM, {
+      periodInMinutes: 45 // 45 minutes
+    });
+    
+    console.log('WordStream: Token refresh alarm set up (every 45 minutes)');
+  });
+}
+
+/**
+ * Clear token refresh alarm
+ */
+function clearTokenRefreshAlarm(): void {
+  if (!chrome.alarms) {
+    return;
+  }
+  
+  chrome.alarms.clear(TOKEN_REFRESH_ALARM, (wasCleared) => {
+    if (wasCleared) {
+      console.log('WordStream: Token refresh alarm cleared');
     }
   });
 }

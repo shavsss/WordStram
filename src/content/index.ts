@@ -16,6 +16,44 @@ const RETRY_DELAY = 2000;
 // סמן אם יש התאוששות בתהליך
 let recoveryInProgress = false;
 
+// ודא שאנחנו בסביבת דפדפן לפני שימוש באובייקט window
+const isBrowserEnvironment = typeof window !== 'undefined';
+
+// הוספת האזנה לאירועי postMessage - לטיפול בהודעות שמגיעות דרך window.postMessage
+if (isBrowserEnvironment) {
+  try {
+    window.addEventListener('message', (event) => {
+      // וידוי שהמקור הוא מהתוסף שלנו
+      if (event.data && event.data.source === 'wordstream-extension') {
+        // טיפול באירועי שינוי סטטוס אימות - נתמוך בשני הפורמטים (type ו-action) לתאימות
+        if ((event.data.type === 'AUTH_STATE_CHANGED' || event.data.action === 'AUTH_STATE_CHANGED') && 
+            event.data.isAuthenticated !== undefined) {
+          
+          console.log('WordStream: Received auth state change via postMessage:', 
+                     event.data.isAuthenticated ? 'Authenticated' : 'Not authenticated');
+          
+          // כאן נטפל באירוע ונשלח אירוע מותאם לשאר המרכיבים
+          const authEvent = new CustomEvent('wordstream:auth_changed', {
+            detail: {
+              isAuthenticated: event.data.isAuthenticated,
+              userInfo: event.data.userInfo || null
+            }
+          });
+          document.dispatchEvent(authEvent);
+          
+          // אם החיבור הצליח, נאפס את מצב ההתאוששות
+          if (event.data.isAuthenticated) {
+            recoveryInProgress = false;
+          }
+        }
+      }
+    });
+    console.log('WordStream: Added window.postMessage listener');
+  } catch (error) {
+    console.error('WordStream: Error setting up window message listener:', error);
+  }
+}
+
 // הגדרת האזנה להודעות מרכיב הרקע
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // בדיקה אם זו הודעת שינוי סטטוס אימות
@@ -73,16 +111,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     document.dispatchEvent(reloginEvent);
     
-    // שליחת התראת דפדפן למשתמש (אם מותר)
-    try {
-      if (Notification && Notification.permission === 'granted') {
-        new Notification('WordStream', {
-          body: 'יש צורך בהתחברות מחדש כדי להמשיך להשתמש ב-WordStream.',
-          icon: chrome.runtime.getURL('icons/icon128.png')
-        });
+    // שליחת התראת דפדפן למשתמש (אם מותר ואנחנו בסביבת דפדפן)
+    if (isBrowserEnvironment) {
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification('WordStream', {
+            body: 'יש צורך בהתחברות מחדש כדי להמשיך להשתמש ב-WordStream.',
+            icon: chrome.runtime.getURL('icons/icon128.png')
+          });
+        }
+      } catch (notificationError) {
+        console.error('WordStream: Error showing notification:', notificationError);
       }
-    } catch (notificationError) {
-      console.error('WordStream: Error showing notification:', notificationError);
     }
     
     if (sendResponse) {
@@ -233,22 +273,28 @@ function triggerAdvancedTokenRefresh(currentRetry = 0): void {
 }
 
 /**
- * האזנה לאירועי שגיאת אימות
+ * האזנה לאירועי שגיאת אימות - רק בסביבת דפדפן
  */
-document.addEventListener('wordstream:auth_error', (event: Event) => {
-  const customEvent = event as CustomEvent;
-  const error = customEvent.detail?.error || '';
-  
-  if (error.includes('expired') || error.includes('authentication')) {
-    console.log('WordStream: Auth error detected, triggering auth retry');
-    
-    // אם אין תהליך התאוששות פעיל, התחל אחד
-    if (!recoveryInProgress) {
-      recoveryInProgress = true;
-      triggerAuthRetry();
-    }
+if (isBrowserEnvironment) {
+  try {
+    document.addEventListener('wordstream:auth_error', (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const error = customEvent.detail?.error || '';
+      
+      if (error.includes('expired') || error.includes('authentication')) {
+        console.log('WordStream: Auth error detected, triggering auth retry');
+        
+        // אם אין תהליך התאוששות פעיל, התחל אחד
+        if (!recoveryInProgress) {
+          recoveryInProgress = true;
+          triggerAuthRetry();
+        }
+      }
+    });
+  } catch (error) {
+    console.error('WordStream: Error setting up auth error listener:', error);
   }
-});
+}
 
 /**
  * בדיקת מצב אימות התחלתי

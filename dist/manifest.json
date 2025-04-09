@@ -9,7 +9,8 @@
     "webNavigation",
     "scripting",
     "webRequest",
-    "identity"
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",

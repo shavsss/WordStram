@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Popup } from './features/popup';
-import './styles/popup.css';
+import './styles/globals.css';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('app');

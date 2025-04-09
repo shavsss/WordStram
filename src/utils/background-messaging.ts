@@ -6,41 +6,120 @@
  */
 
 /**
+ * פונקציה לבדיקת אימות מאולצת שמבצעת רענון וממתינה שה-storage יתעדכן
+ */
+async function forceAuthRefresh(): Promise<void> {
+  // בקשת רענון טוקן מהרקע
+  const refreshResult = await chrome.runtime.sendMessage({
+    action: 'REFRESH_TOKEN',
+    requiresAuth: false
+  });
+  
+  if (!refreshResult || !refreshResult.success) {
+    throw new Error('User authentication session expired');
+  }
+  
+  // חכה שה-storage יתעדכן
+  await new Promise<void>(resolve => {
+    function handler(changes: {[key: string]: chrome.storage.StorageChange}, area: string) {
+      if (area === 'local' && changes.wordstream_auth_state) {
+        chrome.storage.onChanged.removeListener(handler);
+        resolve();
+      }
+    }
+    
+    // הגדר timeout למקרה שה-storage לא יתעדכן
+    const timeout = setTimeout(() => {
+      chrome.storage.onChanged.removeListener(handler);
+      resolve();
+    }, 3000);
+    
+    chrome.storage.onChanged.addListener(handler);
+  });
+  
+  // בדיקה סופית של מצב האימות
+  const { wordstream_auth_state } = await chrome.storage.local.get('wordstream_auth_state');
+  if (wordstream_auth_state !== 'authenticated') {
+    throw new Error('User authentication session expired');
+  }
+}
+
+/**
  * שליחת הודעה לרכיב הרקע וקבלת תשובה עם מנגנון ניסיון חוזר משופר
  * Enhanced message sending with retry mechanism for auth errors
  */
 export const sendMessageToBackground = async <T = any>(message: any): Promise<T> => {
   try {
-    // בדוק אם המשתמש מחובר
-    const { wordstream_auth_state } = await chrome.storage.local.get('wordstream_auth_state');
-    
-    // אם המשתמש לא מחובר, בדוק אם ההודעה מחייבת אימות
-    if (wordstream_auth_state !== 'authenticated' && 
-        message.requiresAuth !== false && 
-        message.action !== 'CHECK_AUTH') {
+    // בדוק אם ההודעה לא דורשת אימות
+    if (message.requiresAuth === false || 
+        message.action === 'CHECK_AUTH' || 
+        message.action === 'REFRESH_TOKEN') {
       
-      console.error('WordStream: Cannot send message - user not authenticated');
-      throw new Error('User authentication session expired');
+      // שליחה ישירה ללא בדיקות אימות
+      if (!chrome.runtime) {
+        throw new Error('Chrome runtime not available');
+      }
+      
+      return await chrome.runtime.sendMessage(message) as T;
     }
     
-    // שלח את ההודעה ל-background
+    // בדוק את מצב האימות הנוכחי
+    const { wordstream_auth_state } = await chrome.storage.local.get('wordstream_auth_state');
+    
+    // אם המשתמש לא מחובר, ננסה לרענן את האימות
+    if (wordstream_auth_state !== 'authenticated') {
+      console.log('WordStream: Auth state not authenticated, attempting refresh');
+      
+      try {
+        // ניסיון אוטומטי לרענון ולהמתנה לעדכון ה-storage
+        await forceAuthRefresh();
+        console.log('WordStream: Auth refresh successful, continuing with message');
+      } catch (refreshError) {
+        console.error('WordStream: Auth refresh failed:', refreshError);
+        throw new Error('User authentication session expired');
+      }
+    }
+    
+    // בדיקה שוב אם chrome.runtime זמין
     if (!chrome.runtime) {
       throw new Error('Chrome runtime not available');
     }
     
+    // שלח את ההודעה ל-background
     const response = await chrome.runtime.sendMessage(message);
     
     // טפל בשגיאת אימות
     if (response && response.error === 'User authentication session expired') {
       console.error('WordStream: Authentication error from background');
       
-      // עדכן את מצב האימות ב-storage
-      await chrome.storage.local.set({ 'wordstream_auth_state': 'unauthenticated' });
-      
-      // הודע לחלקים אחרים על שינוי מצב האימות
-      await notifyLocalAuthStateChanged(false);
-      
-      throw new Error('User authentication session expired');
+      // ניסיון נוסף לרענון האימות לפני כישלון סופי
+      try {
+        await forceAuthRefresh();
+        
+        // שלח את ההודעה המקורית שוב
+        const retryResponse = await chrome.runtime.sendMessage(message);
+        
+        // אם עדיין יש שגיאת אימות, אין ברירה אלא לזרוק שגיאה
+        if (retryResponse && retryResponse.error === 'User authentication session expired') {
+          // עדכן את מצב האימות ב-storage
+          await chrome.storage.local.set({ 'wordstream_auth_state': 'unauthenticated' });
+          
+          // הודע לחלקים אחרים על שינוי מצב האימות
+          await notifyLocalAuthStateChanged(false);
+          
+          throw new Error('User authentication session expired');
+        }
+        
+        return retryResponse as T;
+      } catch (lastRefreshError) {
+        // עדכן את מצב האימות ב-storage
+        await chrome.storage.local.set({ 'wordstream_auth_state': 'unauthenticated' });
+        
+        // הודע לחלקים אחרים על שינוי מצב האימות
+        await notifyLocalAuthStateChanged(false);
+        
+        throw new Error('User authentication session expired');
+      }
     }
     
     return response as T;
@@ -68,10 +147,17 @@ export const sendMessageToBackground = async <T = any>(message: any): Promise<T>
  */
 async function notifyLocalAuthStateChanged(isAuthenticated: boolean) {
   try {
+    // בדיקה אם אנחנו בסביבה עם window (לא Service Worker)
+    if (typeof window === 'undefined') {
+      // אנחנו כנראה ב-Service Worker, לא לנסות להשתמש ב-window
+      console.log('WordStream: Skip window.postMessage in Service Worker environment');
+      return;
+    }
+    
     // שימוש ב-window.postMessage לתקשורת בתוך הטאב
     window.postMessage({
       source: 'wordstream-extension',
-      type: 'AUTH_STATE_CHANGED',
+      action: 'AUTH_STATE_CHANGED',
       isAuthenticated
     }, '*');
   } catch (error) {

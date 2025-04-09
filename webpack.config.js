@@ -5,7 +5,7 @@ const webpack = require('webpack');
 
 module.exports = {
   entry: {
-    popup: './src/popup/index.tsx',
+    popup: './src/popup.tsx',
     content: './src/content/index.ts',
     background: './src/background/index.ts'
   },
