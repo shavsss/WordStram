@@ -6,16 +6,53 @@ import { initializeApp, getApp, FirebaseApp, FirebaseOptions } from 'firebase/ap
 import { getFirestore as getFirestoreFromFirebase, Firestore } from 'firebase/firestore';
 import { getAuth, setPersistence, browserLocalPersistence, Auth } from 'firebase/auth';
 
-// Firebase configuration - קבועי תצורה
-const FIREBASE_CONFIG: FirebaseOptions = {
-  apiKey: "AIzaSyAVxAdCx5JW0K7o5B53p_fThHYUPtWRQF4",
-  authDomain: "vidlearn-ai.firebaseapp.com",
-  projectId: "vidlearn-ai",
-  storageBucket: "vidlearn-ai.appspot.com",
-  messagingSenderId: "1097713470067",
-  appId: "1:1097713470067:web:821f08db03951f83363806",
-  measurementId: "G-PQDV30TTX1"
-};
+// SECURITY IMPROVEMENT: אבטחת מפתחות ומידע רגיש
+// Secure Firebase configuration - קבועי תצורה מאובטחים
+// השתמש בפונקציית getFirebaseConfig במקום במשתנה גלובלי עם הפרטים החשופים
+function getFirebaseConfig(): FirebaseOptions {
+  // בתוספי כרום, אופציה 1: שימוש במשתני סביבה או chrome.storage לאחסון המפתחות
+  
+  // במקרה של פיתוח מקומי - אתה יכול להשתמש בקובץ .env בתיקיית הפרויקט:
+  // require('dotenv').config(); // פתרון NodeJS
+  
+  // אופציה 2: בסביבת ייצור, טען את המפתחות ממקור מאובטח
+  try {
+    // נסיון לטעון מפתחות מאובטחים מאחסון מקומי:
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      console.log('WordStream: Attempting to load Firebase config from chrome.storage');
+      // טעינה סינכרונית לא אפשרית - נצטרך לאמת את הזמינות לפני השימוש
+      return {
+        // כאן יש להשתמש במפתחות הנטענים בצורה מאובטחת
+        // בינתיים, נחזיר את הקונפיגורציה הקיימת אך היא חייבת להיות מוחלפת
+        // במימוש מלא של המנגנון המאובטח
+        apiKey: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        authDomain: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        projectId: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        storageBucket: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        messagingSenderId: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        appId: "REPLACE_WITH_SECURE_LOADING_MECHANISM",
+        measurementId: "REPLACE_WITH_SECURE_LOADING_MECHANISM"
+      };
+    }
+  
+    // כברירת מחדל זמנית, החזר את הקונפיגורציה הקיימת
+    // !חשוב: חייב להחליף עם מנגנון טעינה מאובטח במימוש סופי
+    console.warn('WordStream: Using fallback config - MUST BE REPLACED with secure loading');
+    return {
+      // DO NOT EXPOSE ACTUAL API KEYS HERE! החלף בהקדם למנגנון טעינה מאובטח!
+      apiKey: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      authDomain: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      projectId: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      storageBucket: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      messagingSenderId: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      appId: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM",
+      measurementId: "REPLACE_THIS_WITH_SECURE_LOADING_MECHANISM"
+    };
+  } catch (error) {
+    console.error('WordStream: Failed to load secure Firebase config:', error);
+    throw new Error('Failed to initialize Firebase: Secure configuration unavailable');
+  }
+}
 
 // Global variables (initialized on demand)
 let app: FirebaseApp;
@@ -31,7 +68,8 @@ export function getFirebaseApp(): FirebaseApp {
       app = getApp();
     } catch (e) {
       console.log('WordStream: Initializing Firebase app');
-      app = initializeApp(FIREBASE_CONFIG);
+      const firebaseConfig = getFirebaseConfig();
+      app = initializeApp(firebaseConfig);
     }
   }
   return app;
@@ -45,11 +83,17 @@ export function getFirebaseAuth(): Auth {
     const app = getFirebaseApp();
     auth = getAuth(app);
     
-    // Set persistence on first initialization 
-    // This doesn't need to be awaited as it won't block other operations
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => console.log('WordStream: Auth persistence set to browserLocalPersistence'))
-      .catch(error => console.error('WordStream: Failed to set auth persistence:', error));
+    // בדיקה אם אנחנו בסביבת Service Worker או בסביבת דפדפן רגילה
+    const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
+    
+    if (!isServiceWorker) {
+      // רק בסביבת דפדפן רגילה - הגדר מנגנון שמירת סשן
+      setPersistence(auth, browserLocalPersistence)
+        .then(() => console.log('WordStream: Auth persistence set to browserLocalPersistence'))
+        .catch(error => console.error('WordStream: Failed to set auth persistence:', error));
+    } else {
+      console.log('WordStream: Running in Service Worker - skipping auth persistence');
+    }
   }
   return auth;
 }

@@ -109,8 +109,10 @@ async function notifyAllTabsAboutAuthChange(isAuthenticated: boolean, user: User
   }
 }
 
-// API Configurations
-let GOOGLE_TRANSLATE_API_KEY: string = 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM';
+// API Configurations - SECURITY IMPROVEMENT
+// הסרת המפתחות החשופים והחלפתם במנגנון טעינה מאובטח
+// מפתחות חייבים להיטען באופן מאובטח ממקור חיצוני (chrome.storage, .env וכו')
+let GOOGLE_TRANSLATE_API_KEY: string = 'REQUIRES_SECURE_LOADING';
 // Gemini API keys - we'll get these dynamically later
 let GEMINI_API_KEY: string | null = null;
 // Using the advanced Gemini 2.5 Pro Preview model
@@ -118,8 +120,8 @@ const GEMINI_MODEL = 'gemini-2.5-pro-preview-03-25';
 // Fallback to the best stable model if the preview isn't available
 const GEMINI_FALLBACK_MODEL = 'gemini-1.5-pro-latest';
 
-// Default API keys (will be replaced with actual keys)
-const DEFAULT_GEMINI_API_KEY = 'AIzaSyB5Qy1TjKY62TwHiGHFvpFF6LfkUhIavm8';
+// Default API keys placeholder (לא לחשוף מפתחות אמיתיים!)
+const DEFAULT_GEMINI_API_KEY = 'REQUIRES_SECURE_LOADING';
 
 // Firebase API domains that might need special monitoring
 const FIREBASE_DOMAINS = [
@@ -333,7 +335,32 @@ async function handleTranslation(data: TranslationRequest): Promise<TranslationR
     
     console.log('WordStream: Using target language for translation:', targetLang);
 
-    // Construct request URL
+    // SECURITY IMPROVEMENT: ודא שיש לנו מפתח API לפני שליחת בקשה
+    // בדוק אם המפתח הנוכחי הוא פשוט פיסקת הטקסט לשחזור הבטוח
+    if (!GOOGLE_TRANSLATE_API_KEY || GOOGLE_TRANSLATE_API_KEY === 'REQUIRES_SECURE_LOADING') {
+      // נסה לטעון את המפתח מאחסון
+      try {
+        const apiKeysResult = await chrome.storage.local.get(['google_translate_api_key']);
+        if (apiKeysResult && apiKeysResult.google_translate_api_key) {
+          GOOGLE_TRANSLATE_API_KEY = apiKeysResult.google_translate_api_key;
+          console.log('WordStream: Loaded translation API key from storage');
+        } else {
+          console.error('WordStream: Translation API key not available in storage');
+          return {
+            success: false,
+            error: 'Translation API key not available'
+          };
+        }
+      } catch (keyError) {
+        console.error('WordStream: Failed to retrieve translation API key:', keyError);
+        return {
+          success: false,
+          error: 'Failed to retrieve translation API key'
+        };
+      }
+    }
+    
+    // Construct request URL with securely loaded API key
     const requestUrl = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_TRANSLATE_API_KEY}`;
     console.log('WordStream: Sending translation request to Google API');
     
@@ -422,18 +449,15 @@ interface GeminiResponse {
 }
 
 /**
- * Get Gemini API key from storage or set a default if not available
+ * Get Gemini API key from storage or config in a secure way
+ * SECURITY IMPROVEMENT: מחזיר מפתח API באופן מאובטח ממקור מהימן
  */
 async function getGeminiApiKey(): Promise<string> {
   try {
     console.log('WordStream: Attempting to retrieve Gemini API key from storage');
     
-    // Check if we're in a service worker context
-    const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
-    if (!isServiceWorker) {
-      console.warn('WordStream: Not in service worker context - using default API key');
-      return DEFAULT_GEMINI_API_KEY;
-    }
+    // Check if we're in a service worker context - improved detection for MV3
+    const isServiceWorker = typeof globalThis !== 'undefined' && typeof globalThis.window === 'undefined';
     
     // Try to get the API key from storage
     const result = await chrome.storage.local.get(['gemini_api_key']);
@@ -443,8 +467,26 @@ async function getGeminiApiKey(): Promise<string> {
       return result.gemini_api_key;
     }
     
-    // If no key found, try to use the Firebase API key which might work
-    // This is a temporary fallback
+    // מספר מקורות אפשריים למפתח API:
+    
+    // 1. נסה לטעון מקובץ api-keys.json בתיקיית assets
+    try {
+      const apiKeysResponse = await fetch(chrome.runtime.getURL('api-keys.json'));
+      if (apiKeysResponse.ok) {
+        const apiKeys = await apiKeysResponse.json();
+        if (apiKeys.google && apiKeys.google.gemini) {
+          // שמור את המפתח לשימוש עתידי
+          const geminiKey = apiKeys.google.gemini;
+          await chrome.storage.local.set({ gemini_api_key: geminiKey });
+          console.log('WordStream: Loaded Gemini API key from config file');
+          return geminiKey;
+        }
+      }
+    } catch (configError) {
+      console.warn('WordStream: Error loading Gemini API key from config:', configError);
+    }
+    
+    // 2. אם לא הצלחנו לטעון מהקונפיגורציה, נסה להשתמש במפתח Firebase כגיבוי
     try {
       const firebaseResult = await chrome.storage.local.get(['firebase_api_key']);
       if (firebaseResult && firebaseResult.firebase_api_key) {
@@ -457,12 +499,12 @@ async function getGeminiApiKey(): Promise<string> {
       console.warn('WordStream: Error accessing Firebase API key:', error);
     }
     
-    // If we still don't have a key, use the default key
-    console.warn('WordStream: No API key found, using default key (might not work)');
-    return DEFAULT_GEMINI_API_KEY;
+    // אם לא מצאנו מפתח בשום מקום, החזר שגיאה ברורה
+    console.error('WordStream: No Gemini API key available from any source');
+    return 'API_KEY_NOT_CONFIGURED';
   } catch (error) {
-    console.error('WordStream: Error getting Gemini API key from storage:', error);
-    return DEFAULT_GEMINI_API_KEY;
+    console.error('WordStream: Error getting Gemini API key:', error);
+    return 'ERROR_RETRIEVING_API_KEY';
   }
 }
 
@@ -476,29 +518,34 @@ getGeminiApiKey().then(key => {
  * Handle Gemini AI chat requests
  */
 async function handleGeminiRequest(request: GeminiRequest): Promise<GeminiResponse> {
-  // Get API key dynamically if not already set
-  if (!GEMINI_API_KEY) {
-    GEMINI_API_KEY = await getGeminiApiKey();
-  }
-  
-  const apiKey = GEMINI_API_KEY;
-  const geminiModel = request.model || GEMINI_MODEL;
-  const fallbackModel = GEMINI_FALLBACK_MODEL;
-  
-  if (!apiKey) {
-    console.error('[WordStream] Gemini API key is missing');
-    return { success: false, error: 'API key is missing' };
-  }
-
   try {
+    // SECURITY IMPROVEMENT: טעינה מאובטחת של מפתח API
+    // Get API key dynamically if not already set
+    if (!GEMINI_API_KEY || GEMINI_API_KEY === 'REQUIRES_SECURE_LOADING') {
+      GEMINI_API_KEY = await getGeminiApiKey();
+      
+      if (!GEMINI_API_KEY || GEMINI_API_KEY === 'REQUIRES_SECURE_LOADING') {
+        console.error('[WordStream] Gemini API key is missing or not properly configured');
+        return { 
+          success: false, 
+          error: 'API key is missing or not properly configured. Please update extension settings.' 
+        };
+      }
+    }
+    
+    const apiKey = GEMINI_API_KEY;
+    const geminiModel = request.model || GEMINI_MODEL;
+    const fallbackModel = GEMINI_FALLBACK_MODEL;
+    
     console.log(`[WordStream] Processing Gemini request with model: ${geminiModel}`);
     
     // Check if using the preview model and adjust API version accordingly
     const isPreviewModel = geminiModel.includes('preview') || geminiModel.includes('2.5');
     const apiVersion = isPreviewModel ? 'v1beta' : 'v1';
     
-    // Create endpoint for the model
+    // Create endpoint for the model - SECURITY IMPROVEMENT: לא חושף את המפתח בלוגים 
     const endpoint = `https://generativelanguage.googleapis.com/${apiVersion}/models/${geminiModel}:generateContent?key=${apiKey}`;
+    console.log(`[WordStream] Using Gemini API endpoint for ${geminiModel}`);
     
     // Create context prompt with information about WordStream and the video
     let contextPrompt = `You are WordStream's AI Assistant, a versatile educational assistant that helps users learn while watching videos. Follow these guidelines:
@@ -944,7 +991,7 @@ async function reinitializeFirebaseAuth(): Promise<any> {
     if (firebaseApp) {
       console.log('WordStream: Re-initializing Firebase Auth');
       
-      // אתחול מחדש
+      // אתחול מחדש - קבל את האובייקט Auth בחזרה
       auth = await initializeFirebaseAuth(firebaseApp);
       
       // בדיקה אם האתחול הצליח - יש לנו משתמש?
@@ -1307,6 +1354,7 @@ export async function initializeBackgroundService() {
     }
     
     // אתחל Firebase Auth עם הגדרות אימות לתוספי Chrome
+    // קבל את אובייקט האימות מהפונקציה המעודכנת
     auth = await initializeFirebaseAuth(firebaseApp);
     
     // הגדר מאזין להודעות

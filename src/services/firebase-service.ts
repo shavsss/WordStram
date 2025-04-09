@@ -28,13 +28,13 @@ import { Note, VideoWithNotes } from '../@types/notes';
 
 // Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyAVxAdCx5JW0K7o5B53p_fThHYUPtWRQF4",
-  authDomain: "vidlearn-ai.firebaseapp.com",
-  projectId: "vidlearn-ai",
-  storageBucket: "vidlearn-ai.appspot.com",
-  messagingSenderId: "1097713470067",
-  appId: "1:1097713470067:web:821f08db03951f83363806",
-  measurementId: "G-PQDV30TTX1"
+  apiKey: "REQUIRES_SECURE_LOADING",
+  authDomain: "REQUIRES_SECURE_LOADING",
+  projectId: "REQUIRES_SECURE_LOADING",
+  storageBucket: "REQUIRES_SECURE_LOADING",
+  messagingSenderId: "REQUIRES_SECURE_LOADING",
+  appId: "REQUIRES_SECURE_LOADING",
+  measurementId: "REQUIRES_SECURE_LOADING"
 };
 
 // Initialize Firebase

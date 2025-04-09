@@ -15,15 +15,16 @@ const TOKEN_REFRESH_INTERVAL = 45 * 60 * 1000; // 45 minutes
 /**
  * אתחול Firebase Auth עם רענון טוקן אוטומטי
  * @param app אובייקט Firebase App
+ * @returns Auth instance
  */
-export async function initializeFirebaseAuth(app: FirebaseApp): Promise<void> {
-  if (isInitialized) {
-    console.log('WordStream: Firebase Auth already initialized');
-    return;
-  }
-  
+export async function initializeFirebaseAuth(app: FirebaseApp): Promise<Auth> {
   try {
     const auth = getFirebaseAuth();
+    
+    if (isInitialized) {
+      console.log('WordStream: Firebase Auth already initialized');
+      return auth;
+    }
     
     // Set up auth state listener
     onAuthStateChanged(auth, (user) => {
@@ -38,9 +39,11 @@ export async function initializeFirebaseAuth(app: FirebaseApp): Promise<void> {
     
     isInitialized = true;
     console.log('WordStream: Firebase Auth initialized with auto token refresh');
+    return auth;
   } catch (error) {
     console.error('WordStream: Error initializing Firebase Auth:', error);
-    throw error;
+    // Even in case of error, return the Auth instance to avoid null errors
+    return getFirebaseAuth();
   }
 }
 

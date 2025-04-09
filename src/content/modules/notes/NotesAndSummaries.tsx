@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { format } from 'date-fns';
-import { enUS } from 'date-fns/locale';
 import { Note, VideoNote, VideoWithNotes, NotesStorage } from '@/features/notes/types';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/Spinner';
@@ -27,7 +26,8 @@ function formatDate(date: Date | string | number | null | undefined, formatStr: 
       return 'Invalid date';
     }
     
-    return format(dateObj, formatStr, { locale: enUS });
+    // שימוש בפורמט ללא לוקל מפורש (ברירת מחדל)
+    return format(dateObj, formatStr);
   } catch (error) {
     console.error('Error formatting date:', error);
     return 'Error formatting date';

@@ -23,10 +23,10 @@ export async function getCurrentUserId(): Promise<string | null> {
     // בדיקה האם אנחנו בסביבת דפדפן או בסביבת service worker
     const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
     
-    // Fallback to window object if available and we're in browser environment
-    if (!isServiceWorker && typeof window !== 'undefined' && (window as any).WordStream?.currentUser?.uid) {
-      console.log('WordStream: Using user from window.WordStream:', (window as any).WordStream.currentUser.uid);
-      return (window as any).WordStream.currentUser.uid;
+    // Fallback to global object if available and we're in browser environment
+    if (!isServiceWorker && typeof globalThis !== 'undefined' && (globalThis as any).WordStream?.currentUser?.uid) {
+      console.log('WordStream: Using user from globalThis.WordStream:', (globalThis as any).WordStream.currentUser.uid);
+      return (globalThis as any).WordStream.currentUser.uid;
     }
     
     // In a background/service worker context, localStorage isn't available
@@ -80,9 +80,9 @@ export function getCurrentUserIdSync(): string | null {
     // בדיקה האם אנחנו בסביבת דפדפן או בסביבת service worker
     const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
     
-    // Fallback to window object if available and we're in browser environment
-    if (!isServiceWorker && typeof window !== 'undefined' && (window as any).WordStream?.currentUser?.uid) {
-      return (window as any).WordStream.currentUser.uid;
+    // Fallback to global object if available and we're in browser environment
+    if (!isServiceWorker && typeof globalThis !== 'undefined' && (globalThis as any).WordStream?.currentUser?.uid) {
+      return (globalThis as any).WordStream.currentUser.uid;
     }
     
     // We can't access chrome.storage.local synchronously, so just return null
@@ -101,7 +101,7 @@ export async function refreshAuthToken(): Promise<boolean> {
   try {
     console.log('WordStream: Attempting to refresh auth token');
     
-    // אם אנחנו בסביבת Service Worker בלי גישה ל-window, לנסות רענון באמצעות Firebase SDK
+    // אם אנחנו בסביבת Service Worker בלי גישה לסביבת דפדפן, לנסות רענון באמצעות Firebase SDK
     if (typeof self !== 'undefined' && typeof Window === 'undefined' && auth) {
       // בסביבת Service Worker ננסה לגשת ל-currentUser של firebase/auth
       const currentUser = auth.currentUser;

@@ -8,4 +8,4 @@ export const env = {
   GOOGLE_TRANSLATE_API_KEY: process.env.GOOGLE_TRANSLATE_API_KEY,
 };
 
-export const GOOGLE_TRANSLATE_API_KEY = "AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM"; 
+export const GOOGLE_TRANSLATE_API_KEY = "REQUIRES_SECURE_LOADING"; 

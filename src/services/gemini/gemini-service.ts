@@ -12,7 +12,7 @@ interface GeminiConfig {
 
 // Default configuration for Gemini API
 export const GEMINI_CONFIG: GeminiConfig = {
-  apiKey: 'AIzaSyCLBHKWu7l78tS2xVmizicObSb0PpUqsxM', // Using the same API key as Google Translate
+  apiKey: 'REQUIRES_SECURE_LOADING', // Replace with secure loading mechanism
   model: 'gemini-pro-latest', // תמיד מצביע על הגרסה העדכנית ביותר הזמינה
   fallbackModel: 'gemini-1.5-pro', // המודל העדכני והחזק ביותר הזמין רשמית (2024)
   secondaryFallbackModel: 'gemini-1.5-flash', // המודל המהיר והעדכני ביותר לתרחישי גיבוי
