@@ -3,9 +3,10 @@
  * Manages user authentication and token validation
  */
 
-import AuthManager from '@/core/auth-manager';
+// import AuthManager from '@/core/auth-manager';
 import { User } from '../types';
 import { auth } from '../config';
+import { onAuthStateChanged } from 'firebase/auth';
 
 /**
  * Get the current user ID
@@ -13,16 +14,19 @@ import { auth } from '../config';
  */
 export async function getCurrentUserId(): Promise<string | null> {
   try {
-    // Try to get the current user from AuthManager
-    const user = AuthManager.getCurrentUser();
+    // Try to get the current user from auth
+    const user = auth.currentUser;
     if (user && user.uid) {
       return user.uid;
     }
     
-    // Fallback to window object if AuthManager can't be used
-    if (typeof window !== 'undefined' && window.WordStream?.currentUser?.uid) {
-      console.log('WordStream: Using user from window.WordStream:', window.WordStream.currentUser.uid);
-      return window.WordStream.currentUser.uid;
+    // בדיקה האם אנחנו בסביבת דפדפן או בסביבת service worker
+    const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
+    
+    // Fallback to window object if available and we're in browser environment
+    if (!isServiceWorker && typeof window !== 'undefined' && (window as any).WordStream?.currentUser?.uid) {
+      console.log('WordStream: Using user from window.WordStream:', (window as any).WordStream.currentUser.uid);
+      return (window as any).WordStream.currentUser.uid;
     }
     
     // In a background/service worker context, localStorage isn't available
@@ -67,15 +71,18 @@ export async function getCurrentUserId(): Promise<string | null> {
  */
 export function getCurrentUserIdSync(): string | null {
   try {
-    // Try to get the current user from AuthManager
-    const user = AuthManager.getCurrentUser();
+    // Try to get the current user from auth
+    const user = auth.currentUser;
     if (user && user.uid) {
       return user.uid;
     }
     
-    // Fallback to window object if AuthManager can't be used
-    if (typeof window !== 'undefined' && window.WordStream?.currentUser?.uid) {
-      return window.WordStream.currentUser.uid;
+    // בדיקה האם אנחנו בסביבת דפדפן או בסביבת service worker
+    const isServiceWorker = typeof self !== 'undefined' && typeof Window === 'undefined';
+    
+    // Fallback to window object if available and we're in browser environment
+    if (!isServiceWorker && typeof window !== 'undefined' && (window as any).WordStream?.currentUser?.uid) {
+      return (window as any).WordStream.currentUser.uid;
     }
     
     // We can't access chrome.storage.local synchronously, so just return null
@@ -116,8 +123,19 @@ export async function refreshAuthToken(): Promise<boolean> {
       }
     }
     
-    // בסביבת דפדפן, נשתמש ב-AuthManager
-    return await AuthManager.verifyTokenAndRefresh();
+    // בסביבת דפדפן, ננסה לחדש את הטוקן באופן מנואלי
+    // נסיון לקבל טוקן חדש באמצעות currentUser
+    if (auth.currentUser) {
+      try {
+        await auth.currentUser.getIdToken(true);
+        return true;
+      } catch (err) {
+        console.error('WordStream: Failed to manually refresh token:', err);
+        return false;
+      }
+    }
+    
+    return false;
   } catch (error) {
     console.error('WordStream: Error refreshing auth token:', error);
     return false;
@@ -187,7 +205,7 @@ export async function checkFirestoreConnection(): Promise<{ connected: boolean; 
  */
 export function getCurrentUser(): User | null {
   try {
-    const user = AuthManager.getCurrentUser();
+    const user = auth.currentUser;
     if (user) {
       return {
         uid: user.uid,
@@ -201,5 +219,35 @@ export function getCurrentUser(): User | null {
   } catch (error) {
     console.error('WordStream: Error getting current user:', error);
     return null;
+  }
+}
+
+/**
+ * מאזין לשינויים במצב האימות
+ * @param callback פונקציה שתקבל עדכונים על שינויים במצב האימות
+ * @returns פונקציה לביטול המאזין
+ */
+export function subscribeToAuthChanges(
+  callback: (user: any) => void
+): () => void {
+  try {
+    // הוספת מאזין למצב האימות באמצעות מופע האימות הקיים
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      // המרת אובייקט המשתמש של Firebase לטיפוס המתאים
+      const user = firebaseUser ? {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        displayName: firebaseUser.displayName || undefined,
+        photoURL: firebaseUser.photoURL || undefined
+      } : null;
+      
+      callback(user);
+    });
+    
+    return unsubscribe;
+  } catch (error) {
+    console.error('WordStream: Error subscribing to auth changes:', error);
+    // החזרת פונקציה ריקה במקרה של שגיאה
+    return () => {};
   }
 } 

@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { Popup } from './features/popup';
+import Popup from './popup/Popup';
 import './styles/globals.css';
 
 document.addEventListener('DOMContentLoaded', () => {

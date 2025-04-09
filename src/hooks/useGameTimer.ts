@@ -1,98 +1,111 @@
-import { useState, useEffect, useRef } from 'react';
-import { formatTime } from '@/lib/game-utils';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-interface UseGameTimerOptions {
-  initialTime?: number;
-  autoStart?: boolean;
-  onTimeEnd?: () => void;
-  countUp?: boolean;
-}
+/**
+ * Hook לניהול טיימר למשחקים
+ * @param initialTime זמן התחלתי בשניות
+ * @param onTimeEnd פונקציה שתופעל כשהזמן מסתיים
+ * @param autoStart האם להתחיל את הטיימר אוטומטית
+ */
+export default function useGameTimer(
+  initialTime: number = 60,
+  onTimeEnd?: () => void,
+  autoStart: boolean = false
+) {
+  const [timeLeft, setTimeLeft] = useState(initialTime);
+  const [isRunning, setIsRunning] = useState(autoStart);
+  const [isFinished, setIsFinished] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const callbackRef = useRef(onTimeEnd);
 
-export function useGameTimer({
-  initialTime = 30,
-  autoStart = false,
-  onTimeEnd,
-  countUp = false
-}: UseGameTimerOptions = {}) {
-  const [time, setTime] = useState<number>(initialTime);
-  const [isRunning, setIsRunning] = useState<boolean>(autoStart);
-  const [isComplete, setIsComplete] = useState<boolean>(false);
-  const intervalRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number | null>(null);
-
-  // Start the timer
-  const startTimer = () => {
-    if (!isRunning) {
-      setIsRunning(true);
-      if (countUp && !startTimeRef.current) {
-        startTimeRef.current = Date.now();
-      }
-    }
-  };
-
-  // Pause the timer
-  const pauseTimer = () => {
-    setIsRunning(false);
-  };
-
-  // Reset the timer
-  const resetTimer = () => {
-    setTime(initialTime);
-    setIsRunning(false);
-    setIsComplete(false);
-    startTimeRef.current = null;
-  };
-
-  // Set a specific time
-  const setTimerValue = (value: number) => {
-    setTime(value);
-  };
-
-  // Format the time for display (mm:ss)
-  const formattedTime = formatTime(time);
-
-  // Handle timer logic
+  // עדכון הקולבק כשהוא משתנה
   useEffect(() => {
-    if (isRunning) {
-      intervalRef.current = window.setInterval(() => {
-        if (countUp) {
-          // Count up from 0
-          const elapsedSeconds = startTimeRef.current
-            ? Math.floor((Date.now() - startTimeRef.current) / 1000) 
-            : 0;
-          setTime(elapsedSeconds);
-        } else {
-          // Count down to 0
-          setTime(prevTime => {
-            if (prevTime <= 1) {
-              clearInterval(intervalRef.current!);
-              setIsRunning(false);
-              setIsComplete(true);
-              if (onTimeEnd) onTimeEnd();
-              return 0;
+    callbackRef.current = onTimeEnd;
+  }, [onTimeEnd]);
+
+  // התחלת הטיימר
+  const startTimer = useCallback(() => {
+    setIsRunning(true);
+    setIsFinished(false);
+  }, []);
+
+  // עצירת הטיימר
+  const pauseTimer = useCallback(() => {
+    setIsRunning(false);
+  }, []);
+
+  // איפוס הטיימר
+  const resetTimer = useCallback((newTime?: number) => {
+    setTimeLeft(newTime !== undefined ? newTime : initialTime);
+    setIsFinished(false);
+    setIsRunning(false);
+  }, [initialTime]);
+
+  // הוספת זמן לטיימר
+  const addTime = useCallback((seconds: number) => {
+    setTimeLeft(prevTime => prevTime + seconds);
+  }, []);
+
+  // ניקוי הטיימר בעת סיום או החלפת קומפוננטה
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, []);
+
+  // לוגיקת הטיימר
+  useEffect(() => {
+    if (isRunning && timeLeft > 0) {
+      timerRef.current = setInterval(() => {
+        setTimeLeft(prevTime => {
+          if (prevTime <= 1) {
+            clearInterval(timerRef.current as NodeJS.Timeout);
+            setIsRunning(false);
+            setIsFinished(true);
+            
+            // קריאה לפונקציית הקולבק
+            if (callbackRef.current) {
+              callbackRef.current();
             }
-            return prevTime - 1;
-          });
-        }
+            
+            return 0;
+          }
+          return prevTime - 1;
+        });
       }, 1000);
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current);
     }
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
       }
     };
-  }, [isRunning, onTimeEnd, countUp]);
+  }, [isRunning]);
+
+  // פורמוט הזמן ל-MM:SS
+  const formattedTime = useCallback(() => {
+    const minutes = Math.floor(timeLeft / 60);
+    const seconds = timeLeft % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, [timeLeft]);
+
+  // חישוב אחוז הזמן שנותר
+  const percentageLeft = useCallback(() => {
+    return (timeLeft / initialTime) * 100;
+  }, [timeLeft, initialTime]);
 
   return {
-    time,
-    formattedTime,
+    timeLeft,
     isRunning,
-    isComplete,
+    isFinished,
     startTimer,
     pauseTimer,
     resetTimer,
-    setTimerValue
+    addTime,
+    formattedTime,
+    percentageLeft
   };
 } 

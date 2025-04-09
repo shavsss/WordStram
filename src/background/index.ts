@@ -1470,9 +1470,28 @@ async function handleGetAllVideosWithNotes() {
  * טיפול בבקשת קבלת שיחות
  */
 async function handleGetChats() {
-  // יש לממש פונקציה זו לפי הצורך
-  // היישום צריך לקרוא לפונקציה המתאימה ב-firebase-service
-  return { success: true, data: [] };
+  try {
+    // בדיקה אם המשתמש מחובר
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      console.log('WordStream: User not authenticated when trying to get chats');
+      return { success: true, data: [] }; // החזרת מערך ריק אבל ללא שגיאה
+    }
+    
+    // ניסיון לקבל צ'אטים
+    const chats = await getChats();
+    
+    // במקרה שהפונקציה מחזירה שגיאה 'Not implemented'
+    if (!chats.success && chats.error === 'Not implemented') {
+      console.log('WordStream: Chat functionality not implemented yet, returning empty array');
+      return { success: true, data: [] };
+    }
+    
+    return chats;
+  } catch (error) {
+    console.error('WordStream: Error getting chats:', error);
+    return { success: true, data: [] }; // החזרת מערך ריק במקרה של שגיאה
+  }
 }
 
 // התחל את שירות הרקע
