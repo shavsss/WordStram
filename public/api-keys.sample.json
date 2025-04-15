@@ -1,0 +1,19 @@
+{
+  "firebase": {
+    "apiKey": "YOUR_FIREBASE_API_KEY",
+    "authDomain": "your-project-id.firebaseapp.com",
+    "projectId": "your-project-id",
+    "storageBucket": "your-project-id.firebasestorage.app",
+    "messagingSenderId": "YOUR_MESSAGING_SENDER_ID",
+    "appId": "YOUR_APP_ID",
+    "measurementId": "YOUR_MEASUREMENT_ID"
+  },
+  "google": {
+    "translate": "YOUR_GOOGLE_TRANSLATE_API_KEY",
+    "gemini": "YOUR_GOOGLE_GEMINI_API_KEY",
+    "client_id": "YOUR_GOOGLE_CLIENT_ID"
+  },
+  "api_keys": {
+    "GOOGLE_CLIENT_ID": "YOUR_GOOGLE_CLIENT_ID"
+  }
+} 
