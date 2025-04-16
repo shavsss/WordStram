@@ -229,6 +229,25 @@ export function removeAuthStateListener(listener: (user: User | null) => void): 
  * Notify all listeners of an auth state change
  */
 function notifyListeners(user: User | null): void {
+  // Store the current user in chrome.storage.local for content scripts to access
+  if (user) {
+    const userInfo = {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      photoURL: user.photoURL
+    };
+    chrome.storage.local.set({ 'wordstream_user_info': userInfo }, () => {
+      console.log('WordStream: User info saved to storage for content scripts');
+    });
+  } else {
+    // Clear user info if logged out
+    chrome.storage.local.remove('wordstream_user_info', () => {
+      console.log('WordStream: User info removed from storage');
+    });
+  }
+
+  // Notify all registered listeners
   for (const listener of authStateListeners) {
     try {
       listener(user);

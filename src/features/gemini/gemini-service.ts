@@ -6,6 +6,8 @@
  */
 
 import { getUserAuthentication } from '../shared/WindowManager';
+import { GEMINI_API_CONFIG } from '../../config/api-config';
+import { AI_ASSISTANT_CONTEXT } from './chat-context';
 
 interface GeminiConfig {
   model: string;
@@ -14,8 +16,8 @@ interface GeminiConfig {
 
 // Default configuration for Gemini API
 export const GEMINI_CONFIG: GeminiConfig = {
-  model: 'gemini-pro',
-  maxTokens: 4096
+  model: GEMINI_API_CONFIG.MODEL,
+  maxTokens: GEMINI_API_CONFIG.MAX_TOKENS
 };
 
 // Message format for conversation history
@@ -75,13 +77,11 @@ export async function sendToGemini(
   } = {}
 ): Promise<string> {
   try {
-    // TEMPORARY AUTHENTICATION BYPASS
-    // Instead of getting the real user, create a mock user for development purposes
-    const mockUser = {
-      uid: 'temp-user-id',
-      displayName: 'Temporary User',
-      email: 'temp@example.com'
-    };
+    // Get user authentication
+    const user = await getUserAuthentication();
+    if (!user) {
+      throw new Error('User not authenticated. Please sign in to use this feature.');
+    }
     
     // Create context object with available information
     const context: GeminiContext = { videoTitle };
@@ -138,7 +138,8 @@ export async function sendToGemini(
           query,
           history: formattedHistory,
           context,
-          language: preferredLanguage
+          language: preferredLanguage,
+          userId: user.uid
         }, (response) => {
           clearTimeout(timeout);
           
@@ -177,8 +178,8 @@ export async function sendToGemini(
       }
     });
 
-    // Save chat history locally but skip Firebase sync to avoid auth issues
-    await saveGeminiChatLocally(query, response, history, context);
+    // Save chat history to Firebase with proper user authentication
+    await saveGeminiChat(user.uid, query, response, history, context);
     
     return response;
   } catch (error) {
@@ -193,57 +194,11 @@ export async function sendToGemini(
         throw new Error('Your Gemini API quota has been exceeded. Please try again later.');
       } else if (error.message.includes('message port closed')) {
         return "I'm sorry, I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.";
+      } else if (error.message.includes('not authenticated')) {
+        throw new Error('Please sign in to use the Gemini AI features.');
       }
     }
     throw error;
-  }
-}
-
-/**
- * Save Gemini chat locally without syncing to Firebase
- */
-async function saveGeminiChatLocally(
-  query: string,
-  response: string,
-  history: GeminiMessage[],
-  context: GeminiContext
-): Promise<void> {
-  try {
-    // Create new user message with metadata
-    const userMessage: GeminiMessageWithMetadata = {
-      role: 'user',
-      content: query,
-      timestamp: Date.now(),
-      id: generateId()
-    };
-
-    // Create new assistant message with metadata
-    const assistantMessage: GeminiMessageWithMetadata = {
-      role: 'assistant',
-      content: response,
-      timestamp: Date.now(),
-      id: generateId()
-    };
-
-    // Get local chat history from storage
-    const result = await chrome.storage.local.get('gemini_local_history');
-    const localHistory: GeminiMessageWithMetadata[] = result.gemini_local_history || [];
-    
-    // Add new messages
-    localHistory.push(userMessage);
-    localHistory.push(assistantMessage);
-    
-    // Limit history size to prevent storage issues
-    const maxHistoryItems = 100;
-    const trimmedHistory = localHistory.slice(-maxHistoryItems);
-    
-    // Save updated history
-    await chrome.storage.local.set({
-      'gemini_local_history': trimmedHistory
-    });
-    
-  } catch (error) {
-    console.error('Error saving Gemini chat locally:', error);
   }
 }
 
@@ -282,7 +237,7 @@ async function saveGeminiChat(
       sessionId = generateId();
       const title = context.videoTitle || 'Chat Session';
       
-      // Save new session to storage
+      // Save new session ID to storage but only as a reference
       await chrome.storage.local.set({
         'gemini_active_session': sessionId
       });
@@ -446,15 +401,29 @@ export interface GeminiResponse {
  * Get Gemini API key from storage
  */
 async function getGeminiApiKey(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get(['api_keys'], (result) => {
-      if (result && result.api_keys && result.api_keys.GOOGLE_API_KEY) {
-        resolve(result.api_keys.GOOGLE_API_KEY);
-      } else {
-        reject(new Error('Gemini API key not found in storage'));
-      }
+  try {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(['api_keys'], (result) => {
+        if (result && result.api_keys && result.api_keys.GOOGLE_API_KEY) {
+          resolve(result.api_keys.GOOGLE_API_KEY);
+        } else {
+          // Fallback to configured API key
+          const fallbackKey = GEMINI_API_CONFIG.FALLBACK_API_KEY;
+          
+          // Save fallback key to storage for future use
+          chrome.storage.local.set({
+            'api_keys': { 'GOOGLE_API_KEY': fallbackKey }
+          });
+          
+          console.log('WordStream: Using fallback Gemini API key');
+          resolve(fallbackKey);
+        }
+      });
     });
-  });
+  } catch (error) {
+    console.error('WordStream: Error retrieving Gemini API key:', error);
+    throw new Error('Failed to retrieve Gemini API key');
+  }
 }
 
 /**
@@ -489,23 +458,40 @@ export async function handleGeminiRequest(request: GeminiRequest): Promise<Gemin
     const apiKey = await getGeminiApiKey();
     
     // Determine the model to use
-    const model = request.model || 'gemini-pro';
+    const model = request.model || GEMINI_API_CONFIG.MODEL;
     
-    // Construct the API URL
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    // Construct the API URL using centralized config
+    const url = GEMINI_API_CONFIG.getApiUrl(apiKey, model);
     
     // Build the request body
     const requestBody: any = {
       contents: []
     };
     
+    // IMPORTANT: Gemini doesn't support system role like OpenAI
+    // Instead, we'll add the assistant context as a user message at the beginning
+    // This resolves the "Content with system role is not supported" error
+    requestBody.contents.push({
+      role: 'user',
+      parts: [{ text: `Instructions for the assistant: ${AI_ASSISTANT_CONTEXT}` }]
+    });
+    
+    // If we have a response from the model acknowledging the instructions, add it
+    requestBody.contents.push({
+      role: 'model',
+      parts: [{ text: 'I\'ll follow these instructions carefully.' }]
+    });
+    
     // Add message history if available
     if (request.history && request.history.length > 0) {
-      // Convert history to Gemini format
-      requestBody.contents = request.history.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
+      // Convert history to Gemini format - ensure we don't have any system roles
+      const historyMessages = request.history.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'model', // Convert 'assistant' to 'model'
         parts: [{ text: msg.content }]
       }));
+      
+      // Add history messages
+      requestBody.contents = requestBody.contents.concat(historyMessages);
     }
     
     // Add current message
@@ -515,12 +501,7 @@ export async function handleGeminiRequest(request: GeminiRequest): Promise<Gemin
     });
     
     // Set generation config for consistent outputs
-    requestBody.generationConfig = {
-      temperature: 0.7,
-      topK: 40,
-      topP: 0.95,
-      maxOutputTokens: 1024,
-    };
+    requestBody.generationConfig = GEMINI_API_CONFIG.DEFAULTS;
     
     // Send request to Gemini API
     const response = await fetch(url, {
@@ -533,6 +514,7 @@ export async function handleGeminiRequest(request: GeminiRequest): Promise<Gemin
     
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('WordStream: Gemini API response error:', errorData);
       throw new Error(`Gemini API error: ${errorData.error?.message || response.statusText}`);
     }
     
@@ -602,7 +584,7 @@ export async function checkGeminiAvailable(): Promise<{ success: boolean, availa
     const testResult = await handleGeminiRequest({
       action: 'test',
       message: 'Hello',
-      model: 'gemini-pro'
+      model: GEMINI_API_CONFIG.MODEL
     });
     
     return {

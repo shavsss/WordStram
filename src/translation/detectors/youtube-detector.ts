@@ -158,6 +158,7 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
   private currentVideoTime: number = 0;
   private videoDuration: number = 0;
   private controlsRoot: any = null;
+  private captionContainer: HTMLElement | null = null;
 
   constructor() {
     super();
@@ -261,33 +262,35 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
     }
   }
 
+  /**
+   * Detect captions container
+   */
   public async detect(): Promise<HTMLElement | null> {
-    const captionContainer = document.querySelector('.ytp-caption-window-container');
-    if (captionContainer) {
-      this.addFloatingControls();
-      return captionContainer as HTMLElement;
+    try {
+      console.log('WordStream: YouTube caption detector attempting to detect captions');
+      
+      // Look for the captions container
+      const captionContainer = document.querySelector('.ytp-caption-window-container') ||
+                               document.querySelector('.captions-text') ||
+                               document.querySelector('.caption-window');
+      
+      if (captionContainer instanceof HTMLElement) {
+        console.log('WordStream: YouTube caption container found');
+        this.captionContainer = captionContainer;
+        
+        // Automatically start processing captions without showing controls
+        this.startObserving(captionContainer);
+        
+        return captionContainer;
+      }
+      
+      // If not found, try again later through callback
+      console.log('WordStream: YouTube caption container not found');
+      return null;
+    } catch (error) {
+      console.error('WordStream: Error detecting YouTube captions:', error);
+      return null;
     }
-
-    return new Promise((resolve) => {
-      const observer = new MutationObserver((mutations, obs) => {
-        const container = document.querySelector('.ytp-caption-window-container');
-        if (container) {
-          obs.disconnect();
-          this.addFloatingControls();
-          resolve(container as HTMLElement);
-        }
-      });
-
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-
-      setTimeout(() => {
-        observer.disconnect();
-        resolve(null);
-      }, 10000);
-    });
   }
 
   public processCaption(caption: HTMLElement): void {
@@ -295,97 +298,64 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
   }
 
   private processTextContainer(container: HTMLElement): void {
-    const segments = container.querySelectorAll('.ytp-caption-segment');
-    
-    segments.forEach(segment => {
-      const textNodes = this.getTextNodesIn(segment as HTMLElement);
-      textNodes.forEach(node => this.processTextNode(node));
-    });
+    const textNodes = this.getTextNodesIn(container);
+    textNodes.forEach(node => this.processTextNode(node));
   }
 
   public addFloatingControls(): void {
-    // Create a container for the controls
-    if (this.controlsContainer) {
-      this.removeFloatingControls();
-    }
-    
-    this.controlsContainer = document.createElement('div');
-    this.controlsContainer.className = 'wordstream-floating-controls';
-    this.controlsContainer.style.position = 'absolute';
-    this.controlsContainer.style.top = '10px';
-    this.controlsContainer.style.right = '10px';
-    this.controlsContainer.style.zIndex = '9999';
-    
-    // Find the YouTube player container
-    const playerContainer = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
-    
-    if (playerContainer instanceof HTMLElement) {
-      playerContainer.appendChild(this.controlsContainer);
-      
-      // Initialize ghost layer for controls
-      this.ghostLayer = document.createElement('div');
-      this.ghostLayer.className = 'wordstream-ghost-layer';
-      this.ghostLayer.style.position = 'absolute';
-      this.ghostLayer.style.top = '0';
-      this.ghostLayer.style.left = '0';
-      this.ghostLayer.style.width = '100%';
-      this.ghostLayer.style.height = '100%';
-      this.ghostLayer.style.zIndex = '9998';
-      this.ghostLayer.style.pointerEvents = 'none';
-      
-      playerContainer.appendChild(this.ghostLayer);
-      
-      // Render React component
-      this.renderControls(this.controlsContainer, true, true, true);
-      
-      console.log('WordStream YouTube: Added floating controls');
-    }
+    // Auto-translation is enabled for authenticated users
+    // No need to show translation controls
+    console.log('WordStream: Caption auto-translation is activated for authenticated users');
   }
 
   public renderControls(container: HTMLElement, persist: boolean = true, showGemini: boolean = false, showNotes: boolean = false) {
-    if (!container) return;
+    // Only show Gemini and Notes controls, not translation controls
+    if (this.controlsRoot) {
+      this.controlsRoot.unmount();
+      this.controlsRoot = null;
+    }
     
-    try {
-      if (this.controlsRoot) {
-        ReactDOM.unmountComponentAtNode(container);
-        this.controlsRoot = null;
-      }
-      
+    if (!showGemini && !showNotes) {
+      return; // No need to render controls if nothing to show
+    }
+    
+    // Create the root if needed
+    if (!this.controlsRoot) {
+      const ReactDOM = require('react-dom');
       this.controlsRoot = ReactDOM.createRoot(container);
-      
-      // Render the FloatingControls React component (assuming it exists)
-      this.controlsRoot.render(
-        React.createElement(FloatingControls, { 
-          source: 'youtube',
-          showGemini,
-          showNotes,
-          persist
-        })
-      );
-    } catch (error) {
-      console.error('WordStream YouTube: Error rendering controls:', error);
-    }
-  }
-
-  public removeFloatingControls(): void {
-    if (this.controlsContainer && this.controlsContainer.parentNode) {
-      if (this.controlsRoot) {
-        try {
-          ReactDOM.unmountComponentAtNode(this.controlsContainer);
-        } catch (error) {
-          console.error('WordStream YouTube: Error unmounting controls:', error);
-        }
-        this.controlsRoot = null;
-      }
-      
-      this.controlsContainer.parentNode.removeChild(this.controlsContainer);
-      this.controlsContainer = null;
     }
     
-    if (this.ghostLayer && this.ghostLayer.parentNode) {
-      this.ghostLayer.parentNode.removeChild(this.ghostLayer);
-      this.ghostLayer = null;
-    }
+    // Import React components
+    const React = require('react');
+    const FloatingControls = require('@/components/floating-controls/FloatingControls').default;
+    
+    // Render only Gemini and Notes controls
+    this.controlsRoot.render(React.createElement(FloatingControls, {
+      onClose: () => {
+        // Remove the container on close if not persist
+        if (!persist && container.parentNode) {
+          container.parentNode.removeChild(container);
+        }
+      },
+      showGemini: showGemini, 
+      showNotes: showNotes,
+      onGeminiClick: () => {
+        try {
+          // Send a message to initiate Gemini chat
+          window.dispatchEvent(new CustomEvent('wordstream:toggle_gemini'));
+        } catch (error) {
+          console.error('WordStream: Error toggling Gemini:', error);
+        }
+      },
+      onNotesClick: () => {
+        try {
+          // Send a message to toggle notes panel
+          window.dispatchEvent(new CustomEvent('wordstream:toggle_notes'));
+        } catch (error) {
+          console.error('WordStream: Error toggling notes:', error);
+        }
+      }
+    }));
   }
 
   private getVideoId(): string {
@@ -411,20 +381,78 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
     console.log('WordStream YouTube: Handling click for word:', text);
 
     try {
-      const targetLang = await this.getTargetLanguage();
+      // Show immediate feedback to user that we're processing
+      const tempPopup = this.showTranslationPopup('Translating...', event);
       
-      // קבלת התרגום
-      const translation = await this.getTranslation(text, targetLang);
+      let targetLang = 'en'; // Default fallback
+      try {
+        targetLang = await this.getTargetLanguage();
+      } catch (langError) {
+        console.warn('WordStream YouTube: Error getting target language, using default:', langError);
+        // Continue with default language
+      }
       
-      // הצגת חלון תרגום
-      this.showTranslationPopup(translation.translatedText || 'Translation error', event);
+      // Get translation with better error handling
+      let translation;
+      try {
+        translation = await this.getTranslation(text, targetLang);
+      } catch (translationError) {
+        console.error('WordStream YouTube: Translation error:', translationError);
+        // Create a fallback translation object
+        translation = {
+          success: true,
+          translatedText: `${text} [Translation error]`,
+          detectedSourceLanguage: 'unknown',
+          isFallback: true
+        };
+      }
       
-      // בדיקת אימות לפני שמירת המילה - רק משתמשים מאומתים יכולים לשמור מילים
-      const isAuthenticated = typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true;
+      // Update translation popup with actual translation
+      this.updateTranslationPopup(tempPopup, translation.translatedText || 'Translation error');
+      
+      // Handle authentication for saving words
+      let isAuthenticated = false;
+      
+      try {
+        // Check if extension context is valid before trying authentication
+        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+          console.warn('WordStream YouTube: Extension context invalidated, can\'t check authentication');
+          // Continue without authentication
+        } else {
+          // First try to check window.WordStream if available
+          if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
+            isAuthenticated = true;
+          } else {
+            // Try Chrome messaging as a fallback with timeout
+            const authResponse = await new Promise<any>((resolve) => {
+              const timeout = setTimeout(() => {
+                console.warn('WordStream YouTube: Auth check timed out');
+                resolve({ isAuthenticated: false });
+              }, 2000);
+              
+              chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+                clearTimeout(timeout);
+                if (chrome.runtime.lastError) {
+                  console.warn('WordStream YouTube: Auth check error:', chrome.runtime.lastError);
+                  resolve({ isAuthenticated: false });
+                  return;
+                }
+                resolve(response || { isAuthenticated: false });
+              });
+            });
+            
+            isAuthenticated = authResponse?.isAuthenticated === true;
+          }
+        }
+      } catch (authError) {
+        console.error('WordStream YouTube: Error checking authentication:', authError);
+        isAuthenticated = false;
+      }
+      
       if (!isAuthenticated) {
         console.log('WordStream YouTube: Word translation shown, but saving skipped - user not authenticated');
         
-        // הוסף הודעה שמעודדת התחברות אם המשתמש אינו מאומת
+        // Add a message that encourages sign-in if the user is not authenticated
         setTimeout(() => {
           const signInElement = document.createElement('div');
           signInElement.className = 'wordstream-signin-prompt';
@@ -438,12 +466,16 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
           `;
           signInElement.onclick = (e) => {
             e.stopPropagation();
-            if (chrome?.runtime?.id) {
-              chrome.runtime.sendMessage({ action: 'OPEN_SIGNIN_POPUP' });
+            try {
+              if (chrome?.runtime?.id) {
+                chrome.runtime.sendMessage({ action: 'OPEN_SIGNIN_POPUP' });
+              }
+            } catch (messageError) {
+              console.error('WordStream YouTube: Error opening signin popup:', messageError);
             }
           };
           
-          // הוסף את ההודעה לפופאפ התרגום אם קיים
+          // Add the message to the translation popup if it exists
           const popup = document.querySelector('.wordstream-translation-popup');
           if (popup) {
             popup.appendChild(signInElement);
@@ -453,94 +485,74 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
         return;
       }
       
-      // המשך לטיפול בשמירת המילה אם המשתמש מאומת
-      this.saveWord(text, translation, targetLang);
+      // Continue to handle saving the word if the user is authenticated
+      try {
+        await this.saveWord(text, translation, targetLang);
+      } catch (saveError) {
+        console.error('WordStream YouTube: Error saving word:', saveError);
+        // Just log the error but don't interrupt the user experience
+      }
     } catch (error) {
       console.error('WordStream YouTube: Error handling word click:', error);
+      this.showTranslationPopup(`Error: ${error instanceof Error ? error.message : String(error)}`, event);
     }
   }
 
-  private showTranslationPopup(translatedText: string, event: MouseEvent): void {
-    // Clear any existing popups and timeouts
-    if (this.popup) {
-      this.popup.remove();
-      document.removeEventListener('click', this.handleDocumentClick);
+  /**
+   * Show a translation popup
+   */
+  private showTranslationPopup(translatedText: string, event: MouseEvent): HTMLElement {
+    // Remove any existing popup
+    const existingPopup = document.querySelector('.wordstream-translation-popup');
+    if (existingPopup) {
+      existingPopup.remove();
     }
-
-    const target = event.target as HTMLElement;
-    const originalWord = target.textContent || '';
-
-    // Create popup
-    this.popup = document.createElement('div');
-    this.popup.className = 'wordstream-popup';
     
-    // Force styles
-    Object.assign(this.popup.style, {
-      position: 'fixed',
-      right: '24px',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      background: 'rgba(28, 28, 28, 0.95)',
-      borderRadius: '8px',
-      padding: '16px',
-      minWidth: '200px',
-      maxWidth: '300px',
-      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
-      color: '#fff',
-      fontFamily: "'Roboto', 'Segoe UI', sans-serif",
-      fontSize: '14px',
-      lineHeight: '1.5',
-      zIndex: '9999999',
-      display: 'block',
-      visibility: 'visible',
-      opacity: '1',
-      transition: 'opacity 0.2s ease-out'
-    });
-
-    // Original word
-    const originalWordElement = document.createElement('div');
-    originalWordElement.className = 'original-word';
-    originalWordElement.textContent = originalWord;
-    Object.assign(originalWordElement.style, {
-      color: '#64B5F6',
-      fontWeight: '500',
-      fontSize: '16px',
-      marginBottom: '8px',
-      display: 'block',
-      fontFamily: "'Roboto', 'Segoe UI', sans-serif"
-    });
-    this.popup.appendChild(originalWordElement);
-
-    // Translated word
-    const translatedElement = document.createElement('div');
-    translatedElement.className = 'translated-word';
-    translatedElement.textContent = translatedText;
-    Object.assign(translatedElement.style, {
-      fontWeight: '500',
-      fontSize: '16px',
-      display: 'block',
-      fontFamily: "'Roboto', 'Segoe UI', sans-serif"
-    });
-    this.popup.appendChild(translatedElement);
-
-    // Add to page
-    document.body.appendChild(this.popup);
-
-    // Add click handler to close popup
-    document.addEventListener('click', this.handleDocumentClick);
-
-    // Auto-hide popup after 5 seconds
+    // Create new popup
+    const popup = document.createElement('div');
+    popup.className = 'wordstream-translation-popup';
+    popup.style.cssText = `
+      position: absolute;
+      z-index: 99999;
+      background: white;
+      border-radius: 4px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      padding: 8px 12px;
+      max-width: 300px;
+      word-break: break-word;
+      transform: translateX(-50%);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      transition: opacity 0.2s ease;
+    `;
+    
+    popup.textContent = translatedText;
+    
+    // Position the popup
+    const rect = (event.target as HTMLElement).getBoundingClientRect();
+    popup.style.left = rect.left + rect.width / 2 + 'px';
+    popup.style.top = (rect.bottom + window.scrollY + 10) + 'px';
+    
+    // Add to document
+    document.body.appendChild(popup);
+    
+    // Close popup when clicking outside
     setTimeout(() => {
-      if (this.popup) {
-        this.popup.style.opacity = '0';
-        setTimeout(() => {
-          if (this.popup) {
-            this.popup.remove();
-            document.removeEventListener('click', this.handleDocumentClick);
-          }
-        }, 200);
-      }
-    }, 5000);
+      document.addEventListener('click', this.handleDocumentClick);
+    }, 10);
+    
+    return popup;
+  }
+
+  /**
+   * Update an existing translation popup
+   */
+  private updateTranslationPopup(popup: HTMLElement, translatedText: string): void {
+    if (!popup || !document.body.contains(popup)) {
+      return;
+    }
+    
+    popup.textContent = translatedText;
   }
 
   private handleDocumentClick = (e: MouseEvent) => {
@@ -904,6 +916,35 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
       }
     } catch (error) {
       console.error('WordStream YouTube: Error in saveWord:', error);
+    }
+  }
+
+  /**
+   * Implement automatic translation for YouTube captions
+   */
+  public removeFloatingControls(): void {
+    if (this.controlsContainer && this.controlsContainer.parentNode) {
+      if (this.controlsRoot) {
+        try {
+          // Using try/catch as unmounting might fail
+          if (typeof this.controlsRoot.unmount === 'function') {
+            this.controlsRoot.unmount();
+          } else if (typeof ReactDOM !== 'undefined' && ReactDOM.unmountComponentAtNode) {
+            ReactDOM.unmountComponentAtNode(this.controlsContainer);
+          }
+        } catch (error) {
+          console.error('WordStream: Error unmounting controls:', error);
+        }
+        this.controlsRoot = null;
+      }
+      
+      this.controlsContainer.parentNode.removeChild(this.controlsContainer);
+      this.controlsContainer = null;
+    }
+    
+    if (this.ghostLayer && this.ghostLayer.parentNode) {
+      this.ghostLayer.parentNode.removeChild(this.ghostLayer);
+      this.ghostLayer = null;
     }
   }
 } 

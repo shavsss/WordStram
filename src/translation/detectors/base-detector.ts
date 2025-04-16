@@ -45,6 +45,24 @@ declare global {
   }
 }
 
+// Helper function to generate a unique ID for a word
+function generateWordId(): string {
+  return 'word_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+}
+
+// Helper function to save a translation to localStorage
+function saveTranslationToLocalStorage(translationRecord: any): void {
+  // Get existing translations
+  const existingTranslationsJSON = localStorage.getItem('wordstream-translations');
+  const existingTranslations = existingTranslationsJSON ? JSON.parse(existingTranslationsJSON) : [];
+  
+  // Add new translation
+  existingTranslations.push(translationRecord);
+  
+  // Save back to localStorage
+  localStorage.setItem('wordstream-translations', JSON.stringify(existingTranslations));
+}
+
 export abstract class BaseCaptionDetector implements CaptionDetector {
   abstract source: string;
   protected translationService: TranslationService;
@@ -103,6 +121,13 @@ export abstract class BaseCaptionDetector implements CaptionDetector {
         return;
       }
 
+      // Check authentication first
+      const authState = await this.checkAuthentication();
+      if (!authState.isAuthenticated) {
+        this.showAuthRequiredPopup(event);
+        return;
+      }
+
       // Get the word and context
       const wordElement = event.target;
       const text = wordElement.textContent?.trim();
@@ -130,18 +155,112 @@ export abstract class BaseCaptionDetector implements CaptionDetector {
       // Display translation in popup
       this.showTranslationPopup(translation.translatedText || 'Translation error', event);
 
-      // Check if user is authenticated before saving
-      if (window.WordStream?.local?.isAuthenticated !== true) {
-        console.log(`WordStream ${this.source}: Word translation shown, but saving skipped - user not authenticated`);
-        return;
-      }
-
-      // Save the word if authenticated
-      this.saveWord(text, translation, targetLang);
+      // Save word to Firebase
+      this.saveWord(text, translation, targetLang, authState.user.uid);
     } catch (error) {
       console.error(`WordStream ${this.source}: Error in handleWordClick:`, safeStringifyError(error));
       this.showTranslationPopup(`Error: ${safeStringifyError(error)}`, event);
     }
+  }
+
+  /**
+   * Check if user is authenticated
+   */
+  protected async checkAuthentication(): Promise<{ isAuthenticated: boolean, user?: any }> {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          resolve({ isAuthenticated: false });
+          return;
+        }
+        
+        resolve(response);
+      });
+    });
+  }
+
+  /**
+   * Show authentication required popup
+   */
+  protected showAuthRequiredPopup(event: MouseEvent): void {
+    // Create the popup
+    const popup = document.createElement('div');
+    popup.className = 'wordstream-auth-popup';
+    
+    // Style the popup
+    Object.assign(popup.style, {
+      position: 'fixed',
+      zIndex: '9999',
+      backgroundColor: '#333',
+      color: '#fff',
+      padding: '12px 16px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+      fontSize: '14px',
+      maxWidth: '280px',
+      top: `${event.clientY - 30}px`,
+      left: `${event.clientX - 140}px`,
+      textAlign: 'center'
+    });
+    
+    // Add title
+    const title = document.createElement('div');
+    title.textContent = 'Authentication Required';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '8px';
+    popup.appendChild(title);
+    
+    // Add message
+    const message = document.createElement('div');
+    message.textContent = 'Please sign in to use the translation feature.';
+    message.style.marginBottom = '12px';
+    popup.appendChild(message);
+    
+    // Add sign in button
+    const signInButton = document.createElement('button');
+    signInButton.textContent = 'Sign In';
+    signInButton.style.cssText = `
+      background-color: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      margin-right: 8px;
+    `;
+    signInButton.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ action: 'OPEN_AUTH_POPUP' });
+      document.body.removeChild(popup);
+    });
+    popup.appendChild(signInButton);
+    
+    // Add close button
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.cssText = `
+      background-color: transparent;
+      color: #aaa;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    `;
+    closeButton.addEventListener('click', () => {
+      document.body.removeChild(popup);
+    });
+    popup.appendChild(closeButton);
+    
+    // Add to DOM
+    document.body.appendChild(popup);
+    
+    // Remove after 10 seconds
+    setTimeout(() => {
+      if (popup.parentNode) {
+        popup.parentNode.removeChild(popup);
+      }
+    }, 10000);
   }
 
   // Common popup implementation
@@ -311,6 +430,17 @@ export abstract class BaseCaptionDetector implements CaptionDetector {
       console.log(`WordStream ${this.source}: Translation result:`, translation);
       
       if (!translation.success) {
+        // If there's an error but we have a fallback translation, use it
+        if (translation.translatedText) {
+          console.warn(`WordStream ${this.source}: Using fallback translation despite error:`, translation.error);
+          return {
+            success: true,
+            translatedText: translation.translatedText,
+            detectedSourceLanguage: translation.detectedSourceLanguage || 'unknown',
+            isFallback: true
+          };
+        }
+        
         throw new Error(translation.error || 'Unknown translation error');
       }
       
@@ -321,66 +451,68 @@ export abstract class BaseCaptionDetector implements CaptionDetector {
       return translation;
     } catch (translationError) {
       console.error(`WordStream ${this.source}: Translation error:`, translationError);
-      throw new Error(`Translation error: ${translationError}`);
+      
+      // For critical failures, provide a basic fallback showing the original text
+      // This ensures the UI doesn't break even when translation fails
+      return {
+        success: true,
+        translatedText: `${text} [Translation unavailable]`,
+        detectedSourceLanguage: 'unknown',
+        isFallback: true,
+        error: translationError instanceof Error ? translationError.message : String(translationError)
+      };
     }
   }
 
   // Common method to save a word
-  protected async saveWord(text: string, translation: any, targetLang: string): Promise<void> {
+  protected async saveWord(
+    text: string, 
+    translation: any, 
+    targetLang: string,
+    userId: string
+  ): Promise<void> {
     try {
-      const captionInfo = this.detectCaptionsLanguage();
-
-      // Get current video details
-      const videoTitle = document.title.replace(' - YouTube', '').trim();
-      const url = window.location.href;
-
-      // Create word object
-      const word = {
-        id: Date.now().toString(),
+      // Create a translation record
+      const translationRecord = {
         originalWord: text,
         targetWord: translation.translatedText,
         sourceLanguage: translation.detectedSourceLanguage || 'auto',
         targetLanguage: targetLang,
-        timestamp: safeDate(new Date()),
+        timestamp: new Date().toISOString(),
         context: {
           source: this.source,
-          videoTitle,
-          url,
-          captionsLanguage: translation.detectedSourceLanguage || 'auto'
+          videoTitle: document.title || '',
+          url: window.location.href,
+          captionsLanguage: 'auto'
         },
         stats: {
           successRate: 0,
           totalReviews: 0,
-          lastReview: null
-        }
+          lastReview: new Date().toISOString()
+        },
+        userId
       };
-
-      // Save to storage
-      await new Promise<void>((resolve, reject) => {
-        chrome.storage.sync.get(['words'], (result) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-            return;
-          }
-          
-          const words = result.words || [];
-          words.push(word);
-          
-          chrome.storage.sync.set({ words }, () => {
-            if (chrome.runtime.lastError) {
-              reject(chrome.runtime.lastError);
-              return;
-            }
-            resolve();
-          });
-        });
-      });
       
-      console.log(`WordStream ${this.source}: Word saved successfully`, word);
-
-    } catch (storageError) {
-      // Just log if saving fails, don't show to user as translation worked
-      console.error(`WordStream ${this.source}: Error saving word:`, safeStringifyError(storageError));
+      // Save to Firebase via message to background
+      chrome.runtime.sendMessage({
+        action: 'SAVE_TRANSLATION',
+        translation: translationRecord
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error(`WordStream ${this.source}: Error saving translation:`, chrome.runtime.lastError);
+          return;
+        }
+        
+        if (!response || !response.success) {
+          console.error(`WordStream ${this.source}: Failed to save translation:`, response?.error || 'Unknown error');
+          return;
+        }
+        
+        console.log(`WordStream ${this.source}: Translation saved successfully`);
+      });
+    } catch (error) {
+      console.error(`WordStream ${this.source}: Error saving translation:`, error);
+      // Don't throw, just log the error
     }
   }
 

@@ -12,6 +12,8 @@ let pageObserver: MutationObserver | null = null;
 let detectionInterval: NodeJS.Timeout | null = null;
 // Add a flag to track if we're having auth issues but should still show features
 let authIssuesDetected = false;
+// Flag to indicate if user is logged in
+let isUserAuthenticated = false;
 
 /**
  * Factory function to get the appropriate detector for the current website
@@ -35,11 +37,12 @@ export function getDetectorForCurrentSite(): CaptionDetector {
   return new UniversalCaptionDetector();
 }
 
+export type { CaptionDetector };
 export {
-  CaptionDetector,
   YouTubeCaptionDetector,
   NetflixCaptionDetector,
-  UniversalCaptionDetector
+  UniversalCaptionDetector,
+  startDetection
 };
 
 export function getCaptionDetector(source: ContentSource): CaptionDetector {
@@ -74,6 +77,17 @@ export function setAuthIssuesDetected(value: boolean): void {
   console.log(`WordStream: Auth issues detected flag set to ${value}`);
 }
 
+// Set authentication status
+export function setAuthenticated(authenticated: boolean): void {
+  isUserAuthenticated = authenticated;
+  console.log(`WordStream: User authentication status set to ${authenticated}`);
+  
+  // If user becomes authenticated, auto-start captioning
+  if (authenticated && currentDetector) {
+    startDetection(true);
+  }
+}
+
 function cleanup() {
   if (currentDetector) {
     currentDetector.cleanup();
@@ -106,6 +120,24 @@ function initializeDetector(): CaptionDetector {
   return detector;
 }
 
+// Check authentication status from background
+async function checkAuthenticationStatus(): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        console.log('WordStream: Error checking auth status or not authenticated');
+        resolve(false);
+        return;
+      }
+      
+      const isAuthenticated = response.isAuthenticated || false;
+      console.log(`WordStream: User authentication status: ${isAuthenticated}`);
+      isUserAuthenticated = isAuthenticated;
+      resolve(isAuthenticated);
+    });
+  });
+}
+
 // Start the caption detection process
 async function startDetection(force = false) {
   const detector = currentDetector || initializeDetector();
@@ -114,10 +146,23 @@ async function startDetection(force = false) {
   console.log('WordStream: Starting caption detection...');
   
   try {
+    // Check authentication on first run
+    if (!isUserAuthenticated && !authIssuesDetected) {
+      const isAuthenticated = await checkAuthenticationStatus();
+      isUserAuthenticated = isAuthenticated;
+    }
+    
     const captionElement = await detector.detect();
     if (captionElement) {
       console.log('WordStream: Captions found, processing...');
       detector.processCaption(captionElement);
+      
+      // If user is authenticated, don't show floating controls for translation
+      // but still make captions clickable
+      if (isUserAuthenticated || authIssuesDetected) {
+        // Just make captions clickable without showing floating control
+        detector.startObserving(captionElement);
+      }
     } else if (force) {
       console.log('WordStream: No captions found, will retry in 1 second');
       setTimeout(() => startDetection(true), 1000);
@@ -213,10 +258,24 @@ if (typeof document !== 'undefined') {
     // Start detection anyway, ignoring auth
     startDetection(true);
   });
+  
+  // Listen for authentication state changes
+  document.addEventListener('wordstream:auth_state_changed', (event) => {
+    const customEvent = event as CustomEvent;
+    const isAuthenticated = customEvent.detail?.isAuthenticated || false;
+    console.log(`WordStream: Auth state changed event received, authenticated: ${isAuthenticated}`);
+    setAuthenticated(isAuthenticated);
+  });
 }
 
-// Start initial detection
-startDetection(true);
+// Check authentication status immediately
+checkAuthenticationStatus().then((isAuthenticated) => {
+  console.log(`WordStream: Initial auth check completed: ${isAuthenticated}`);
+  if (isAuthenticated) {
+    // Start detection right away if authenticated
+    startDetection(true);
+  }
+});
 
 // Watch for navigation events and player state changes
 let previousUrl = window.location.href;
