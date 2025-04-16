@@ -31,4 +31,129 @@
 
 .wordstream-error {
   background-color: rgba(255, 0, 0, 0.9) !important;
+}
+
+/* Add styles for the video speed controller */
+#wordstream-speed-controller {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  z-index: 2147483647 !important; /* Highest possible z-index to ensure visibility */
+  position: fixed !important;
+  top: 20px !important;
+  right: 20px !important;
+  background-color: rgba(79, 70, 229, 0.85) !important;
+  color: white !important;
+  border-radius: 10px !important;
+  padding: 8px 12px !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3) !important;
+  transition: all 0.3s ease !important;
+  user-select: none !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+  cursor: move !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+#wordstream-speed-controller:hover {
+  background-color: rgba(79, 70, 229, 0.95) !important;
+}
+
+#wordstream-speed-display {
+  font-weight: bold !important;
+  min-width: 36px !important;
+  text-align: center !important;
+  font-size: 16px !important;
+}
+
+#wordstream-speed-controller button {
+  background: rgba(0, 0, 0, 0.2) !important;
+  border: none !important;
+  color: white !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-family: inherit !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-weight: bold !important;
+}
+
+#wordstream-speed-decrease,
+#wordstream-speed-increase {
+  width: 28px !important;
+  height: 28px !important;
+  font-size: 18px !important;
+}
+
+#wordstream-speed-reset {
+  padding: 4px 8px !important;
+  font-size: 12px !important;
+}
+
+#wordstream-speed-controller button:hover {
+  background-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+#wordstream-speed-controller button:active {
+  background-color: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* WordStream container positioning */
+#wordstream-container {
+  position: fixed !important;
+  top: 50% !important;
+  left: 20px !important;
+  transform: translateY(-50%) !important;
+  z-index: 9999 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+/* Chat panel styles */
+#wordstream-chat-panel {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+  background-color: white !important;
+  position: fixed !important;
+  top: 100px !important;
+  left: 20px !important;
+  width: 350px !important;
+  height: 450px !important;
+  z-index: 9998 !important;
+}
+
+/* Notes panel styles */
+#wordstream-notes-panel {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+  background-color: white !important;
+  position: fixed !important;
+  top: 570px !important;
+  left: 20px !important;
+  width: 350px !important;
+  height: 400px !important;
+  z-index: 9998 !important;
+}
+
+/* Media query for smaller screens to adjust panel positioning */
+@media (max-height: 1000px) {
+  #wordstream-chat-panel {
+    top: 50px !important;
+    height: 400px !important;
+  }
+  
+  #wordstream-notes-panel {
+    top: 470px !important;
+    height: 350px !important;
+  }
 } 

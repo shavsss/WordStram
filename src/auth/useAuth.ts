@@ -13,10 +13,17 @@ import {
   signInWithPopup,
   User
 } from 'firebase/auth';
-import { initializeListeners, cleanup } from './database';
 
-// Import from centralized Firebase module
-import { getFirebaseServices, initializeFirebase } from './firebase-init';
+// Import from centralized Firebase modules
+import { 
+  getFirebaseServices, 
+  initializeFirebase,
+  initializeAuth,
+  signInWithEmail as authSignInWithEmail,
+  signInWithGoogle as authSignInWithGoogle,
+  signOut as authSignOut,
+  createUser as authCreateUser
+} from './index';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -40,6 +47,9 @@ export default function useAuth() {
       try {
         // Ensure Firebase is initialized
         await initializeFirebase();
+        
+        // Initialize auth
+        await initializeAuth();
         
         // Get services
         const services = await getFirebaseServices();
@@ -85,13 +95,8 @@ export default function useAuth() {
   const signInWithEmailPassword = async (email: string, password: string) => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
-      const services = await getFirebaseServices();
-      if (!services.auth) {
-        throw new Error("Firebase auth is not initialized");
-      }
-      
-      const userCredential = await signInWithEmailAndPassword(services.auth, email, password);
-      return userCredential.user;
+      await authSignInWithEmail(email, password);
+      return true;
     } catch (err: any) {
       setAuthState(prev => ({ 
         ...prev, 
@@ -105,13 +110,8 @@ export default function useAuth() {
   const signUpWithEmailPassword = async (email: string, password: string) => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
-      const services = await getFirebaseServices();
-      if (!services.auth) {
-        throw new Error("Firebase auth is not initialized");
-      }
-      
-      const userCredential = await createUserWithEmailAndPassword(services.auth, email, password);
-      return userCredential.user;
+      await authCreateUser(email, password);
+      return true;
     } catch (err: any) {
       setAuthState(prev => ({ 
         ...prev, 
@@ -125,14 +125,8 @@ export default function useAuth() {
   const signInWithGoogle = async () => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
-      const services = await getFirebaseServices();
-      if (!services.auth) {
-        throw new Error("Firebase auth is not initialized");
-      }
-      
-      const provider = new GoogleAuthProvider();
-      const userCredential = await signInWithPopup(services.auth, provider);
-      return userCredential.user;
+      await authSignInWithGoogle();
+      return true;
     } catch (err: any) {
       setAuthState(prev => ({ 
         ...prev, 
@@ -146,12 +140,7 @@ export default function useAuth() {
   const logout = async () => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
-      const services = await getFirebaseServices();
-      if (!services.auth) {
-        throw new Error("Firebase auth is not initialized");
-      }
-      
-      await signOut(services.auth);
+      await authSignOut();
       setAuthState({
         isAuthenticated: false,
         user: null,

@@ -1,25 +1,54 @@
 /**
  * Authentication Module
- * This module centralizes all authentication-related functionality.
- * It exports all auth functions from firebase-service.ts.
+ * 
+ * This module centralizes all authentication and database-related functionality.
+ * All auth and database functions should be imported from this module.
  */
 
-import {
-  signInWithGoogle,
-  signInWithEmailPassword,
-  registerWithEmailPassword,
-  signOut,
-  onAuthStateChange,
-} from './firebase-service';
+// Export from firebase-init
+export { 
+  initializeFirebase, 
+  getFirebaseServices,
+  getFirebaseAuth,
+  app,
+  auth,
+  firestore,
+  storage
+} from './firebase-init';
 
-// Re-export auth functions
+// Export from auth-manager
 export {
+  initializeAuth,
+  signInWithEmail,
   signInWithGoogle,
-  signInWithEmailPassword,
-  registerWithEmailPassword,
-  signOut, 
-  onAuthStateChange,
-};
+  signInWithGithub,
+  signOut,
+  createUser,
+  resetPassword,
+  updateUserProfile,
+  isAuthenticated,
+  getCurrentUser,
+  getUserIdToken,
+  verifyTokenAndRefresh,
+  addAuthStateListener,
+  removeAuthStateListener
+} from './auth-manager';
 
-// Hook for managing authentication
-export { default as useAuth } from './useAuth'; 
+// Export from database-service
+export {
+  getFirestore,
+  getDocument,
+  saveDocument,
+  addDocument,
+  updateDocument,
+  deleteDocument,
+  queryDocuments,
+  listenToDocument,
+  listenToCollection
+} from './database-service';
+
+// Export React hook for authentication
+export { default as useAuth } from './useAuth';
+
+// Export default objects for convenience
+export { default as databaseService } from './database-service';

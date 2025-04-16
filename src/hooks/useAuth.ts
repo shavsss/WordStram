@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { auth } from '../core/firebase/config';
-import { onAuthStateChanged, User, signOut } from 'firebase/auth';
-import { signInWithGoogle as firebaseSignInWithGoogle } from '../services/firebase-service';
+import { User } from 'firebase/auth';
+import { useAuth as useAuthFromModule, signInWithGoogle as authSignInWithGoogle, signOut as authSignOut } from '../auth';
 
 export interface UserInfo {
   uid: string;
@@ -17,44 +16,32 @@ export function useAuth() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Use the new consolidated auth hook
+  const authModule = useAuthFromModule();
 
-  // הגדרת המאזין למצב האימות
+  // Update our state based on the auth module state
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, 
-      (authUser) => {
-        setLoading(true);
-        if (authUser) {
-          setUser({
-            uid: authUser.uid,
-            email: authUser.email,
-            displayName: authUser.displayName,
-            photoURL: authUser.photoURL
-          });
-        } else {
-          setUser(null);
-        }
-        setError(null);
-        setLoading(false);
-      },
-      (authError) => {
-        console.error('Auth state change error:', authError);
-        setError(authError.message);
-        setLoading(false);
-      }
-    );
-
-    // ניקוי המאזין בסיום
-    return () => unsubscribe();
-  }, []);
+    if (authModule.user) {
+      setUser({
+        uid: authModule.user.uid,
+        email: authModule.user.email,
+        displayName: authModule.user.displayName,
+        photoURL: authModule.user.photoURL
+      });
+    } else {
+      setUser(null);
+    }
+    
+    setLoading(authModule.loading);
+    setError(authModule.error);
+  }, [authModule.user, authModule.loading, authModule.error]);
 
   // התחברות באמצעות Google
   const signInWithGoogle = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await firebaseSignInWithGoogle();
-      if (!result.success) {
-        throw new Error(result.error ? String(result.error) : 'Failed to sign in with Google');
-      }
+      await authModule.signInWithGoogle();
       return true;
     } catch (error: any) {
       console.error('Sign in error:', error);
@@ -63,13 +50,13 @@ export function useAuth() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authModule]);
 
   // התנתקות
   const logout = useCallback(async () => {
     try {
       setLoading(true);
-      await signOut(auth);
+      await authModule.logout();
       return true;
     } catch (error: any) {
       console.error('Sign out error:', error);
@@ -78,7 +65,7 @@ export function useAuth() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authModule]);
 
   return {
     user,

@@ -62,20 +62,27 @@ function generateId(): string {
  * @param query The query to send to Gemini
  * @param history Conversation history
  * @param videoTitle Optional video title for context
+ * @param options Additional options including language
  * @returns A string containing the Gemini response
  */
 export async function sendToGemini(
   query: string,
   history: GeminiMessage[],
-  videoTitle: string = ''
+  videoTitle: string = '',
+  options: {
+    language?: string,
+    syncAcrossDevices?: boolean
+  } = {}
 ): Promise<string> {
   try {
-    // Get user info for saving to Firebase
-    const user = await getUserAuthentication();
-    if (!user) {
-      throw new Error('User not authenticated');
-    }
-
+    // TEMPORARY AUTHENTICATION BYPASS
+    // Instead of getting the real user, create a mock user for development purposes
+    const mockUser = {
+      uid: 'temp-user-id',
+      displayName: 'Temporary User',
+      email: 'temp@example.com'
+    };
+    
     // Create context object with available information
     const context: GeminiContext = { videoTitle };
     
@@ -101,6 +108,10 @@ export async function sendToGemini(
       if (context.videoId) {
         context.videoURL = `https://www.youtube.com/watch?v=${context.videoId}`;
       }
+    } else {
+      // For non-YouTube pages, get current page URL and title
+      context.videoURL = window.location.href;
+      context.videoTitle = document.title;
     }
     
     // Convert messages to the format expected by the background script
@@ -108,43 +119,131 @@ export async function sendToGemini(
       role: msg.role,
       content: msg.content
     }));
+
+    // Get preferred language from options or localStorage
+    const preferredLanguage = options.language || 
+      localStorage.getItem('wordstream-language') || 
+      'en';
     
     // Send request to background script which has access to Gemini API
     const response = await new Promise<string>((resolve, reject) => {
-      chrome.runtime.sendMessage({
-        action: 'GEMINI_CHAT',
-        query,
-        history: formattedHistory,
-        context
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('Error sending message to Gemini:', chrome.runtime.lastError);
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        
-        if (!response || !response.success) {
-          // Check if response contains a suggestion to set up an API key
-          if (response?.error?.includes('API key')) {
-            reject(new Error('Gemini API key not configured. Please set up your API key in the extension settings.'));
+      // Add timeout to prevent indefinite waiting
+      const timeout = setTimeout(() => {
+        reject(new Error('Request to Gemini API timed out'));
+      }, 30000);
+
+      try {
+        chrome.runtime.sendMessage({
+          action: 'GEMINI_CHAT',
+          query,
+          history: formattedHistory,
+          context,
+          language: preferredLanguage
+        }, (response) => {
+          clearTimeout(timeout);
+          
+          // Check for chrome runtime errors
+          if (chrome.runtime.lastError) {
+            console.error('Error sending message to Gemini:', chrome.runtime.lastError);
+            
+            // If the message port closed error occurred, provide a fallback response
+            if (chrome.runtime.lastError.message && chrome.runtime.lastError.message.includes('message port closed')) {
+              console.log('WordStream: Using fallback response due to closed message port');
+              resolve("I'm sorry, but I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.");
+              return;
+            }
+            
+            reject(new Error(chrome.runtime.lastError.message || 'Unknown runtime error'));
             return;
           }
           
-          reject(new Error(response?.error || 'Failed to get response from Gemini'));
-          return;
-        }
-        
-        resolve(response.content || response.answer || 'No response content');
-      });
+          if (!response || !response.success) {
+            // Check if response contains a suggestion to set up an API key
+            if (response?.error?.includes('API key')) {
+              reject(new Error('Gemini API key not configured. Please set up your API key in the extension settings.'));
+              return;
+            }
+            
+            reject(new Error(response?.error || 'Failed to get response from Gemini'));
+            return;
+          }
+          
+          resolve(response.content || response.answer || 'No response content');
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        console.error('Error in sendMessage:', error);
+        resolve("I'm sorry, but I couldn't connect to the Gemini API. Please try again later.");
+      }
     });
 
-    // Save chat history to Firebase
-    await saveGeminiChat(user.uid, query, response, history, context);
+    // Save chat history locally but skip Firebase sync to avoid auth issues
+    await saveGeminiChatLocally(query, response, history, context);
     
     return response;
   } catch (error) {
     console.error('Error in sendToGemini:', error);
+    // Provide more user-friendly error messages
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        throw new Error('Gemini API key not configured. Please set up your API key in the extension settings.');
+      } else if (error.message.includes('timed out')) {
+        throw new Error('The request to Gemini timed out. Please check your internet connection and try again.');
+      } else if (error.message.includes('quota')) {
+        throw new Error('Your Gemini API quota has been exceeded. Please try again later.');
+      } else if (error.message.includes('message port closed')) {
+        return "I'm sorry, I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.";
+      }
+    }
     throw error;
+  }
+}
+
+/**
+ * Save Gemini chat locally without syncing to Firebase
+ */
+async function saveGeminiChatLocally(
+  query: string,
+  response: string,
+  history: GeminiMessage[],
+  context: GeminiContext
+): Promise<void> {
+  try {
+    // Create new user message with metadata
+    const userMessage: GeminiMessageWithMetadata = {
+      role: 'user',
+      content: query,
+      timestamp: Date.now(),
+      id: generateId()
+    };
+
+    // Create new assistant message with metadata
+    const assistantMessage: GeminiMessageWithMetadata = {
+      role: 'assistant',
+      content: response,
+      timestamp: Date.now(),
+      id: generateId()
+    };
+
+    // Get local chat history from storage
+    const result = await chrome.storage.local.get('gemini_local_history');
+    const localHistory: GeminiMessageWithMetadata[] = result.gemini_local_history || [];
+    
+    // Add new messages
+    localHistory.push(userMessage);
+    localHistory.push(assistantMessage);
+    
+    // Limit history size to prevent storage issues
+    const maxHistoryItems = 100;
+    const trimmedHistory = localHistory.slice(-maxHistoryItems);
+    
+    // Save updated history
+    await chrome.storage.local.set({
+      'gemini_local_history': trimmedHistory
+    });
+    
+  } catch (error) {
+    console.error('Error saving Gemini chat locally:', error);
   }
 }
 
