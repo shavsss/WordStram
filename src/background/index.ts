@@ -28,38 +28,34 @@ async function initializeBackgroundServices() {
       if (data.wordstream_user_info) {
         console.log('WordStream: Restoring authentication state from storage');
         
-        // Get Firebase auth services
-        const services = await getFirebaseServices();
+        // Broadcast stored auth state to all contexts
+        chrome.runtime.sendMessage({ 
+          action: 'AUTH_STATE_CHANGED',
+          user: data.wordstream_user_info,
+          isAuthenticated: true,
+          source: 'background_init'
+        });
         
-        // If we have auth services and user data, broadcast auth state
-        if (services.auth) {
-          // Wait for onAuthStateChanged to fire once
-          await new Promise<void>(resolve => {
-            const unsubscribe = services.auth!.onAuthStateChanged((user) => {
-              // If Firebase already has a user, we're good
-              if (user) {
-                console.log('WordStream: Firebase auth state restored automatically');
-              } 
-              // If Firebase doesn't have a user but we have storage data, broadcast the stored data
-              else if (data.wordstream_user_info) {
-                console.log('WordStream: Broadcasting stored auth state to all contexts');
-                chrome.runtime.sendMessage({ 
+        // Also broadcast to all tabs
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => {
+            if (tab.id) {
+              try {
+                chrome.tabs.sendMessage(tab.id, { 
                   action: 'AUTH_STATE_CHANGED',
                   user: data.wordstream_user_info,
                   isAuthenticated: true,
                   source: 'background_init'
                 });
+              } catch (e) {
+                // Ignore errors from tabs that can't receive messages
               }
-              
-              unsubscribe();
-              resolve();
-            });
+            }
           });
-        }
+        });
       }
     } catch (error) {
       console.error('WordStream: Error restoring auth state:', error);
-      // Non-fatal error, continue initialization
     }
     
     return true;
@@ -73,16 +69,45 @@ async function initializeBackgroundServices() {
  * Set up periodic authentication token refresh
  */
 function setupAuthTokenRefresh() {
-  // Check and refresh auth token every 15 minutes
+  // Check and refresh auth token every 30 minutes
   setInterval(async () => {
     try {
-      const { checkAndRefreshAuth } = await import('../auth/auth-manager');
-      await checkAndRefreshAuth();
-      console.log('WordStream: Auth token refresh check completed');
+      const data = await chrome.storage.local.get(['wordstream_user_info']);
+      if (data.wordstream_user_info) {
+        // Get Firebase auth services
+        const services = await getFirebaseServices();
+        
+        if (services.auth && services.auth.currentUser) {
+          // Force token refresh
+          try {
+            await services.auth.currentUser.getIdToken(true);
+            console.log('WordStream: Auth token refreshed successfully');
+            
+            // Update timestamp in storage
+            chrome.storage.local.set({
+              'wordstream_user_info': {
+                ...data.wordstream_user_info,
+                lastAuthenticated: Date.now()
+              }
+            });
+          } catch (err) {
+            console.error('WordStream: Error refreshing token:', err);
+          }
+        } else {
+          // Try to refresh through the auth manager
+          try {
+            const { checkAndRefreshAuth } = await import('../auth/auth-manager');
+            await checkAndRefreshAuth();
+            console.log('WordStream: Auth token refresh check completed via auth manager');
+          } catch (error) {
+            console.error('WordStream: Error checking/refreshing auth token via auth manager:', error);
+          }
+        }
+      }
     } catch (error) {
-      console.error('WordStream: Error checking/refreshing auth token:', error);
+      console.error('WordStream: Error in token refresh:', error);
     }
-  }, 15 * 60 * 1000); // Every 15 minutes
+  }, 30 * 60 * 1000); // Every 30 minutes
 }
 
 /**
@@ -192,6 +217,37 @@ function setupMessageListeners() {
             });
           });
         return true; // Indicates async response
+        
+      case 'AUTH_STATE_CHANGED':
+        // Store authentication state in chrome.storage.local
+        if (message.isAuthenticated && message.user) {
+          chrome.storage.local.set({
+            'wordstream_user_info': {
+              ...message.user,
+              lastAuthenticated: Date.now()
+            }
+          });
+          
+          // Forward to all tabs
+          chrome.tabs.query({}, (tabs) => {
+            tabs.forEach(tab => {
+              if (tab.id) {
+                try {
+                  chrome.tabs.sendMessage(tab.id, message);
+                } catch (e) {
+                  // Ignore errors from tabs that can't receive messages
+                }
+              }
+            });
+          });
+        } else {
+          // Clear authentication when signed out
+          chrome.storage.local.remove(['wordstream_user_info']);
+        }
+        
+        // Also broadcast to other extension contexts
+        chrome.runtime.sendMessage(message);
+        break;
         
       case 'SAVE_NOTE':
         handleSaveNote(message.data)

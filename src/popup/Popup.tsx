@@ -108,6 +108,40 @@ export default function Popup() {
   const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();
   const authModule = useAuthModule();
 
+  // Check and restore authentication from storage early
+  useEffect(() => {
+    const checkStoredAuth = async () => {
+      try {
+        const data = await chrome.storage.local.get(['wordstream_user_info']);
+        if (data.wordstream_user_info) {
+          // If we have stored authentication, ensure it's not too old
+          const lastAuth = data.wordstream_user_info.lastAuthenticated || 0;
+          const now = Date.now();
+          // Consider auth valid if refreshed in the last 24 hours
+          if (now - lastAuth < 24 * 60 * 60 * 1000) {
+            // Force immediate UI update based on stored credentials
+            const user = data.wordstream_user_info;
+            if (user && typeof user === 'object' && user.uid) {
+              console.log('Popup: Restoring auth state from storage immediately');
+              
+              // We have recent authentication data, force auth state update
+              chrome.runtime.sendMessage({ 
+                action: "AUTH_STATE_CHANGED", 
+                user: data.wordstream_user_info,
+                isAuthenticated: true,
+                source: 'popup_restore'
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking stored auth:', error);
+      }
+    };
+
+    checkStoredAuth();
+  }, []);
+
   // Load dark mode preference
   useEffect(() => {
     chrome.storage.local.get(['darkMode'], (result) => {

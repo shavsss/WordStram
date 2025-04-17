@@ -169,6 +169,35 @@ export async function signOut(): Promise<void> {
  */
 export async function checkAndRefreshAuth(): Promise<boolean> {
   try {
+    // First check Firebase's current auth state
+    const services = await getFirebaseServices();
+    if (services.auth && services.auth.currentUser) {
+      // We have a current user, refresh the token
+      try {
+        const token = await services.auth.currentUser.getIdToken(true);
+        console.log('Auth token refreshed successfully');
+        
+        // Update user info in storage with fresh timestamp
+        const userInfo = {
+          uid: services.auth.currentUser.uid,
+          email: services.auth.currentUser.email,
+          displayName: services.auth.currentUser.displayName,
+          photoURL: services.auth.currentUser.photoURL,
+          lastAuthenticated: Date.now()
+        };
+        
+        await chrome.storage.local.set({
+          'wordstream_user_info': userInfo
+        });
+        
+        return true;
+      } catch (error) {
+        console.error('Error refreshing Firebase token:', error);
+        // Continue to check storage as fallback
+      }
+    }
+    
+    // Check storage as fallback
     const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
     const userData = authInfo.wordstream_user_info;
     
@@ -188,6 +217,17 @@ export async function checkAndRefreshAuth(): Promise<boolean> {
           ...userData,
           lastAuthenticated: now
         }
+      });
+      
+      // Broadcast refreshed auth state
+      chrome.runtime.sendMessage({ 
+        action: "AUTH_STATE_CHANGED", 
+        user: {
+          ...userData,
+          lastAuthenticated: now
+        },
+        isAuthenticated: true,
+        source: 'refresh_auth'
       });
     }
     
