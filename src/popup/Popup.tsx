@@ -22,7 +22,9 @@ import {
   Edit3, 
   BookOpen,
   Globe,
-  Sparkles
+  Sparkles,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 // UI components import
@@ -31,10 +33,14 @@ import { Button } from '../components/ui/button';
 
 // Auth service import
 import { useAuth } from '../hooks/useAuth';
+import { useAuth as useAuthModule } from '../auth';
 
 // Import feature components
 import { GeminiChat } from '../features/gemini/GeminiChat';
 import { NotesAndSummaries } from '../features/notes/NotesAndSummaries';
+
+// Import countries list
+import countries from '../utils/countries';
 
 /**
  * Checks if the current website is a compatible site
@@ -99,7 +105,8 @@ export default function Popup() {
   const [showFloatingButtons, setShowFloatingButtons] = useState(true);
   
   // Auth context
-  const { user, loading, error, isAuthenticated, signInWithGoogle, logout } = useAuth();
+  const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();
+  const authModule = useAuthModule();
 
   // Load dark mode preference
   useEffect(() => {
@@ -224,11 +231,81 @@ export default function Popup() {
     );
   };
 
+  // Enhanced Google Sign In
+  const handleGoogleSignIn = async () => {
+    try {
+      // Use message passing instead of direct hook call
+      const response = await chrome.runtime.sendMessage({ 
+        action: "SIGN_IN_WITH_GOOGLE" 
+      });
+      
+      if (!response || !response.success) {
+        throw new Error(response?.error || "Google sign-in failed");
+      }
+      
+      // Success - the auth state will be updated automatically
+      console.log('GoogleSignIn successful via message passing');
+    } catch (error) {
+      console.error("Login error:", error);
+      // The hook will handle setting the error state
+    }
+  };
+
+  // Email/Password sign in
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [age, setAge] = useState('');
+  const [country, setCountry] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  
+  const handleEmailPasswordAuth = async () => {
+    if (!email || !password) {
+      alert('Please enter your email and password');
+      return;
+    }
+    
+    if (isSignUp) {
+      // Validate form fields for sign up
+      if (password !== confirmPassword) {
+        alert('Passwords do not match');
+        return;
+      }
+      
+      if (!age) {
+        alert('Please enter your age');
+        return;
+      }
+      
+      if (!country) {
+        alert('Please select your country');
+        return;
+      }
+    }
+    
+    try {
+      if (isSignUp) {
+        // Register new user
+        await authModule.signUpWithEmailPassword(email, password);
+        // Additional user info would be saved to database here
+        // We would create a user profile with age and country
+      } else {
+        // Sign in existing user
+        await authModule.signInWithEmailPassword(email, password);
+      }
+    } catch (error) {
+      console.error('Email/Password auth error:', error);
+      // Error state is handled by the auth module
+    }
+  };
+
   // Render login screen
   if (!isAuthenticated && !loading) {
     return (
       <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
-        <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[160px] w-full relative overflow-hidden">
+        <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[120px] w-full relative overflow-hidden">
           <div className="absolute top-4 right-4">
             <Button 
               variant="ghost" 
@@ -250,9 +327,9 @@ export default function Popup() {
           </div>
         </div>
         
-        <div className="px-6 pt-12 pb-6 bg-white dark:bg-gray-900 min-h-[360px] flex flex-col">
+        <div className="px-6 pt-12 pb-6 bg-white dark:bg-gray-900 min-h-[380px] flex flex-col dark:text-white">
           <h1 className="text-2xl font-bold text-center mb-1 text-gray-900 dark:text-white">WordStream</h1>
-          <p className="text-center text-gray-500 dark:text-gray-400 mb-8">Advanced Language Learning from Videos</p>
+          <p className="text-center text-gray-500 dark:text-gray-400 mb-6">Advanced Language Learning from Videos</p>
           
           {error && (
             <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-lg mb-4 text-sm">
@@ -260,11 +337,119 @@ export default function Popup() {
             </div>
           )}
           
+          <div className="mb-4">
+            <div className="flex justify-between mb-1">
+              <span className="text-sm font-medium text-gray-900 dark:text-white">{isSignUp ? 'Sign Up with Email' : 'Sign In with Email'}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-blue-600 dark:text-blue-400"
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  // Clear fields when switching modes
+                  setConfirmPassword('');
+                  setAge('');
+                  setCountry('');
+                }}
+              >
+                {isSignUp ? 'Already have an account? Sign In' : 'No account? Sign Up'}
+              </Button>
+            </div>
+            
+            <div className="space-y-3">
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+              />
+              
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                />
+                <button 
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 dark:text-gray-400"
+                >
+                  {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}
+                </button>
+              </div>
+              
+              {isSignUp && (
+                <>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      placeholder="Confirm Password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 dark:text-gray-400"
+                    >
+                      {showConfirmPassword ? <Eye size={18} /> : <EyeOff size={18} />}
+                    </button>
+                  </div>
+                  
+                  <input
+                    type="number"
+                    placeholder="Age"
+                    value={age}
+                    onChange={(e) => setAge(e.target.value)}
+                    min="1"
+                    max="120"
+                    className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                  
+                  <select
+                    value={country}
+                    onChange={(e) => setCountry(e.target.value)}
+                    className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  >
+                    <option value="">Select Country</option>
+                    {countries.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+              
+              <Button
+                className="w-full h-10"
+                onClick={handleEmailPasswordAuth}
+                isLoading={loading}
+              >
+                {isSignUp ? 'Sign Up' : 'Sign In'}
+              </Button>
+            </div>
+          </div>
+          
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300 dark:border-gray-700"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400">or</span>
+            </div>
+          </div>
+          
           <Button 
             fullWidth 
             variant="primary"
             icon={<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18" height="18" alt="Google" />}
-            onClick={signInWithGoogle}
+            onClick={handleGoogleSignIn}
             isLoading={loading}
             className="h-11 mb-3"
           >

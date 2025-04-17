@@ -19,6 +19,7 @@ import {
   getFirebaseServices, 
   initializeFirebase,
   initializeAuth,
+  isExtensionContextValid,
   signInWithEmail as authSignInWithEmail,
   signInWithGoogle as authSignInWithGoogle,
   signOut as authSignOut,
@@ -40,11 +41,32 @@ export default function useAuth() {
     error: null
   });
 
+  // Track extension context validation status
+  const [isContextValid, setIsContextValid] = useState<boolean>(true);
+
+  // Function to check and update context validity
+  const checkExtensionContext = () => {
+    const isValid = isExtensionContextValid();
+    setIsContextValid(isValid);
+    return isValid;
+  };
+
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
 
     const setupAuth = async () => {
       try {
+        // Check extension context first
+        if (!checkExtensionContext()) {
+          setAuthState({
+            isAuthenticated: false,
+            user: null,
+            loading: false,
+            error: "Extension context is invalid. Try reloading the extension."
+          });
+          return;
+        }
+
         // Ensure Firebase is initialized
         await initializeFirebase();
         
@@ -59,49 +81,102 @@ export default function useAuth() {
         
         // Set up auth state listener
         unsubscribe = onAuthStateChanged(services.auth, (authUser) => {
-          setAuthState({
-            isAuthenticated: !!authUser,
-            user: authUser,
-            loading: false,
-            error: null
-          });
+          // Recheck context validity when auth state changes
+          if (checkExtensionContext()) {
+            setAuthState({
+              isAuthenticated: !!authUser,
+              user: authUser,
+              loading: false,
+              error: null
+            });
+          }
         }, (err) => {
+          // Check if error is related to extension context
+          if (err.message?.includes('extension context') ||
+              err.message?.includes('Extension context') ||
+              (err as any).code === 'auth/internal-error') {
+            setIsContextValid(false);
+            setAuthState({
+              isAuthenticated: false,
+              user: null,
+              loading: false,
+              error: "Extension context is invalid. Please reload the extension."
+            });
+          } else {
+            setAuthState({
+              isAuthenticated: false,
+              user: null,
+              loading: false,
+              error: err.message
+            });
+          }
+        });
+      } catch (error: any) {
+        console.error("Failed to set up auth state listener:", error);
+        
+        // Check if error is context-related
+        if (error.message?.includes('extension context') || 
+            error.message?.includes('Extension context')) {
+          setIsContextValid(false);
+          setAuthState({
+            isAuthenticated: false,
+            user: null, 
+            loading: false,
+            error: "Extension context is invalid. Please reload the extension."
+          });
+        } else {
           setAuthState({
             isAuthenticated: false,
             user: null,
             loading: false,
-            error: err.message
+            error: error.message || "Failed to initialize authentication"
           });
-        });
-      } catch (error: any) {
-        console.error("Failed to set up auth state listener:", error);
-        setAuthState({
-          isAuthenticated: false,
-          user: null,
-          loading: false,
-          error: error.message || "Failed to initialize authentication"
-        });
+        }
       }
     };
 
     setupAuth();
 
-    // Clean up subscription on unmount
+    // Set up periodic context validation check
+    const contextCheckInterval = setInterval(() => {
+      if (!checkExtensionContext() && isContextValid) {
+        // Context has become invalid
+        setAuthState({
+          isAuthenticated: false,
+          user: null,
+          loading: false,
+          error: "Extension context has become invalid. Please reload the extension."
+        });
+      }
+    }, 5000);
+
+    // Clean up subscription and interval on unmount
     return () => {
       if (unsubscribe) unsubscribe();
+      clearInterval(contextCheckInterval);
     };
   }, []);
 
   const signInWithEmailPassword = async (email: string, password: string) => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
+      // Check extension context first
+      if (!checkExtensionContext()) {
+        throw new Error("Extension context is invalid. Please reload the extension.");
+      }
+      
       await authSignInWithEmail(email, password);
       return true;
     } catch (err: any) {
+      const errorMessage = err.message?.includes('extension context') || 
+                          err.message?.includes('Extension context') ?
+                          "Extension context is invalid. Please reload the extension." :
+                          err.message;
+      
       setAuthState(prev => ({ 
         ...prev, 
         loading: false, 
-        error: err.message
+        error: errorMessage
       }));
       throw err;
     }
@@ -110,13 +185,23 @@ export default function useAuth() {
   const signUpWithEmailPassword = async (email: string, password: string) => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
+      // Check extension context first
+      if (!checkExtensionContext()) {
+        throw new Error("Extension context is invalid. Please reload the extension.");
+      }
+      
       await authCreateUser(email, password);
       return true;
     } catch (err: any) {
+      const errorMessage = err.message?.includes('extension context') || 
+                          err.message?.includes('Extension context') ?
+                          "Extension context is invalid. Please reload the extension." :
+                          err.message;
+      
       setAuthState(prev => ({ 
         ...prev, 
         loading: false, 
-        error: err.message
+        error: errorMessage
       }));
       throw err;
     }
@@ -125,13 +210,23 @@ export default function useAuth() {
   const signInWithGoogle = async () => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
+      // Check extension context first
+      if (!checkExtensionContext()) {
+        throw new Error("Extension context is invalid. Please reload the extension.");
+      }
+      
       await authSignInWithGoogle();
       return true;
     } catch (err: any) {
+      const errorMessage = err.message?.includes('extension context') || 
+                          err.message?.includes('Extension context') ?
+                          "Extension context is invalid. Please reload the extension." :
+                          err.message;
+      
       setAuthState(prev => ({ 
         ...prev, 
         loading: false, 
-        error: err.message
+        error: errorMessage
       }));
       throw err;
     }
@@ -140,6 +235,11 @@ export default function useAuth() {
   const logout = async () => {
     setAuthState(prev => ({ ...prev, loading: true, error: null }));
     try {
+      // Check extension context first
+      if (!checkExtensionContext()) {
+        throw new Error("Extension context is invalid. Please reload the extension.");
+      }
+      
       await authSignOut();
       setAuthState({
         isAuthenticated: false,
@@ -148,10 +248,15 @@ export default function useAuth() {
         error: null
       });
     } catch (err: any) {
+      const errorMessage = err.message?.includes('extension context') || 
+                          err.message?.includes('Extension context') ?
+                          "Extension context is invalid. Please reload the extension." :
+                          err.message;
+      
       setAuthState(prev => ({ 
         ...prev, 
         loading: false, 
-        error: err.message
+        error: errorMessage
       }));
       throw err;
     }
@@ -159,7 +264,17 @@ export default function useAuth() {
 
   const reloadAuthState = async () => {
     setAuthState(prev => ({ ...prev, loading: true }));
-    // This will trigger the auth state listener which will update the state
+    // Check context validity when manually reloading auth state
+    if (!checkExtensionContext()) {
+      setAuthState({
+        isAuthenticated: false,
+        user: null,
+        loading: false,
+        error: "Extension context is invalid. Please reload the extension."
+      });
+      return;
+    }
+    // Otherwise trigger auth state listener update through Firebase
   };
 
   return {
@@ -167,10 +282,12 @@ export default function useAuth() {
     user: authState.user,
     loading: authState.loading,
     error: authState.error,
+    isContextValid, // Expose context validity status
     signInWithEmailPassword,
     signUpWithEmailPassword,
     signInWithGoogle,
     logout,
-    reloadAuthState
+    reloadAuthState,
+    checkExtensionContext // Expose function to manually check context
   };
 }

@@ -6,8 +6,6 @@
 
 import { initializeFirebase, getFirebaseServices } from '../auth';
 import { collection, query, where, getDocs, updateDoc, addDoc } from 'firebase/firestore';
-import { GEMINI_API_CONFIG } from '../config/api-config';
-import { AI_ASSISTANT_CONTEXT } from '../features/gemini/chat-context';
 
 console.log('WordStream: Background script initialized');
 
@@ -20,8 +18,49 @@ async function initializeBackgroundServices() {
     // Validate Gemini API key
     await validateGeminiApiKey();
     
-    // Sync auth state to make it available for content scripts
-    await syncAuthStateToStorage();
+    // Set up periodic auth token refresh
+    setupAuthTokenRefresh();
+    
+    // Immediately check and restore authentication state
+    try {
+      // Check if we have stored auth data
+      const data = await chrome.storage.local.get(['wordstream_user_info']);
+      if (data.wordstream_user_info) {
+        console.log('WordStream: Restoring authentication state from storage');
+        
+        // Get Firebase auth services
+        const services = await getFirebaseServices();
+        
+        // If we have auth services and user data, broadcast auth state
+        if (services.auth) {
+          // Wait for onAuthStateChanged to fire once
+          await new Promise<void>(resolve => {
+            const unsubscribe = services.auth!.onAuthStateChanged((user) => {
+              // If Firebase already has a user, we're good
+              if (user) {
+                console.log('WordStream: Firebase auth state restored automatically');
+              } 
+              // If Firebase doesn't have a user but we have storage data, broadcast the stored data
+              else if (data.wordstream_user_info) {
+                console.log('WordStream: Broadcasting stored auth state to all contexts');
+                chrome.runtime.sendMessage({ 
+                  action: 'AUTH_STATE_CHANGED',
+                  user: data.wordstream_user_info,
+                  isAuthenticated: true,
+                  source: 'background_init'
+                });
+              }
+              
+              unsubscribe();
+              resolve();
+            });
+          });
+        }
+      }
+    } catch (error) {
+      console.error('WordStream: Error restoring auth state:', error);
+      // Non-fatal error, continue initialization
+    }
     
     return true;
   } catch (error) {
@@ -31,36 +70,35 @@ async function initializeBackgroundServices() {
 }
 
 /**
- * Sync the current authentication state to chrome.storage.local
- * This ensures content scripts can access the current auth state
+ * Set up periodic authentication token refresh
  */
-async function syncAuthStateToStorage() {
+function setupAuthTokenRefresh() {
+  // Check and refresh auth token every 15 minutes
+  setInterval(async () => {
+    try {
+      const { checkAndRefreshAuth } = await import('../auth/auth-manager');
+      await checkAndRefreshAuth();
+      console.log('WordStream: Auth token refresh check completed');
+    } catch (error) {
+      console.error('WordStream: Error checking/refreshing auth token:', error);
+    }
+  }, 15 * 60 * 1000); // Every 15 minutes
+}
+
+/**
+ * Handle Google Sign In
+ */
+async function handleGoogleSignIn() {
   try {
-    const services = await getFirebaseServices();
-    if (!services.initialized || !services.auth) {
-      console.warn('WordStream: Cannot sync auth state - Firebase not initialized');
-      return;
-    }
+    // Dynamically import auth manager to ensure we're getting the latest version
+    const { signInWithGoogle } = await import('../auth/auth-manager');
+    const result = await signInWithGoogle();
     
-    const user = services.auth.currentUser;
-    if (user) {
-      // Store user info in chrome.storage.local
-      const userInfo = {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL
-      };
-      
-      await chrome.storage.local.set({ 'wordstream_user_info': userInfo });
-      console.log('WordStream: Auth state synced to storage during initialization');
-    } else {
-      // Clear existing user info if not logged in
-      await chrome.storage.local.remove('wordstream_user_info');
-      console.log('WordStream: No user logged in, cleared storage during initialization');
-    }
+    console.log('WordStream: Google sign in successful');
+    return result.user;
   } catch (error) {
-    console.error('WordStream: Error syncing auth state to storage:', error);
+    console.error('WordStream: Error in Google sign in:', error);
+    throw error;
   }
 }
 
@@ -128,6 +166,33 @@ function setupMessageListeners() {
 
     // Handle message based on action type
     switch (message.action) {
+      case 'SIGN_IN_WITH_GOOGLE':
+        // Handle Google Sign In
+        console.log('WordStream: Processing Google Sign In request');
+        handleGoogleSignIn()
+          .then(user => {
+            // Broadcast authentication state change
+            chrome.runtime.sendMessage({ 
+              action: "AUTH_STATE_CHANGED", 
+              user,
+              isAuthenticated: true
+            });
+            
+            // Send success response
+            sendResponse({ 
+              success: true, 
+              user 
+            });
+          })
+          .catch(error => {
+            console.error('WordStream: Google Sign In error:', error);
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : "Authentication failed"
+            });
+          });
+        return true; // Indicates async response
+        
       case 'SAVE_NOTE':
         handleSaveNote(message.data)
           .then(result => sendResponse(result))
@@ -140,47 +205,23 @@ function setupMessageListeners() {
           .catch(error => sendResponse({ isAuthenticated: false, error: error instanceof Error ? error.message : String(error) }));
         return true;
         
-      case 'REFRESH_AUTH_STATE':
-        syncAuthStateToStorage()
-          .then(() => sendResponse({ success: true }))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
-        return true;
-        
       case 'GEMINI_CHAT':
         // Handle Gemini chat request
         console.log('WordStream: Processing Gemini chat request');
         
-        // Process Gemini chat request with better authentication handling
-        (async () => {
+        // Verify user authentication
+        if (!message.userId) {
+          console.error('WordStream: Gemini request missing user ID');
+          sendResponse({
+            success: false,
+            error: 'Authentication required'
+          });
+          return true;
+        }
+        
+        // Get API key from storage
+        chrome.storage.local.get(['api_keys'], async (result) => {
           try {
-            // First check Firebase authentication (most authoritative)
-            const services = await getFirebaseServices();
-            let user = services.auth?.currentUser || null;
-            
-            // If not authenticated in Firebase, check chrome.storage.local as backup
-            if (!user) {
-              const result = await chrome.storage.local.get(['wordstream_user_info']);
-              if (result?.wordstream_user_info) {
-                console.log('WordStream: User found in storage but not in Firebase, syncing auth state');
-                user = result.wordstream_user_info;
-                
-                // Try to refresh auth state
-                await syncAuthStateToStorage();
-              }
-            }
-            
-            // Verify user authentication
-            if (!user) {
-              console.error('WordStream: User not authenticated for Gemini request');
-              sendResponse({
-                success: false,
-                error: 'Authentication required'
-              });
-              return;
-            }
-            
-            // Get API key from storage
-            const result = await chrome.storage.local.get(['api_keys']);
             let apiKey = result?.api_keys?.GOOGLE_API_KEY;
             
             // If API key not found, use fallback
@@ -194,25 +235,18 @@ function setupMessageListeners() {
               });
             }
             
-            // Update URL from v1beta to v1 and ensure compatibility with gemini-pro models
-            const url = GEMINI_API_CONFIG.getApiUrl(apiKey);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
             
             const requestBody: GeminiRequestBody = {
               contents: []
             };
             
-            // Add AI Assistant context as system message
-            requestBody.contents.push({
-              role: 'system',
-              parts: [{ text: AI_ASSISTANT_CONTEXT }]
-            });
-            
             // Add message history if available
             if (message.history && message.history.length > 0) {
-              requestBody.contents = requestBody.contents.concat(message.history.map((msg: GeminiMessage) => ({
+              requestBody.contents = message.history.map((msg: GeminiMessage) => ({
                 role: msg.role === 'user' ? 'user' : 'model',
                 parts: [{ text: msg.content }]
-              })));
+              }));
             }
             
             // Add the current message
@@ -232,59 +266,54 @@ function setupMessageListeners() {
             console.log('WordStream: Sending request to Gemini API');
             
             // Send request to Gemini API
-            const response = await fetch(url, {
+            fetch(url, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify(requestBody)
-            });
-            
-            if (!response.ok) {
-              const errorData = await response.json();
-              console.error('WordStream: Gemini API error:', errorData);
-              
-              // שיפור הודעות השגיאה למשתמש
-              let errorMessage = `HTTP error ${response.status}`;
-              
-              if (errorData.error?.message) {
-                // בדיקה למקרה שהשגיאה הינה 'model not found' - לעיתים קרובות זה קורה כאשר יש בעיה עם הגרסה
-                if (errorData.error.message.includes('models/gemini-pro is not found')) {
-                  errorMessage = 'Gemini API error: The model "gemini-pro" is not available or the API version is incorrect. Please update the extension.';
-                  console.log('WordStream: Gemini API model version issue detected');
-                } else {
-                  errorMessage = errorData.error.message;
-                }
+            })
+            .then(response => {
+              if (!response.ok) {
+                return response.json().then(errorData => {
+                  console.error('WordStream: Gemini API error:', errorData);
+                  throw new Error(errorData.error?.message || `HTTP error ${response.status}`);
+                });
               }
+              return response.json();
+            })
+            .then(data => {
+              console.log('WordStream: Gemini API response received');
+              // Extract the text from the response
+              const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
               
-              throw new Error(errorMessage);
-            }
-            
-            const data = await response.json();
-            console.log('WordStream: Gemini API response received');
-            
-            // Extract the text from the response
-            const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
-            
-            // Send the response back to the content script
-            sendResponse({
-              success: true,
-              content: responseText
+              // Send the response back to the content script
+              sendResponse({
+                success: true,
+                content: responseText
+              });
+              
+              // Save chat to Firebase
+              saveGeminiChatToFirebase(message.userId, message.query, responseText, message.context)
+                .catch(error => console.error('WordStream: Error saving chat to Firebase:', error));
+            })
+            .catch(error => {
+              console.error('WordStream: Error calling Gemini API:', error);
+              sendResponse({
+                success: false,
+                error: error.message || 'Error calling Gemini API'
+              });
             });
-            
-            // Save chat to Firebase
-            saveGeminiChatToFirebase(user.uid, message.query, responseText, message.context)
-              .catch(error => console.error('WordStream: Error saving chat to Firebase:', error));
-            
           } catch (error) {
-            console.error('WordStream: Error in Gemini chat processing:', error);
+            console.error('WordStream: Error processing Gemini request:', error);
             sendResponse({
               success: false,
-              error: error instanceof Error ? error.message : 'Error processing Gemini request'
+              error: error instanceof Error ? error.message : String(error)
             });
           }
-        })();
+        });
         
+        // Return true to indicate we will respond asynchronously
         return true;
         
       case 'CHECK_GEMINI_CONFIG':
@@ -418,24 +447,72 @@ async function handleSaveNote(noteData: any) {
  */
 async function getAuthState() {
   try {
+    // First check local storage for cached auth information
+    const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+    const userInfo = authInfo.wordstream_user_info;
+    
+    if (userInfo) {
+      console.log('WordStream: User is authenticated (from storage)');
+      
+      // Update last authentication time
+      const updatedUserInfo = {
+        ...userInfo,
+        lastAuthenticated: Date.now()
+      };
+      
+      // Save updated timestamp
+      await chrome.storage.local.set({
+        'wordstream_user_info': updatedUserInfo
+      });
+      
+      return {
+        isAuthenticated: true,
+        user: updatedUserInfo,
+        source: 'storage'
+      };
+    }
+    
+    // Fallback to Firebase check if not in storage
     const services = await getFirebaseServices();
-    if (!services.initialized || !services.auth) {
+    if (!services.auth) {
       return { isAuthenticated: false };
     }
     
-    const user = services.auth.currentUser;
-    if (user) {
+    const currentUser = services.auth.currentUser;
+    
+    if (currentUser) {
+      console.log('WordStream: User is authenticated (from Firebase)');
+      
+      // Create user info object with current timestamp
+      const updatedUserInfo = {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        displayName: currentUser.displayName,
+        photoURL: currentUser.photoURL,
+        lastAuthenticated: Date.now()
+      };
+      
+      // Cache user info in storage for future checks
+      await chrome.storage.local.set({
+        'wordstream_user_info': updatedUserInfo
+      });
+      
       return {
         isAuthenticated: true,
-        user: {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL
-        }
+        user: updatedUserInfo,
+        source: 'firebase'
       };
     } else {
-    return { isAuthenticated: false };
+      console.log('WordStream: User is not authenticated');
+      
+      // Clean up any stale user info in storage
+      try {
+        await chrome.storage.local.remove(['wordstream_user_info']);
+      } catch (error) {
+        console.warn('WordStream: Error cleaning up stale user info:', error);
+      }
+      
+      return { isAuthenticated: false };
     }
   } catch (error) {
     console.error('WordStream: Error getting auth state:', error);

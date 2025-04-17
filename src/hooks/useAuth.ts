@@ -37,6 +37,54 @@ export function useAuth() {
     setError(authModule.error);
   }, [authModule.user, authModule.loading, authModule.error]);
 
+  // Listen for auth state changes via message passing
+  useEffect(() => {
+    const authStateListener = (message: any) => {
+      if (message.action === 'AUTH_STATE_CHANGED') {
+        if (message.isAuthenticated && message.user) {
+          setUser({
+            uid: message.user.uid,
+            email: message.user.email,
+            displayName: message.user.displayName,
+            photoURL: message.user.photoURL
+          });
+          setLoading(false);
+          setError(null);
+        } else {
+          setUser(null);
+          setLoading(false);
+        }
+      }
+    };
+
+    // Add the listener
+    chrome.runtime.onMessage.addListener(authStateListener);
+
+    // Check for auth state from storage on mount
+    const checkStoredAuth = async () => {
+      try {
+        const data = await chrome.storage.local.get(['wordstream_user_info']);
+        if (data.wordstream_user_info) {
+          setUser(data.wordstream_user_info);
+          setLoading(false);
+        } else {
+          // No stored auth, continue with module auth state
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Error checking stored auth:', error);
+        setLoading(false);
+      }
+    };
+
+    checkStoredAuth();
+
+    // Clean up listener on unmount
+    return () => {
+      chrome.runtime.onMessage.removeListener(authStateListener);
+    };
+  }, []);
+
   // התחברות באמצעות Google
   const signInWithGoogle = useCallback(async () => {
     try {
@@ -57,6 +105,10 @@ export function useAuth() {
     try {
       setLoading(true);
       await authModule.logout();
+      
+      // Also remove from storage
+      await chrome.storage.local.remove(['wordstream_user_info']);
+      
       return true;
     } catch (error: any) {
       console.error('Sign out error:', error);

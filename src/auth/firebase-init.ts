@@ -7,9 +7,18 @@
  * This file centralizes all Firebase initialization and exports services in an organized way.
  */
 import { initializeApp, FirebaseApp, getApps, deleteApp } from 'firebase/app';
-import { getAuth, Auth } from 'firebase/auth';
+import { getAuth, Auth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
+
+// Type for Firebase services
+interface FirebaseServices {
+  initialized: boolean;
+  app: FirebaseApp | null;
+  auth: Auth | null;
+  firestore: Firestore | null;
+  storage: FirebaseStorage | null;
+}
 
 // Global instances
 let firebaseApp: FirebaseApp | null = null;
@@ -26,26 +35,58 @@ const isServiceWorker = typeof window === 'undefined' ||
                        (typeof self !== 'undefined' && (self as any).constructor?.name === 'ServiceWorkerGlobalScope');
 
 // Promise that will be resolved when Firebase is initialized successfully
-let initializationPromise: Promise<{
-  initialized: boolean;
-  app: FirebaseApp | null;
-  auth: Auth | null;
-  firestore: Firestore | null;
-  storage: FirebaseStorage | null;
-}> | null = null;
-
-// Flag to prevent multiple concurrent initialization attempts
-let isInitializationInProgress = false;
+let initializationPromise: Promise<FirebaseServices> | null = null;
 
 // Last initialization timestamp to prevent too frequent reinitializations
 let lastInitializationTime = 0;
 const MIN_REINITIALIZATION_INTERVAL = 2000; // 2 seconds
 
 /**
+ * More comprehensive check if extension context is valid
+ * This helps prevent "Extension context invalidated" errors
+ */
+export function isExtensionContextValid(): boolean {
+  if (typeof chrome === 'undefined') {
+    console.warn('Chrome API is not available');
+    return false;
+  }
+  
+  if (!chrome.runtime) {
+    console.warn('Chrome runtime is not available');
+    return false;
+  }
+  
+  try {
+    // This will throw if extension context is invalidated
+    const extensionId = chrome.runtime.id;
+    if (!extensionId) {
+      console.warn('Extension ID is not available - context may be invalidated');
+      return false;
+    }
+    
+    // Additional check - try to access chrome APIs
+    if (typeof chrome.storage === 'undefined') {
+      console.warn('Chrome storage API is not available');
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.warn('Error checking extension context:', error);
+    return false;
+  }
+}
+
+/**
  * Load Firebase configuration from storage or fallback to static config
  */
 async function getFirebaseConfig() {
   try {
+    // Check extension context before trying to access storage
+    if (!isExtensionContextValid()) {
+      throw new Error('Extension context is invalid');
+    }
+    
     // Try to get the API key from storage first
     const storageResult = await chrome.storage.local.get('firebase_config');
     if (storageResult && storageResult.firebase_config) {
@@ -128,14 +169,16 @@ function isFirebaseAppValid(app: FirebaseApp | null): boolean {
  * 
  * This is the MAIN function for initializing Firebase in the application.
  * All components should call this function to ensure Firebase is initialized.
+ * 
+ * Improved with retry logic, better error handling, and extension context validation.
  */
-export function initializeFirebase(): Promise<{
-  initialized: boolean;
-  app: FirebaseApp | null;
-  auth: Auth | null;
-  firestore: Firestore | null;
-  storage: FirebaseStorage | null;
-}> {
+export function initializeFirebase(): Promise<FirebaseServices> {
+  // First check if extension context is valid with our enhanced check
+  if (!isExtensionContextValid()) {
+    console.error('Firebase initialization failed: Extension context is invalid');
+    return Promise.reject(new Error('Extension context is invalid'));
+  }
+  
   // Check if the app is still valid before returning existing promise
   if (firebaseApp && !isFirebaseAppValid(firebaseApp)) {
     console.log('Firebase app has been deleted, forcing reinitialization');
@@ -144,123 +187,134 @@ export function initializeFirebase(): Promise<{
     firebaseApp = null;
   }
 
-  // Always create a new initialization in service worker context, or use existing one
-  if (initializationPromise && !isServiceWorker) {
-    return initializationPromise;
-  }
+  // Return existing promise if available and valid
+  if (initializationPromise) return initializationPromise;
   
-  // If initialization is already in progress, wait a bit and try again
-  if (isInitializationInProgress) {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(initializeFirebase());
-      }, 500);
-    });
-  }
-  
-  // Check if we've tried to initialize too frequently
-  const now = Date.now();
-  if (now - lastInitializationTime < MIN_REINITIALIZATION_INTERVAL) {
-    console.log(`Delaying Firebase initialization (last attempt was ${now - lastInitializationTime}ms ago)`);
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(initializeFirebase());
-      }, MIN_REINITIALIZATION_INTERVAL);
-    });
-  }
-  
-  lastInitializationTime = now;
-  isInitializationInProgress = true;
-  
-  // Create a new initialization promise
-  initializationPromise = new Promise(async (resolve, reject) => {
-    try {
-      // Get Firebase configuration
-      const firebaseConfig = await getFirebaseConfig();
-      
-      // Clean up existing instances if needed
-      if (isServiceWorker || getApps().length > 1) {
+  // Create a new initialization promise using async IIFE pattern
+  initializationPromise = (async () => {
+    const MAX_RETRIES = 3;
+    let retryCount = 0;
+    let lastError: any = null;
+    
+    while (retryCount < MAX_RETRIES) {
+      try {
+        // Recheck extension context with each retry attempt
+        if (!isExtensionContextValid()) {
+          throw new Error('Extension context is invalid');
+        }
+        
+        // Check if we've tried to initialize too frequently
+        const now = Date.now();
+        if (now - lastInitializationTime < MIN_REINITIALIZATION_INTERVAL) {
+          await new Promise(resolve => 
+            setTimeout(resolve, MIN_REINITIALIZATION_INTERVAL - (now - lastInitializationTime))
+          );
+        }
+        
+        lastInitializationTime = Date.now();
+        
+        // Get Firebase configuration
+        const firebaseConfig = await getFirebaseConfig();
+        
+        // Clean up existing instances if needed
         await cleanupExistingFirebaseInstances();
-      }
-      
-      // If app already exists and we're not in service worker, use it
-      const apps = getApps();
-      if (apps.length > 0 && !isServiceWorker) {
-        firebaseApp = apps[0];
-        if (!isFirebaseAppValid(firebaseApp)) {
-          console.log('Existing Firebase app is invalid, creating a new one');
-          // Try to delete it if it exists but is invalid
+        
+        // Get existing apps
+        const apps = getApps();
+        
+        // If app already exists and valid, use it
+        if (apps.length > 0 && !isServiceWorker) {
+          firebaseApp = apps[0];
+          if (!isFirebaseAppValid(firebaseApp)) {
+            console.log('Existing Firebase app is invalid, creating a new one');
+            // Try to delete it if it exists but is invalid
+            try {
+              await deleteApp(firebaseApp);
+            } catch (e) {
+              // Ignore errors when deleting already-deleted app
+            }
+            firebaseApp = null;
+          }
+        }
+        
+        // Create a new app if needed
+        if (!firebaseApp) {
           try {
-            await deleteApp(firebaseApp);
-          } catch (e) {
-            // Ignore errors when deleting already-deleted app
-          }
-          firebaseApp = null;
-        }
-      }
-      
-      // Create a new app if needed
-      if (!firebaseApp) {
-        try {
-          console.log('Creating new Firebase app instance');
-          firebaseApp = initializeApp(firebaseConfig);
-        } catch (err: any) {
-          // If app already exists, try again with a unique name
-          if (err.code === 'app/duplicate-app') {
-            const uniqueName = `app-${Date.now()}`;
-            console.log(`App already exists, creating with unique name: ${uniqueName}`);
+            console.log('Creating new Firebase app instance');
+            
+            // Generate a unique name for this instance to avoid collisions
+            const uniqueName = isServiceWorker ? 
+              `service-worker-${Date.now()}` : 
+              `app-${Date.now()}`;
+              
+            // Always use a unique name to avoid duplicate app issues
             firebaseApp = initializeApp(firebaseConfig, uniqueName);
-          } else {
-            throw err;
+          } catch (err: any) {
+            if (err.code === 'app/duplicate-app') {
+              // If we get here, we should try with an even more unique name
+              const uniquerName = `app-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+              console.log(`App already exists, creating with more unique name: ${uniquerName}`);
+              firebaseApp = initializeApp(firebaseConfig, uniquerName);
+            } else {
+              throw err;
+            }
           }
         }
+        
+        if (!firebaseApp) {
+          throw new Error("Firebase app initialization failed");
+        }
+        
+        // Verify the app is valid
+        if (!isFirebaseAppValid(firebaseApp)) {
+          throw new Error("Firebase app is invalid immediately after initialization");
+        }
+        
+        // Initialize Firebase services
+        firebaseAuth = getAuth(firebaseApp);
+        
+        // Set persistence to LOCAL to keep the user logged in between sessions
+        try {
+          await setPersistence(firebaseAuth, browserLocalPersistence);
+          console.log('Firebase Auth persistence set to LOCAL');
+        } catch (error) {
+          console.error('Error setting auth persistence:', error);
+          // Continue despite error - default persistence will be used
+        }
+        
+        firestoreDb = getFirestore(firebaseApp);
+        storageService = getStorage(firebaseApp);
+        
+        // Mark initialization as complete
+        isInitialized = true;
+        isFirebaseValid = true;
+        
+        // Return the initialized services
+        return {
+          initialized: true,
+          app: firebaseApp,
+          auth: firebaseAuth,
+          firestore: firestoreDb,
+          storage: storageService
+        };
+      } catch (error) {
+        lastError = error;
+        retryCount++;
+        
+        console.error(`Failed to initialize Firebase (attempt ${retryCount}/${MAX_RETRIES}):`, error);
+        
+        // Wait longer between retries
+        const backoffTime = 1000 * Math.pow(2, retryCount - 1); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
       }
-      
-      if (!firebaseApp) {
-        throw new Error("Firebase app initialization failed");
-      }
-      
-      // Verify the app is valid
-      if (!isFirebaseAppValid(firebaseApp)) {
-        throw new Error("Firebase app is invalid immediately after initialization");
-      }
-      
-      // Initialize Firebase services
-      firebaseAuth = getAuth(firebaseApp);
-      firestoreDb = getFirestore(firebaseApp);
-      storageService = getStorage(firebaseApp);
-      
-      // Mark initialization as complete
-      isInitialized = true;
-      isFirebaseValid = true;
-      
-      // Resolve the promise with the initialized services
-      resolve({
-        initialized: true,
-        app: firebaseApp,
-        auth: firebaseAuth,
-        firestore: firestoreDb,
-        storage: storageService
-      });
-    } catch (error) {
-      console.error("Failed to initialize Firebase:", error);
-      
-      // Mark as not initialized
-      isInitialized = false;
-      isFirebaseValid = false;
-      
-      // Resolve with empty services on failure
-      resolve({
-        initialized: false,
-        app: null,
-        auth: null,
-        firestore: null,
-        storage: null
-      });
-    } finally {
-      isInitializationInProgress = false;
     }
-  });
+    
+    // Mark as not initialized after all retries failed
+    isInitialized = false;
+    isFirebaseValid = false;
+    
+    throw lastError || new Error("Failed to initialize Firebase after multiple attempts");
+  })();
   
   return initializationPromise;
 }

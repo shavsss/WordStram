@@ -10,6 +10,7 @@ export {
   initializeFirebase, 
   getFirebaseServices,
   getFirebaseAuth,
+  isExtensionContextValid,
   app,
   auth,
   firestore,

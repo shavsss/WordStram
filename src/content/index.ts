@@ -10,8 +10,6 @@ import { initializeFirebase, getFirebaseServices } from '../auth';
 import { sendToGemini, GeminiMessage } from '../features/gemini/gemini-service';
 import { createNotesPanel, toggleNotesPanel } from '../features/notes/notes-service';
 import { createChatPanel, toggleChatPanel } from '../features/gemini/gemini-chat-service';
-import { getUserAuthentication } from '../features/shared/WindowManager';
-import { AUTH_CONFIG } from '../config/api-config';
 
 console.log('WordStream: Content script initialized');
 
@@ -991,203 +989,78 @@ async function initContentScript() {
   try {
     console.log('WordStream: Initializing content script');
     
-    // Create the WordStream UI
-    createWordStreamUI();
-    
-    // Check if we should create feature panel too
-    if (localStorage.getItem('wordstream-feature-panel-visible') === 'true') {
-      createFeaturePanel();
-      // Set up event listeners for the panel
-      setupPanelEventListeners();
-    }
-    
-    // אין יותר יצירה אוטומטית של חלונות ג'מיני והערות
-    // בוטל: createChatPanel();
-    // בוטל: createNotesPanel();
-    
-    // Set up listeners for page navigation
-    listenForPageNavigation();
-    
-    // Update info about the current page
-    updatePageInfo();
-    
-    // Set up message listeners
-    setupMessageListeners();
-    
-    // Load settings from localStorage
-    const savedLanguage = localStorage.getItem('wordstream-language');
-    if (savedLanguage) {
-      state.selectedLanguage = savedLanguage;
-    }
-    
-    const translationEnabled = localStorage.getItem('wordstream-translation-enabled');
-    if (translationEnabled !== null) {
-      state.isTranslationEnabled = translationEnabled === 'true';
-    }
-    
-    // Load speed controller setting
-    const speedControllerVisible = localStorage.getItem('wordstream-speed-controller');
-    if (speedControllerVisible === 'true' && !state.speedControllerVisible) {
-      createSpeedController();
-    }
-    
-    // Load floating buttons visibility
-    const floatingButtonsVisible = localStorage.getItem('wordstream-floating-buttons');
-    if (floatingButtonsVisible === 'false') {
-      const container = document.getElementById('wordstream-container');
-      if (container) {
-        container.style.display = 'none';
-      }
-    }
-    
-    // Start authentication check and refresh cycle
-    await checkAndRefreshAuthState();
-    
-    // Set interval to periodically check and refresh auth state
-    // This helps ensure content scripts have the latest auth info
-    setInterval(checkAndRefreshAuthState, 5 * 60 * 1000); // Check every 5 minutes
-    
-    // Check for videos on the page
-    if (window.location.hostname.includes('youtube.com')) {
-      // If we're on YouTube, check for captions
-      checkForCaptions();
+    // Check if we're on a video site or any site with videos
+    if (document.readyState === 'complete') {
+      createWordStreamUI();
+      updatePageInfo();
+      listenForPageNavigation();
+      setupMessageListeners();
       
-      // Start caption translation if authentication is valid
+      // Initialize video speed controller
+      monitorForVideos();
+      
+      // Check if user is authenticated and start caption translation automatically
       checkAuthAndStartCaptionTranslation();
     } else {
-      // For non-YouTube pages, check for videos to potentially enhance
-      monitorForVideos();
+      window.addEventListener('load', () => {
+        createWordStreamUI();
+        updatePageInfo();
+        listenForPageNavigation();
+        setupMessageListeners();
+    
+        // Initialize video speed controller
+        monitorForVideos();
+        
+        // Check if user is authenticated and start caption translation automatically
+        checkAuthAndStartCaptionTranslation();
+      });
     }
     
-    // Chrome content scripts can add window properties for cross-module access
-    // @ts-ignore - TS doesn't know about our custom window properties
-    window.wordStreamIsInitialized = true;
+    // Initialize Firebase (if needed)
+    await initializeFirebase();
+    
+    // Check if user is signed in
+    const services = await getFirebaseServices();
+    if (services.auth) {
+      services.auth.onAuthStateChanged((user: any) => {
+        if (user) {
+          console.log('WordStream: User is signed in');
+          // Start caption translation automatically when user is signed in
+          startCaptionTranslation();
+        } else {
+          console.log('WordStream: User is not signed in');
+        }
+      });
+    }
+    
   } catch (error) {
-    console.error('WordStream: Error in content script initialization:', error);
+    console.error('WordStream: Error initializing content script', error);
   }
 }
 
 /**
- * Safely send a message to the background script with error handling
- * This function protects against extension context invalidation and handles timeouts
+ * Check authentication and start caption translation if user is logged in
  */
-async function safeSendMessage(message: any): Promise<any> {
-  // First check if extension context is valid
-  if (!isExtensionValid()) {
-    console.warn('WordStream: Extension context is invalid, cannot send message');
-    throw new Error('Extension context invalidated');
-  }
-
-  return new Promise((resolve, reject) => {
-    // Add timeout to prevent indefinite waiting
-    const timeout = setTimeout(() => {
-      console.warn('WordStream: Message send timeout', message);
-      reject(new Error('Request to background script timed out'));
-    }, 5000);
-
-    try {
-      chrome.runtime.sendMessage(message, (response) => {
-        clearTimeout(timeout);
-        
-        // Check for chrome runtime errors
+async function checkAuthAndStartCaptionTranslation() {
+  try {
+    const authState = await new Promise<any>((resolve) => {
+      chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
         if (chrome.runtime.lastError) {
-          console.error('WordStream: Error sending message:', chrome.runtime.lastError);
-          
-          // If the message port closed error occurred, provide a fallback response
-          if (chrome.runtime.lastError.message?.includes('message port closed')) {
-            console.log('WordStream: Using fallback due to closed message port');
-            // For authentication, assume not authenticated but don't break
-            if (message.action === 'GET_AUTH_STATE') {
-              resolve({ isAuthenticated: false, error: 'Communication error' });
-              return;
-            }
-          }
-          
-          reject(new Error(chrome.runtime.lastError.message || 'Unknown runtime error'));
+          resolve({ isAuthenticated: false });
           return;
         }
-        
         resolve(response);
       });
-    } catch (error) {
-      clearTimeout(timeout);
-      console.error('WordStream: Error in sendMessage:', error);
-      reject(error);
+    });
+    
+    if (authState.isAuthenticated) {
+      console.log('WordStream: User is authenticated, starting caption translation automatically');
+      startCaptionTranslation();
+    } else {
+      console.log('WordStream: User is not authenticated, caption translation not started automatically');
     }
-  });
-}
-
-/**
- * Check if the extension context is valid
- * Returns true if the extension is in a valid state, false otherwise
- */
-function isExtensionValid(): boolean {
-  try {
-    // Check if chrome.runtime is defined and has an id
-    return Boolean(chrome?.runtime?.id);
   } catch (error) {
-    console.error('WordStream: Error checking extension validity:', error);
-    return false;
-  }
-}
-
-/**
- * Check and refresh authentication state with improved error handling
- */
-async function checkAndRefreshAuthState(): Promise<boolean> {
-  try {
-    // Try to get auth state from background script
-    const authState = await safeSendMessage({ action: 'GET_AUTH_STATE' })
-      .catch(error => {
-        console.warn('WordStream: Error getting auth state from background, trying local storage fallback:', error);
-        return null;
-      });
-    
-    if (authState?.isAuthenticated) {
-      console.log('WordStream: User is authenticated');
-      
-      // Update window.WordStream.local for direct access
-      if (typeof window !== 'undefined') {
-        if (!window.WordStream) window.WordStream = {};
-        if (!window.WordStream.local) window.WordStream.local = {};
-        window.WordStream.local.isAuthenticated = true;
-      }
-      
-      return true;
-    }
-    
-    // If background script auth check failed, try checking localStorage
-    try {
-      const localAuthResult = await new Promise<any>((resolve) => {
-        chrome.storage.local.get(['wordstream_user_info'], (result) => {
-          if (chrome.runtime.lastError) {
-            console.warn('WordStream: Error checking local storage auth:', chrome.runtime.lastError);
-            resolve(null);
-            return;
-          }
-          resolve(result);
-        });
-      });
-      
-      const isAuthenticatedLocally = Boolean(localAuthResult?.wordstream_user_info);
-      
-      // Update window.WordStream.local
-      if (typeof window !== 'undefined') {
-        if (!window.WordStream) window.WordStream = {};
-        if (!window.WordStream.local) window.WordStream.local = {};
-        window.WordStream.local.isAuthenticated = isAuthenticatedLocally;
-      }
-      
-      return isAuthenticatedLocally;
-    } catch (storageError) {
-      console.error('WordStream: Error checking auth in storage:', storageError);
-    }
-    
-    console.log('WordStream: User is not authenticated');
-    return false;
-  } catch (error) {
-    console.error('WordStream: Error checking/refreshing auth state:', error);
-    return false;
+    console.error('WordStream: Error checking authentication:', error);
   }
 }
 
@@ -1262,40 +1135,6 @@ function updateSettings(settings: any) {
       container.style.display = settings.showFloatingButtons ? 'flex' : 'none';
     }
     localStorage.setItem('wordstream-floating-buttons', String(settings.showFloatingButtons));
-  }
-}
-
-/**
- * Check authentication and start caption translation if authenticated
- */
-async function checkAuthAndStartCaptionTranslation() {
-  try {
-    const isAuthenticated = await AUTH_CONFIG.isUserAuthenticated();
-    
-    if (isAuthenticated) {
-      console.log('WordStream: User is authenticated, enabling caption translation');
-      // Set global authenticated flag for use throughout the extension
-      if (typeof window !== 'undefined') {
-        window.WordStream = window.WordStream || {};
-        window.WordStream.local = window.WordStream.local || {};
-        window.WordStream.local.isAuthenticated = true;
-      }
-      
-      // Start caption translation for YouTube
-      if (window.location.hostname.includes('youtube.com')) {
-        startCaptionTranslation();
-      }
-    } else {
-      console.log('WordStream: User is not authenticated, some features will be limited');
-      // Set global unauthenticated flag
-      if (typeof window !== 'undefined') {
-        window.WordStream = window.WordStream || {};
-        window.WordStream.local = window.WordStream.local || {};
-        window.WordStream.local.isAuthenticated = false;
-      }
-    }
-  } catch (error) {
-    console.error('WordStream: Error checking authentication:', error);
   }
 }
 

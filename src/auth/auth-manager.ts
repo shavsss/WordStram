@@ -27,10 +27,45 @@ import {
   getFirebaseServices 
 } from './firebase-init';
 
+// Import the extension context validator
+import { isExtensionContextValid } from './firebase-init';
+
+// Import hybrid auth functionality
+import { 
+  signInWithGoogleHybrid,
+  refreshAuthToken, 
+  isUserAuthenticated as checkUserAuthFromStorage,
+  getCurrentUserInfo
+} from './hybrid-auth';
+
 // Auth state management
 let currentUser: User | null = null;
 let authStateListeners: Array<(user: User | null) => void> = [];
 let isAuthInitialized = false;
+
+/**
+ * Safe wrapper to handle extension context issues
+ * This function wraps Firebase auth operations and checks for extension context validity
+ */
+async function safeAuthOperation<T>(operation: () => Promise<T>): Promise<T> {
+  // First check if extension context is valid
+  if (typeof isExtensionContextValid === 'function' && !isExtensionContextValid()) {
+    throw new Error('Extension context is invalid, cannot perform auth operation');
+  }
+  
+  try {
+    return await operation();
+  } catch (error: any) {
+    // Check if error is related to extension context
+    if (error.message?.includes('extension context') || 
+        error.message?.includes('Extension context') ||
+        error.code === 'auth/internal-error') {
+      console.error('Auth operation failed due to extension context issues:', error);
+      throw new Error('Extension context is invalid or auth operation failed');
+    }
+    throw error; // Re-throw other errors
+  }
+}
 
 /**
  * Initialize authentication and set up listeners
@@ -77,42 +112,109 @@ export async function initializeAuth(): Promise<boolean> {
  * Sign in with email and password
  */
 export async function signInWithEmail(email: string, password: string): Promise<UserCredential> {
-  const services = await getFirebaseServices();
-  if (!services.auth) throw new Error('Firebase Auth not initialized');
-  
-  return signInWithEmailAndPassword(services.auth, email, password);
+  return safeAuthOperation(async () => {
+    const services = await getFirebaseServices();
+    if (!services.auth) throw new Error('Firebase Auth not initialized');
+    
+    return signInWithEmailAndPassword(services.auth, email, password);
+  });
 }
 
 /**
- * Sign in with Google
+ * Sign in with Google using hybrid approach
  */
 export async function signInWithGoogle(): Promise<UserCredential> {
-  const services = await getFirebaseServices();
-  if (!services.auth) throw new Error('Firebase Auth not initialized');
-  
-  const provider = new GoogleAuthProvider();
-  return signInWithPopup(services.auth, provider);
+  return safeAuthOperation(async () => {
+    const services = await getFirebaseServices();
+    if (!services.auth) throw new Error('Firebase Auth not initialized');
+    
+    return signInWithGoogleHybrid(services.auth);
+  });
 }
 
 /**
  * Sign in with GitHub
  */
 export async function signInWithGithub(): Promise<UserCredential> {
-  const services = await getFirebaseServices();
-  if (!services.auth) throw new Error('Firebase Auth not initialized');
-  
-  const provider = new GithubAuthProvider();
-  return signInWithPopup(services.auth, provider);
+  return safeAuthOperation(async () => {
+    const services = await getFirebaseServices();
+    if (!services.auth) throw new Error('Firebase Auth not initialized');
+    
+    const provider = new GithubAuthProvider();
+    return signInWithPopup(services.auth, provider);
+  });
 }
 
 /**
  * Sign out the current user
  */
 export async function signOut(): Promise<void> {
-  const services = await getFirebaseServices();
-  if (!services.auth) throw new Error('Firebase Auth not initialized');
-  
-  return firebaseSignOut(services.auth);
+  return safeAuthOperation(async () => {
+    const services = await getFirebaseServices();
+    if (!services.auth) throw new Error('Firebase Auth not initialized');
+    
+    // Remove user info from local storage
+    try {
+      await chrome.storage.local.remove(['wordstream_user_info']);
+    } catch (error) {
+      console.error('Error removing user info from storage:', error);
+    }
+    
+    return firebaseSignOut(services.auth);
+  });
+}
+
+/**
+ * Check and refresh authentication if needed
+ */
+export async function checkAndRefreshAuth(): Promise<boolean> {
+  try {
+    const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+    const userData = authInfo.wordstream_user_info;
+    
+    if (!userData) return false;
+    
+    // Check if token needs refresh (every 45 minutes)
+    const lastAuth = userData.lastAuthenticated || 0;
+    const now = Date.now();
+    const refreshInterval = 45 * 60 * 1000; // 45 minutes
+    
+    if (now - lastAuth > refreshInterval) {
+      await refreshAuthToken();
+      
+      // Update last authenticated timestamp
+      await chrome.storage.local.set({
+        'wordstream_user_info': {
+          ...userData,
+          lastAuthenticated: now
+        }
+      });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error checking/refreshing auth:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if user is authenticated
+ * First checks local storage and then Firebase if available
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  try {
+    // First check local storage for cached auth state
+    const isAuthenticatedFromStorage = await checkUserAuthFromStorage();
+    if (isAuthenticatedFromStorage) return true;
+    
+    // Fallback to Firebase check
+    const user = await getCurrentUser();
+    return !!user;
+  } catch (error) {
+    console.error('Error checking authentication status:', error);
+    return false;
+  }
 }
 
 /**
@@ -150,25 +252,34 @@ export async function updateUserProfile(displayName: string, photoURL?: string):
 }
 
 /**
- * Check if a user is currently authenticated
- */
-export async function isAuthenticated(): Promise<boolean> {
-  const user = await getCurrentUser();
-  return !!user;
-}
-
-/**
  * Get the current authenticated user
+ * First tries from memory cache, then Firebase auth, and finally storage
  */
 export async function getCurrentUser(): Promise<User | null> {
   // If we have a current user, return it immediately
   if (currentUser) return currentUser;
   
-  // Otherwise get from Firebase auth
-  const services = await getFirebaseServices();
-  if (!services.auth) throw new Error('Firebase Auth not initialized');
-  
-  return services.auth.currentUser;
+  try {
+    // Try to get from Firebase auth
+    const services = await getFirebaseServices();
+    if (services.auth) {
+      const firebaseUser = services.auth.currentUser;
+      if (firebaseUser) return firebaseUser;
+    }
+    
+    // Last resort: check storage for user info
+    const userInfo = await getCurrentUserInfo();
+    if (userInfo) {
+      // We have user info in storage, but no actual User object
+      // This is a placeholder situation to help UI know user is logged in
+      return userInfo as unknown as User;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error getting current user:', error);
+    return null;
+  }
 }
 
 /**
@@ -179,7 +290,14 @@ export async function getUserIdToken(forceRefresh: boolean = false): Promise<str
   if (!user) return null;
   
   try {
-    return await getIdToken(user, forceRefresh);
+    // If we have a Firebase User object
+    if (typeof user.getIdToken === 'function') {
+      return await getIdToken(user, forceRefresh);
+    }
+    
+    // If we only have storage info, try to refresh the token
+    await refreshAuthToken();
+    return 'token_managed_by_chrome_identity'; // Placeholder since we don't have direct access
   } catch (error) {
     console.error('Error getting ID token:', error);
     return null;
@@ -191,12 +309,7 @@ export async function getUserIdToken(forceRefresh: boolean = false): Promise<str
  */
 export async function verifyTokenAndRefresh(): Promise<boolean> {
   try {
-    const user = await getCurrentUser();
-    if (!user) return false;
-    
-    // Force token refresh
-    await getIdToken(user, true);
-    return true;
+    return await checkAndRefreshAuth();
   } catch (error) {
     console.error('Error refreshing auth token:', error);
     return false;
@@ -229,25 +342,6 @@ export function removeAuthStateListener(listener: (user: User | null) => void): 
  * Notify all listeners of an auth state change
  */
 function notifyListeners(user: User | null): void {
-  // Store the current user in chrome.storage.local for content scripts to access
-  if (user) {
-    const userInfo = {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL
-    };
-    chrome.storage.local.set({ 'wordstream_user_info': userInfo }, () => {
-      console.log('WordStream: User info saved to storage for content scripts');
-    });
-  } else {
-    // Clear user info if logged out
-    chrome.storage.local.remove('wordstream_user_info', () => {
-      console.log('WordStream: User info removed from storage');
-    });
-  }
-
-  // Notify all registered listeners
   for (const listener of authStateListeners) {
     try {
       listener(user);

@@ -23,13 +23,64 @@ let geminiController: ReturnType<typeof createGeminiChat> | null = null;
 let notesController: any = null; // We'll define the type once we implement the notes controller
 
 /**
+ * Verify extension context and attempt recovery if needed
+ * @returns Promise resolving to true if context is valid, false otherwise
+ */
+export async function ensureExtensionContext(): Promise<boolean> {
+  if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+    console.warn('Extension context invalidated, attempting recovery');
+    
+    // Try to save essential data in localStorage
+    try {
+      localStorage.setItem('wordstream_recovery_needed', 'true');
+      
+      // If in content page, try to send a message to the page
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wordstream:context_lost'));
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Recovery attempt failed:', error);
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+/**
  * Get user authentication from Chrome storage
  * @returns The user object if authenticated, null otherwise
  */
 export async function getUserAuthentication() {
+  // First ensure extension context is valid
+  if (!await ensureExtensionContext()) {
+    console.warn('Cannot get user authentication - extension context invalid');
+    
+    // Try to get from localStorage as fallback if available
+    try {
+      const localUserData = localStorage.getItem('wordstream_user_backup');
+      if (localUserData) {
+        return JSON.parse(localUserData);
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+    
+    return null;
+  }
+
   return new Promise<any>((resolve) => {
     chrome.storage.local.get(['wordstream_user_info'], (result) => {
       if (result && result.wordstream_user_info) {
+        // Also save to localStorage as backup
+        try {
+          localStorage.setItem('wordstream_user_backup', JSON.stringify(result.wordstream_user_info));
+        } catch (e) {
+          // Ignore localStorage errors
+        }
+        
         resolve(result.wordstream_user_info);
       } else {
         resolve(null);
