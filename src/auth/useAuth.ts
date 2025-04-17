@@ -67,6 +67,23 @@ export default function useAuth() {
           return;
         }
 
+        // Check for cached user info first for faster UI updates
+        try {
+          const cachedUser = await chrome.storage.local.get(['wordstream_user_info']);
+          if (cachedUser.wordstream_user_info) {
+            // Show authenticated state immediately while verifying with Firebase
+            setAuthState({
+              isAuthenticated: true,
+              user: cachedUser.wordstream_user_info,
+              loading: true, // Still loading full auth state
+              error: null
+            });
+          }
+        } catch (error) {
+          console.error("Error checking cached user:", error);
+          // Continue with Firebase initialization
+        }
+
         // Ensure Firebase is initialized
         await initializeFirebase();
         
@@ -83,8 +100,23 @@ export default function useAuth() {
         unsubscribe = onAuthStateChanged(services.auth, (authUser) => {
           // Recheck context validity when auth state changes
           if (checkExtensionContext()) {
+            const isAuthenticated = !!authUser;
+            
+            // If authenticated, update the cached user info
+            if (isAuthenticated && authUser) {
+              chrome.storage.local.set({
+                'wordstream_user_info': {
+                  uid: authUser.uid,
+                  email: authUser.email,
+                  displayName: authUser.displayName,
+                  photoURL: authUser.photoURL,
+                  lastAuthenticated: Date.now()
+                }
+              });
+            }
+            
             setAuthState({
-              isAuthenticated: !!authUser,
+              isAuthenticated,
               user: authUser,
               loading: false,
               error: null

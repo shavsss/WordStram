@@ -6,8 +6,100 @@
 
 import { initializeFirebase, getFirebaseServices } from '../auth';
 import { collection, query, where, getDocs, updateDoc, addDoc } from 'firebase/firestore';
+import { isServiceWorker, hasWindow } from '../utils/environment';
 
-console.log('WordStream: Background script initialized');
+// Check environment
+if (hasWindow()) {
+  console.warn('WordStream: Background script running in an environment with window, this might cause issues');
+} else {
+  console.log('WordStream: Background script initialized in service worker environment');
+}
+
+/**
+ * Track readiness of different parts of the extension
+ */
+const extensionReadiness = {
+  background: false,
+  popup: false,
+  contentScripts: new Map<number, boolean>(), // tabId -> ready status
+  
+  setReady(component: 'background' | 'popup', value: boolean = true) {
+    this[component] = value;
+    console.log(`WordStream: ${component} is now ${value ? 'ready' : 'not ready'}`);
+  },
+  
+  setTabReady(tabId: number, value: boolean = true) {
+    this.contentScripts.set(tabId, value);
+    console.log(`WordStream: Content script in tab ${tabId} is now ${value ? 'ready' : 'not ready'}`);
+  },
+  
+  isPopupReady() {
+    return this.popup;
+  },
+  
+  isBackgroundReady() {
+    return this.background;
+  },
+  
+  isTabReady(tabId: number) {
+    return this.contentScripts.has(tabId) && this.contentScripts.get(tabId) === true;
+  }
+};
+
+/**
+ * More robust message sending that handles receiver readiness
+ */
+function sendMessageWithReadinessCheck(target: 'popup' | number, message: any, maxAttempts: number = 5): Promise<any> {
+  let attempts = 0;
+  
+  return new Promise((resolve, reject) => {
+    function attemptSend() {
+      attempts++;
+      
+      // Check if target is ready
+      const isReady = typeof target === 'number' 
+        ? extensionReadiness.isTabReady(target)
+        : extensionReadiness.isPopupReady();
+      
+      if (isReady) {
+        // Target is ready, send message
+        if (typeof target === 'number') {
+          // Send to specific tab
+          chrome.tabs.sendMessage(target, message, (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn(`WordStream: Error sending message to tab ${target}:`, chrome.runtime.lastError.message);
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          });
+        } else {
+          // Send to popup or other extension pages
+          chrome.runtime.sendMessage(message, (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn('WordStream: Error sending message to popup:', chrome.runtime.lastError.message);
+              resolve(null);
+              return;
+            }
+            resolve(response);
+          });
+        }
+      } else if (attempts < maxAttempts) {
+        // Target not ready yet, retry with exponential backoff
+        const delay = Math.min(100 * Math.pow(2, attempts), 2000); // 100ms, 200ms, 400ms, 800ms, 1600ms
+        console.log(`WordStream: Target not ready, attempt ${attempts}/${maxAttempts}, retrying in ${delay}ms`);
+        setTimeout(attemptSend, delay);
+      } else {
+        // Max attempts reached
+        console.warn(`WordStream: Failed to send message after ${maxAttempts} attempts - target not ready`);
+        resolve(null);
+      }
+    }
+    
+    // Start attempt process
+    attemptSend();
+  });
+}
 
 // Initialize Firebase when background script loads
 async function initializeBackgroundServices() {
@@ -28,31 +120,21 @@ async function initializeBackgroundServices() {
       if (data.wordstream_user_info) {
         console.log('WordStream: Restoring authentication state from storage');
         
-        // Broadcast stored auth state to all contexts
-        chrome.runtime.sendMessage({ 
-          action: 'AUTH_STATE_CHANGED',
-          user: data.wordstream_user_info,
-          isAuthenticated: true,
-          source: 'background_init'
-        });
-        
-        // Also broadcast to all tabs
-        chrome.tabs.query({}, (tabs) => {
-          tabs.forEach(tab => {
-            if (tab.id) {
-              try {
-                chrome.tabs.sendMessage(tab.id, { 
-                  action: 'AUTH_STATE_CHANGED',
-                  user: data.wordstream_user_info,
-                  isAuthenticated: true,
-                  source: 'background_init'
-                });
-              } catch (e) {
-                // Ignore errors from tabs that can't receive messages
-              }
-            }
-          });
-        });
+        // Delay sending messages to ensure receivers are ready
+        setTimeout(() => {
+          // Create auth state message
+          const authStateMessage = { 
+            action: 'AUTH_STATE_CHANGED',
+            user: data.wordstream_user_info,
+            isAuthenticated: true,
+            source: 'background_init'
+          };
+          
+          // Use the safe message sending function instead of direct calls
+          safelySendMessage(authStateMessage);
+          
+          console.log('WordStream: Authentication state broadcast complete');
+        }, 1000); // 1 second delay to give receivers time to initialize
       }
     } catch (error) {
       console.error('WordStream: Error restoring auth state:', error);
@@ -115,12 +197,74 @@ function setupAuthTokenRefresh() {
  */
 async function handleGoogleSignIn() {
   try {
-    // Dynamically import auth manager to ensure we're getting the latest version
-    const { signInWithGoogle } = await import('../auth/auth-manager');
-    const result = await signInWithGoogle();
+    console.log('WordStream: Starting Google sign-in from background');
     
-    console.log('WordStream: Google sign in successful');
-    return result.user;
+    // Make sure we have access to required APIs
+    if (typeof chrome === 'undefined' || !chrome.identity) {
+      throw new Error('Chrome identity API is not available in this context');
+    }
+    
+    // Use chrome.identity directly from service worker environment
+    // instead of trying to call signInWithGoogle that might use window
+    try {
+      // Get an auth token directly using chrome.identity
+      const token = await new Promise<string>((resolve, reject) => {
+        chrome.identity.getAuthToken({ interactive: true }, (token) => {
+          if (chrome.runtime.lastError) {
+            console.error('WordStream: Chrome identity error:', chrome.runtime.lastError);
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          
+          if (!token) {
+            console.error('WordStream: Failed to get auth token');
+            reject(new Error('Failed to get auth token'));
+            return;
+          }
+          
+          console.log('WordStream: Successfully retrieved auth token directly');
+          resolve(token);
+        });
+      });
+      
+      // Get user info from the token
+      const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get user info: ${response.status}`);
+      }
+      
+      const userInfo = await response.json();
+      
+      // Create a user object with the retrieved information
+      const user = {
+        uid: userInfo.sub,
+        email: userInfo.email,
+        displayName: userInfo.name,
+        photoURL: userInfo.picture,
+        emailVerified: userInfo.email_verified,
+        lastAuthenticated: Date.now()
+      };
+      
+      // Store user info
+      await chrome.storage.local.set({
+        'wordstream_user_info': user
+      });
+      
+      console.log('WordStream: Google sign in successful using direct method');
+      return user;
+    } catch (directError) {
+      console.error('WordStream: Direct Google sign-in failed, trying import method:', directError);
+      
+      // Fallback to dynamic import if the direct method fails
+      const { signInWithGoogle } = await import('../auth/auth-manager');
+      const result = await signInWithGoogle();
+      
+      console.log('WordStream: Google sign in successful using import method');
+      return result.user;
+    }
   } catch (error) {
     console.error('WordStream: Error in Google sign in:', error);
     throw error;
@@ -184,6 +328,70 @@ interface GeminiRequestBody {
   };
 }
 
+/**
+ * Safely send a message to all contexts of the extension
+ * This handles errors gracefully and prevents unhandled promise rejections
+ */
+function safelySendMessage(message: any, responseCallback?: (response: any) => void): void {
+  try {
+    // Try to send to popup if it's ready
+    if (extensionReadiness.isPopupReady()) {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn('WordStream: Error sending message to extension contexts:', chrome.runtime.lastError.message);
+          // Continue despite error
+        }
+        
+        if (responseCallback) responseCallback(response);
+      });
+    } else {
+      // Queue message for when popup becomes ready
+      console.log('WordStream: Popup not ready, queueing message');
+      
+      // We'll send the message with delay to allow receivers to initialize
+      setTimeout(() => {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            // This is expected if no listeners
+            if (responseCallback) responseCallback(null);
+            return;
+          }
+          if (responseCallback) responseCallback(response);
+        });
+      }, 500);
+    }
+    
+    // Get tabs and check each tab's readiness before sending
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        if (tab.id) {
+          // Use exponential backoff for tabs
+          const sendToTab = () => {
+            try {
+              chrome.tabs.sendMessage(tab.id!, message, (response) => {
+                // Individual tab responses are ignored
+                if (chrome.runtime.lastError) {
+                  // This is expected for tabs without our content script
+                  // Just ignore the error quietly
+                }
+              });
+            } catch (e) {
+              // Ignore errors from tabs that can't receive messages
+            }
+          };
+          
+          // Use a slight delay to reduce chances of "receiving end does not exist"
+          setTimeout(sendToTab, 200);
+        }
+      });
+    });
+  } catch (error) {
+    console.error('WordStream: Critical error broadcasting message:', error);
+    // Try to handle the response if possible
+    if (responseCallback) responseCallback({ error: 'Message broadcast failed' });
+  }
+}
+
 // Set up listeners for messages from content scripts and popup
 function setupMessageListeners() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -196,12 +404,18 @@ function setupMessageListeners() {
         console.log('WordStream: Processing Google Sign In request');
         handleGoogleSignIn()
           .then(user => {
-            // Broadcast authentication state change
-            chrome.runtime.sendMessage({ 
+            console.log('WordStream: Google sign-in successful, broadcasting state');
+            
+            // Prepare auth message with necessary user data
+            const authStateMessage = { 
               action: "AUTH_STATE_CHANGED", 
               user,
-              isAuthenticated: true
-            });
+              isAuthenticated: true,
+              source: 'google_signin_success'
+            };
+            
+            // Use safe message sending
+            safelySendMessage(authStateMessage);
             
             // Send success response
             sendResponse({ 
@@ -221,32 +435,43 @@ function setupMessageListeners() {
       case 'AUTH_STATE_CHANGED':
         // Store authentication state in chrome.storage.local
         if (message.isAuthenticated && message.user) {
-          chrome.storage.local.set({
-            'wordstream_user_info': {
-              ...message.user,
-              lastAuthenticated: Date.now()
-            }
-          });
+          console.log('WordStream: Received AUTH_STATE_CHANGED event (authenticated) from', message.source || 'unknown source');
           
-          // Forward to all tabs
-          chrome.tabs.query({}, (tabs) => {
-            tabs.forEach(tab => {
-              if (tab.id) {
-                try {
-                  chrome.tabs.sendMessage(tab.id, message);
-                } catch (e) {
-                  // Ignore errors from tabs that can't receive messages
-                }
-              }
+          // Create user info with updated timestamp
+          const userInfo = {
+            ...message.user,
+            lastAuthenticated: Date.now()
+          };
+          
+          // Store in local storage
+          try {
+            chrome.storage.local.set({
+              'wordstream_user_info': userInfo
             });
+            console.log('WordStream: Updated authentication in storage');
+          } catch (storageError) {
+            console.error('WordStream: Failed to store authentication:', storageError);
+          }
+          
+          // Forward safely to all contexts
+          safelySendMessage({
+            ...message,
+            user: userInfo
           });
         } else {
+          console.log('WordStream: Received AUTH_STATE_CHANGED event (signed out) from', message.source || 'unknown source');
+          
           // Clear authentication when signed out
-          chrome.storage.local.remove(['wordstream_user_info']);
+          try {
+            chrome.storage.local.remove(['wordstream_user_info']);
+            console.log('WordStream: Cleared authentication from storage');
+          } catch (storageError) {
+            console.error('WordStream: Error clearing authentication from storage:', storageError);
+          }
+          
+          // Forward safely
+          safelySendMessage(message);
         }
-        
-        // Also broadcast to other extension contexts
-        chrome.runtime.sendMessage(message);
         break;
         
       case 'SAVE_NOTE':
@@ -748,13 +973,55 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 // Initialize the background script
-initializeBackgroundServices().then((initialized) => {
-  if (initialized) {
-    setupMessageListeners();
-    console.log('WordStream: Background script fully initialized');
+async function initializeExtension() {
+  try {
+    // Mark background as not ready yet
+    extensionReadiness.setReady('background', false);
+    
+    // Initialize Firebase and other services
+    const initialized = await initializeBackgroundServices();
+    
+    if (initialized) {
+      // Set up message listeners
+      setupMessageListeners();
+      
+      // Mark background as ready
+      extensionReadiness.setReady('background', true);
+      
+      console.log('WordStream: Background script fully initialized and ready');
+    } else {
+      console.error('WordStream: Background initialization failed');
+    }
+  } catch (error) {
+    console.error('WordStream: Critical error during extension initialization:', error);
   }
-}).catch(error => {
-  console.error('WordStream: Critical background script error:', error);
+}
+
+// Add listener for READY_CHECK messages
+function setupReadinessListeners() {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message && message.action === 'READY_CHECK') {
+      // Handle readiness check message
+      if (sender.tab && sender.tab.id) {
+        // Message from content script
+        extensionReadiness.setTabReady(sender.tab.id, true);
+        sendResponse({ ready: true, component: 'background' });
+      } else {
+        // Message from popup or options page
+        extensionReadiness.setReady('popup', true);
+        sendResponse({ ready: true, component: 'background' });
+      }
+      return true;
+    }
+  });
+}
+
+// Set up listeners first
+setupReadinessListeners();
+
+// Then start initialization
+initializeExtension().catch(error => {
+  console.error('WordStream: Unhandled error during initialization:', error);
 });
 
 // Export for webpack

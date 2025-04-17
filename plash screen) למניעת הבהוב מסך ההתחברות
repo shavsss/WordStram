@@ -1,0 +1,147 @@
+warning: in the working copy of 'src/popup/Popup.tsx', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/src/popup/Popup.tsx b/src/popup/Popup.tsx[m
+[1mindex 47d1232..56f6e84 100644[m
+[1m--- a/src/popup/Popup.tsx[m
+[1m+++ b/src/popup/Popup.tsx[m
+[36m@@ -103,15 +103,26 @@[m [mexport default function Popup() {[m
+   const [isTranslationEnabled, setIsTranslationEnabled] = useState(true);[m
+   const [showSpeedController, setShowSpeedController] = useState(true);[m
+   const [showFloatingButtons, setShowFloatingButtons] = useState(true);[m
+[32m+[m[32m  const [showingSplash, setShowingSplash] = useState(true);[m
+   [m
+   // Auth context[m
+   const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();[m
+   const authModule = useAuthModule();[m
+ [m
+[32m+[m[32m  // כשהפופאפ נפתח, הצג מסך פתיחה (splash) לחצי שנייה[m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const timer = setTimeout(() => {[m
+[32m+[m[32m      setShowingSplash(false);[m
+[32m+[m[32m    }, 500);[m
+[32m+[m[41m    [m
+[32m+[m[32m    return () => clearTimeout(timer);[m
+[32m+[m[32m  }, []);[m
+[32m+[m
+   // Check and restore authentication from storage early[m
+   useEffect(() => {[m
+     const checkStoredAuth = async () => {[m
+       try {[m
+[32m+[m[32m        console.log('Popup: Checking for stored authentication');[m
+         const data = await chrome.storage.local.get(['wordstream_user_info']);[m
+         if (data.wordstream_user_info) {[m
+           // If we have stored authentication, ensure it's not too old[m
+[36m@@ -122,20 +133,54 @@[m [mexport default function Popup() {[m
+             // Force immediate UI update based on stored credentials[m
+             const user = data.wordstream_user_info;[m
+             if (user && typeof user === 'object' && user.uid) {[m
+[31m-              console.log('Popup: Restoring auth state from storage immediately');[m
+[32m+[m[32m              console.log('Popup: Restoring auth state from storage immediately', {[m[41m [m
+[32m+[m[32m                email: user.email,[m
+[32m+[m[32m                lastAuth: new Date(lastAuth).toISOString()[m
+[32m+[m[32m              });[m
+               [m
+               // We have recent authentication data, force auth state update[m
+[31m-              chrome.runtime.sendMessage({ [m
+[31m-                action: "AUTH_STATE_CHANGED", [m
+[31m-                user: data.wordstream_user_info,[m
+[31m-                isAuthenticated: true,[m
+[31m-                source: 'popup_restore'[m
+[31m-              });[m
+[32m+[m[32m              try {[m
+[32m+[m[32m                chrome.runtime.sendMessage({[m[41m [m
+[32m+[m[32m                  action: "AUTH_STATE_CHANGED",[m[41m [m
+[32m+[m[32m                  user: data.wordstream_user_info,[m
+[32m+[m[32m                  isAuthenticated: true,[m
+[32m+[m[32m                  source: 'popup_restore'[m
+[32m+[m[32m                });[m
+[32m+[m[32m              } catch (messageError) {[m
+[32m+[m[32m                console.error('Popup: Error broadcasting authentication state:', messageError);[m
+[32m+[m[32m              }[m
+[32m+[m[41m              [m
+[32m+[m[32m              // Also listen for auth change confirmations[m
+[32m+[m[32m              const authChangeListener = (message: any) => {[m
+[32m+[m[32m                if (message.action === 'AUTH_STATE_CHANGED' && message.source === 'background_init') {[m
+[32m+[m[32m                  console.log('Popup: Received confirmation of auth state change');[m
+[32m+[m[32m                  // Cleanup listener after receiving confirmation[m
+[32m+[m[32m                  chrome.runtime.onMessage.removeListener(authChangeListener);[m
+[32m+[m[32m                }[m
+[32m+[m[32m              };[m
+[32m+[m[41m              [m
+[32m+[m[32m              // Add the temporary listener[m
+[32m+[m[32m              chrome.runtime.onMessage.addListener(authChangeListener);[m
+[32m+[m[41m              [m
+[32m+[m[32m              // Set a timeout to remove the listener if no confirmation is received[m
+[32m+[m[32m              setTimeout(() => {[m
+[32m+[m[32m                chrome.runtime.onMessage.removeListener(authChangeListener);[m
+[32m+[m[32m              }, 5000);[m
+[32m+[m[32m            } else {[m
+[32m+[m[32m              console.warn('Popup: Stored user data is invalid or missing UID');[m
+             }[m
+[32m+[m[32m          } else {[m
+[32m+[m[32m            console.log('Popup: Stored authentication is too old:', {[m
+[32m+[m[32m              lastAuth: new Date(lastAuth).toISOString(),[m
+[32m+[m[32m              now: new Date(now).toISOString(),[m
+[32m+[m[32m              ageHours: Math.round((now - lastAuth) / 3600000)[m
+[32m+[m[32m            });[m
+           }[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m          console.log('Popup: No stored authentication found');[m
+         }[m
+       } catch (error) {[m
+[31m-        console.error('Error checking stored auth:', error);[m
+[32m+[m[32m        console.error('Popup: Error checking stored auth:', error);[m
+       }[m
+     };[m
+ [m
+[36m@@ -268,20 +313,64 @@[m [mexport default function Popup() {[m
+   // Enhanced Google Sign In[m
+   const handleGoogleSignIn = async () => {[m
+     try {[m
+[32m+[m[32m      console.log('Popup: Initiating Google sign-in process');[m
+[32m+[m[41m      [m
+       // Use message passing instead of direct hook call[m
+       const response = await chrome.runtime.sendMessage({ [m
+         action: "SIGN_IN_WITH_GOOGLE" [m
+       });[m
+       [m
+       if (!response || !response.success) {[m
+[32m+[m[32m        // Check for specific error message about window not defined[m
+[32m+[m[32m        if (response?.error && response.error.includes('window is not defined')) {[m
+[32m+[m[32m          console.error('Popup: Google sign-in failed due to window reference error. Using direct method.');[m
+[32m+[m[32m          // Try direct sign-in as fallback[m
+[32m+[m[32m          await authModule.signInWithGoogle();[m
+[32m+[m[32m          return;[m
+[32m+[m[32m        }[m
+[32m+[m[41m        [m
+[32m+[m[32m        console.error('Popup: Google sign-in failed:', response?.error || 'Unknown error');[m
+         throw new Error(response?.error || "Google sign-in failed");[m
+       }[m
+       [m
+       // Success - the auth state will be updated automatically[m
+[31m-      console.log('GoogleSignIn successful via message passing');[m
+[32m+[m[32m      console.log('Popup: Google sign-in successful, received user:', response.user?.email);[m
+[32m+[m[41m      [m
+[32m+[m[32m      // Set up a listener to ensure authentication state is propagated[m
+[32m+[m[32m      const authConfirmListener = (message: any) => {[m
+[32m+[m[32m        if (message.action === 'AUTH_STATE_CHANGED' && message.isAuthenticated) {[m
+[32m+[m[32m          console.log('Popup: Received auth state confirmation');[m
+[32m+[m[32m          // Remove this listener after confirmation[m
+[32m+[m[32m          setTimeout(() => {[m
+[32m+[m[32m            chrome.runtime.onMessage.removeListener(authConfirmListener);[m
+[32m+[m[32m          }, 500);[m
+[32m+[m[32m        }[m
+[32m+[m[32m      };[m
+[32m+[m[41m      [m
+[32m+[m[32m      // Add temporary listener[m
+[32m+[m[32m      chrome.runtime.onMessage.addListener(authConfirmListener);[m
+[32m+[m[41m      [m
+[32m+[m[32m      // Clean up listener after timeout if no confirmation received[m
+[32m+[m[32m      setTimeout(() => {[m
+[32m+[m[32m        chrome.runtime.onMessage.removeListener(authConfirmListener);[m
+[32m+[m[32m      }, 5000);[m
+     } catch (error) {[m
+[31m-      console.error("Login error:", error);[m
+[31m-      // The hook will handle setting the error state[m
+[32m+[m[32m      console.error("Popup: Login error:", error);[m
+[32m+[m[41m      [m
+[32m+[m[32m      // Check for specific 

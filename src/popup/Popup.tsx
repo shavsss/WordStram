@@ -103,15 +103,26 @@ export default function Popup() {
   const [isTranslationEnabled, setIsTranslationEnabled] = useState(true);
   const [showSpeedController, setShowSpeedController] = useState(true);
   const [showFloatingButtons, setShowFloatingButtons] = useState(true);
+  const [showingSplash, setShowingSplash] = useState(true);
   
   // Auth context
   const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();
   const authModule = useAuthModule();
 
+  // כשהפופאפ נפתח, הצג מסך פתיחה (splash) לחצי שנייה
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowingSplash(false);
+    }, 500);
+    
+    return () => clearTimeout(timer);
+  }, []);
+
   // Check and restore authentication from storage early
   useEffect(() => {
     const checkStoredAuth = async () => {
       try {
+        console.log('Popup: Checking for stored authentication');
         const data = await chrome.storage.local.get(['wordstream_user_info']);
         if (data.wordstream_user_info) {
           // If we have stored authentication, ensure it's not too old
@@ -122,20 +133,54 @@ export default function Popup() {
             // Force immediate UI update based on stored credentials
             const user = data.wordstream_user_info;
             if (user && typeof user === 'object' && user.uid) {
-              console.log('Popup: Restoring auth state from storage immediately');
+              console.log('Popup: Restoring auth state from storage immediately', { 
+                email: user.email,
+                lastAuth: new Date(lastAuth).toISOString()
+              });
               
               // We have recent authentication data, force auth state update
-              chrome.runtime.sendMessage({ 
-                action: "AUTH_STATE_CHANGED", 
-                user: data.wordstream_user_info,
-                isAuthenticated: true,
-                source: 'popup_restore'
-              });
+              try {
+                chrome.runtime.sendMessage({ 
+                  action: "AUTH_STATE_CHANGED", 
+                  user: data.wordstream_user_info,
+                  isAuthenticated: true,
+                  source: 'popup_restore'
+                });
+              } catch (messageError) {
+                console.error('Popup: Error broadcasting authentication state:', messageError);
+              }
+              
+              // Also listen for auth change confirmations
+              const authChangeListener = (message: any) => {
+                if (message.action === 'AUTH_STATE_CHANGED' && message.source === 'background_init') {
+                  console.log('Popup: Received confirmation of auth state change');
+                  // Cleanup listener after receiving confirmation
+                  chrome.runtime.onMessage.removeListener(authChangeListener);
+                }
+              };
+              
+              // Add the temporary listener
+              chrome.runtime.onMessage.addListener(authChangeListener);
+              
+              // Set a timeout to remove the listener if no confirmation is received
+              setTimeout(() => {
+                chrome.runtime.onMessage.removeListener(authChangeListener);
+              }, 5000);
+            } else {
+              console.warn('Popup: Stored user data is invalid or missing UID');
             }
+          } else {
+            console.log('Popup: Stored authentication is too old:', {
+              lastAuth: new Date(lastAuth).toISOString(),
+              now: new Date(now).toISOString(),
+              ageHours: Math.round((now - lastAuth) / 3600000)
+            });
           }
+        } else {
+          console.log('Popup: No stored authentication found');
         }
       } catch (error) {
-        console.error('Error checking stored auth:', error);
+        console.error('Popup: Error checking stored auth:', error);
       }
     };
 
@@ -268,20 +313,64 @@ export default function Popup() {
   // Enhanced Google Sign In
   const handleGoogleSignIn = async () => {
     try {
+      console.log('Popup: Initiating Google sign-in process');
+      
       // Use message passing instead of direct hook call
       const response = await chrome.runtime.sendMessage({ 
         action: "SIGN_IN_WITH_GOOGLE" 
       });
       
       if (!response || !response.success) {
+        // Check for specific error message about window not defined
+        if (response?.error && response.error.includes('window is not defined')) {
+          console.error('Popup: Google sign-in failed due to window reference error. Using direct method.');
+          // Try direct sign-in as fallback
+          await authModule.signInWithGoogle();
+          return;
+        }
+        
+        console.error('Popup: Google sign-in failed:', response?.error || 'Unknown error');
         throw new Error(response?.error || "Google sign-in failed");
       }
       
       // Success - the auth state will be updated automatically
-      console.log('GoogleSignIn successful via message passing');
+      console.log('Popup: Google sign-in successful, received user:', response.user?.email);
+      
+      // Set up a listener to ensure authentication state is propagated
+      const authConfirmListener = (message: any) => {
+        if (message.action === 'AUTH_STATE_CHANGED' && message.isAuthenticated) {
+          console.log('Popup: Received auth state confirmation');
+          // Remove this listener after confirmation
+          setTimeout(() => {
+            chrome.runtime.onMessage.removeListener(authConfirmListener);
+          }, 500);
+        }
+      };
+      
+      // Add temporary listener
+      chrome.runtime.onMessage.addListener(authConfirmListener);
+      
+      // Clean up listener after timeout if no confirmation received
+      setTimeout(() => {
+        chrome.runtime.onMessage.removeListener(authConfirmListener);
+      }, 5000);
     } catch (error) {
-      console.error("Login error:", error);
-      // The hook will handle setting the error state
+      console.error("Popup: Login error:", error);
+      
+      // Check for specific error about window not defined
+      if (error instanceof Error && error.message.includes('window is not defined')) {
+        alert('אירעה שגיאה בתהליך התחברות עם גוגל. מנסה שיטה חלופית...');
+        try {
+          // Try direct sign-in as fallback
+          await signInWithGoogleHook();
+        } catch (secondError) {
+          console.error('Popup: Second login attempt failed:', secondError);
+          alert('ההתחברות עם גוגל נכשלה. אנא נסה שנית מאוחר יותר.');
+        }
+      } else {
+        // Display generic error
+        alert('ההתחברות נכשלה: ' + (error instanceof Error ? error.message : 'שגיאה לא ידועה'));
+      }
     }
   };
 
@@ -335,8 +424,20 @@ export default function Popup() {
     }
   };
 
-  // Render login screen
-  if (!isAuthenticated && !loading) {
+  // Render splash screen first
+  if (showingSplash) {
+    return (
+      <div className={`w-[400px] min-h-[500px] flex justify-center items-center font-sans ${darkMode ? 'dark bg-gray-900' : 'bg-white'}`}>
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-t-blue-500 border-r-blue-500 border-b-gray-200 border-l-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="text-xl font-semibold text-blue-600 dark:text-blue-400">WordStream</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Render login screen only if not authenticated
+  if (!isAuthenticated) {
     return (
       <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
         <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[120px] w-full relative overflow-hidden">
@@ -832,6 +933,12 @@ export default function Popup() {
   // Render main view (default)
   return (
     <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
+      {loading && (
+        <div className="absolute top-2 right-2 z-50">
+          <div className="w-5 h-5 border-2 border-t-blue-500 border-r-blue-500 border-b-gray-200 border-l-gray-200 rounded-full animate-spin"></div>
+        </div>
+      )}
+      
       <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[160px] w-full relative overflow-hidden">
         <div className="absolute top-4 right-4 flex gap-2">
           <Button

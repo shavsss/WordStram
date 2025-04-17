@@ -72,6 +72,7 @@ async function safeAuthOperation<T>(operation: () => Promise<T>): Promise<T> {
  */
 export async function initializeAuth(): Promise<boolean> {
   try {
+    console.log('Auth: Starting authentication initialization');
     // Get firebase services from the central initialization
     const services = await getFirebaseServices();
     
@@ -81,29 +82,55 @@ export async function initializeAuth(): Promise<boolean> {
     }
     
     const auth = services.auth;
+    console.log('Auth: Firebase auth service obtained successfully');
     
     // Set up auth state monitoring
     onAuthStateChanged(auth, (user) => {
+      console.log('Auth: Auth state changed:', { 
+        isAuthenticated: !!user, 
+        user: user ? { email: user.email, uid: user.uid } : null 
+      });
       currentUser = user;
       notifyListeners(user);
+      
+      // Update storage on auth state change
+      if (user) {
+        try {
+          chrome.storage.local.set({
+            'wordstream_user_info': {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName,
+              photoURL: user.photoURL,
+              lastAuthenticated: Date.now()
+            }
+          });
+          console.log('Auth: Updated storage with user info for', user.email);
+        } catch (error) {
+          console.error('Auth: Error updating storage with user info:', error);
+        }
+      }
     });
     
     // Set up token change monitoring
     onIdTokenChanged(auth, async (user) => {
+      console.log('Auth: ID token changed:', { isAuthenticated: !!user });
       if (user) {
         // Refresh token if needed
         try {
           await getIdToken(user, true);
+          console.log('Auth: ID token refreshed successfully');
         } catch (error) {
-          console.error('Error refreshing token:', error);
+          console.error('Auth: Error refreshing token:', error);
         }
       }
     });
     
     isAuthInitialized = true;
+    console.log('Auth: Authentication initialized successfully');
     return true;
   } catch (error) {
-    console.error('Error initializing authentication:', error);
+    console.error('Auth: Error initializing authentication:', error);
     return false;
   }
 }
@@ -169,13 +196,16 @@ export async function signOut(): Promise<void> {
  */
 export async function checkAndRefreshAuth(): Promise<boolean> {
   try {
+    console.log('Auth: Starting auth refresh check');
+    
     // First check Firebase's current auth state
     const services = await getFirebaseServices();
     if (services.auth && services.auth.currentUser) {
       // We have a current user, refresh the token
       try {
+        console.log('Auth: Firebase user found, refreshing token:', services.auth.currentUser.email);
         const token = await services.auth.currentUser.getIdToken(true);
-        console.log('Auth token refreshed successfully');
+        console.log('Auth: Token refreshed successfully via Firebase');
         
         // Update user info in storage with fresh timestamp
         const userInfo = {
@@ -186,54 +216,91 @@ export async function checkAndRefreshAuth(): Promise<boolean> {
           lastAuthenticated: Date.now()
         };
         
-        await chrome.storage.local.set({
-          'wordstream_user_info': userInfo
-        });
+        try {
+          await chrome.storage.local.set({
+            'wordstream_user_info': userInfo
+          });
+          console.log('Auth: Storage updated with fresh authentication');
+        } catch (storageError) {
+          console.error('Auth: Error updating authentication in storage:', storageError);
+          // Continue despite storage error
+        }
         
         return true;
-      } catch (error) {
-        console.error('Error refreshing Firebase token:', error);
+      } catch (tokenError) {
+        console.error('Auth: Error refreshing Firebase token:', tokenError);
         // Continue to check storage as fallback
       }
+    } else {
+      console.log('Auth: No Firebase user found, checking storage');
     }
     
     // Check storage as fallback
-    const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
-    const userData = authInfo.wordstream_user_info;
-    
-    if (!userData) return false;
-    
-    // Check if token needs refresh (every 45 minutes)
-    const lastAuth = userData.lastAuthenticated || 0;
-    const now = Date.now();
-    const refreshInterval = 45 * 60 * 1000; // 45 minutes
-    
-    if (now - lastAuth > refreshInterval) {
-      await refreshAuthToken();
+    try {
+      const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+      const userData = authInfo.wordstream_user_info;
       
-      // Update last authenticated timestamp
-      await chrome.storage.local.set({
-        'wordstream_user_info': {
-          ...userData,
-          lastAuthenticated: now
+      if (!userData) {
+        console.log('Auth: No stored user data found');
+        return false;
+      }
+      
+      console.log('Auth: Found stored user data:', { email: userData.email });
+      
+      // Check if token needs refresh (every 45 minutes)
+      const lastAuth = userData.lastAuthenticated || 0;
+      const now = Date.now();
+      const refreshInterval = 45 * 60 * 1000; // 45 minutes
+      
+      if (now - lastAuth > refreshInterval) {
+        console.log('Auth: Stored auth needs refresh, last updated:', new Date(lastAuth).toISOString());
+        try {
+          await refreshAuthToken();
+          console.log('Auth: Token refreshed via Chrome Identity API');
+          
+          // Update last authenticated timestamp
+          try {
+            await chrome.storage.local.set({
+              'wordstream_user_info': {
+                ...userData,
+                lastAuthenticated: now
+              }
+            });
+            console.log('Auth: Updated stored auth timestamp');
+          } catch (storageError) {
+            console.error('Auth: Error updating authentication timestamp:', storageError);
+          }
+          
+          // Broadcast refreshed auth state
+          try {
+            chrome.runtime.sendMessage({ 
+              action: "AUTH_STATE_CHANGED", 
+              user: {
+                ...userData,
+                lastAuthenticated: now
+              },
+              isAuthenticated: true,
+              source: 'refresh_auth'
+            });
+            console.log('Auth: Broadcasted refreshed auth state');
+          } catch (broadcastError) {
+            console.error('Auth: Error broadcasting refreshed auth state:', broadcastError);
+          }
+        } catch (refreshError) {
+          console.error('Auth: Failed to refresh token via Chrome Identity API:', refreshError);
+          // Still return true since we have stored credentials, even if refresh failed
         }
-      });
+      } else {
+        console.log('Auth: Stored auth is recent, no refresh needed');
+      }
       
-      // Broadcast refreshed auth state
-      chrome.runtime.sendMessage({ 
-        action: "AUTH_STATE_CHANGED", 
-        user: {
-          ...userData,
-          lastAuthenticated: now
-        },
-        isAuthenticated: true,
-        source: 'refresh_auth'
-      });
+      return true;
+    } catch (storageError) {
+      console.error('Auth: Error checking stored authentication:', storageError);
+      return false;
     }
-    
-    return true;
   } catch (error) {
-    console.error('Error checking/refreshing auth:', error);
+    console.error('Auth: Error in checkAndRefreshAuth:', error);
     return false;
   }
 }
