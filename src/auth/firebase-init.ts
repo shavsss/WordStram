@@ -403,5 +403,52 @@ export { firestoreDb as firestore };
 export { storageService as storage };
 export { isInitialized };
 
+/**
+ * Check if a Firebase auth token is still valid
+ * @param token The token to check
+ * @returns Boolean indicating if token is valid
+ */
+export async function isTokenValid(token: string): Promise<boolean> {
+  try {
+    // We can't directly validate the token client-side, 
+    // but we can check if Firebase still considers us logged in
+    const auth = getAuth();
+    if (auth.currentUser) {
+      // If we have a current user, the token is likely still valid
+      return true;
+    }
+    
+    // Otherwise, token may be expired. Could try a lightweight Firebase operation
+    // to check, but for now we'll assume it's invalid
+    return false;
+  } catch (error) {
+    console.error('Error validating token:', error);
+    // Assume invalid on error
+    return false;
+  }
+}
+
+/**
+ * Force refresh the Firebase auth token
+ * @returns Promise resolving to whether refresh was successful
+ */
+export async function forceRefreshAuthToken(): Promise<boolean> {
+  try {
+    const services = await getFirebaseServices();
+    if (!services.auth || !services.auth.currentUser) {
+      console.warn('Cannot refresh token - no current user');
+      return false;
+    }
+    
+    // Force token refresh
+    await services.auth.currentUser.getIdToken(true);
+    console.log('Auth token refreshed successfully');
+    return true;
+  } catch (error) {
+    console.error('Failed to refresh auth token:', error);
+    return false;
+  }
+}
+
 // Default export for convenience
 export default initializeFirebase;

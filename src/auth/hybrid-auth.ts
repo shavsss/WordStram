@@ -117,34 +117,126 @@ const saveUserInfoToStorage = async (user: User): Promise<void> => {
 };
 
 /**
+ * Check if a token is expired
+ * @param timestamp The timestamp when token was last refreshed
+ * @returns Boolean indicating if token is likely expired
+ */
+function isTokenExpired(timestamp: number): boolean {
+  if (!timestamp) return true;
+  
+  const now = Date.now();
+  const TOKEN_LIFETIME = 45 * 60 * 1000; // 45 minutes
+  return now - timestamp > TOKEN_LIFETIME;
+}
+
+/**
+ * Store validated user info to local storage
+ * @param userInfo User information to store
+ */
+export async function storeUserInfoToStorage(userInfo: any): Promise<void> {
+  try {
+    // Store with timestamp for persistence
+    await chrome.storage.local.set({
+      'wordstream_user_info': {
+        ...userInfo,
+        lastAuthenticated: Date.now(),
+        tokenRefreshTime: Date.now()
+      },
+      'wordstream_auth_state': {
+        isAuthenticated: true,
+        lastChecked: Date.now()
+      }
+    });
+    
+    console.log('Hybrid Auth: User info stored to local storage');
+  } catch (error) {
+    console.error('Hybrid Auth: Error storing user info:', error);
+    throw error;
+  }
+}
+
+/**
  * Refresh the authentication token
  * @returns Promise<string | null> A promise that resolves to a refreshed token or null
  */
 export const refreshAuthToken = async (): Promise<string | null> => {
-  console.log('Attempting to refresh auth token...');
+  console.log('Hybrid Auth: Attempting to refresh auth token...');
   
   try {
+    // Check if we should try refresh based on stored timestamp
+    try {
+      const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+      const tokenRefreshTime = authInfo.wordstream_user_info?.tokenRefreshTime || 0;
+      
+      if (!isTokenExpired(tokenRefreshTime)) {
+        console.log('Hybrid Auth: Token still fresh, no need to refresh');
+        return "existing_token_still_valid";
+      }
+    } catch (checkError) {
+      console.warn('Hybrid Auth: Error checking token freshness:', checkError);
+    }
+    
     // Use chrome.identity API to get a fresh token
-    return new Promise<string | null>((resolve, reject) => {
+    const token = await new Promise<string | null>((resolve, reject) => {
       chrome.identity.getAuthToken({ interactive: false }, (token) => {
         if (chrome.runtime.lastError) {
-          console.warn('Error refreshing token:', chrome.runtime.lastError);
+          console.warn('Hybrid Auth: Error refreshing token:', chrome.runtime.lastError);
           resolve(null);
           return;
         }
         
         if (!token) {
-          console.warn('No token returned during refresh');
+          console.warn('Hybrid Auth: No token returned during refresh');
           resolve(null);
           return;
         }
         
-        console.log('Auth token refreshed successfully');
+        console.log('Hybrid Auth: Auth token refreshed successfully');
         resolve(token);
       });
     });
+    
+    if (token) {
+      // Update token refresh time in storage
+      try {
+        const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+        if (authInfo.wordstream_user_info) {
+          await chrome.storage.local.set({
+            'wordstream_user_info': {
+              ...authInfo.wordstream_user_info,
+              tokenRefreshTime: Date.now(),
+              lastAuthenticated: Date.now()
+            },
+            'wordstream_auth_state': {
+              isAuthenticated: true,
+              lastChecked: Date.now()
+            }
+          });
+          
+          // Broadcast auth state for other components
+          try {
+            chrome.runtime.sendMessage({ 
+              action: "AUTH_STATE_CHANGED", 
+              isAuthenticated: true,
+              user: {
+                ...authInfo.wordstream_user_info,
+                tokenRefreshTime: Date.now(),
+                lastAuthenticated: Date.now()
+              },
+              source: 'token_refresh'
+            });
+          } catch (broadcastError) {
+            console.warn('Hybrid Auth: Error broadcasting refreshed auth state:', broadcastError);
+          }
+        }
+      } catch (storageError) {
+        console.warn('Hybrid Auth: Error updating token refresh time:', storageError);
+      }
+    }
+    
+    return token;
   } catch (error) {
-    console.error('Error in refresh token flow:', error);
+    console.error('Hybrid Auth: Error in refresh token flow:', error);
     return null;
   }
 };

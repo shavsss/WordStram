@@ -43,6 +43,10 @@ let currentUser: User | null = null;
 let authStateListeners: Array<(user: User | null) => void> = [];
 let isAuthInitialized = false;
 
+// Auth persistence support
+let persistenceCheckInterval: NodeJS.Timeout | null = null;
+const PERSISTENCE_CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
 /**
  * Safe wrapper to handle extension context issues
  * This function wraps Firebase auth operations and checks for extension context validity
@@ -84,7 +88,7 @@ export async function initializeAuth(): Promise<boolean> {
     const auth = services.auth;
     console.log('Auth: Firebase auth service obtained successfully');
     
-    // Set up auth state monitoring
+    // Set up auth state monitoring with improved persistence
     onAuthStateChanged(auth, (user) => {
       console.log('Auth: Auth state changed:', { 
         isAuthenticated: !!user, 
@@ -96,18 +100,43 @@ export async function initializeAuth(): Promise<boolean> {
       // Update storage on auth state change
       if (user) {
         try {
+          const userInfo = {
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+            lastAuthenticated: Date.now(),
+            tokenRefreshTime: Date.now()
+          };
+          
           chrome.storage.local.set({
-            'wordstream_user_info': {
-              uid: user.uid,
-              email: user.email,
-              displayName: user.displayName,
-              photoURL: user.photoURL,
-              lastAuthenticated: Date.now()
+            'wordstream_user_info': userInfo,
+            'wordstream_auth_state': {
+              isAuthenticated: true,
+              lastChecked: Date.now()
             }
           });
           console.log('Auth: Updated storage with user info for', user.email);
+          
+          // Set up persistence check if not already running
+          if (!persistenceCheckInterval) {
+            setupPersistenceCheck();
+          }
         } catch (error) {
           console.error('Auth: Error updating storage with user info:', error);
+        }
+      } else {
+        // User signed out - clear persistence
+        try {
+          chrome.storage.local.remove(['wordstream_user_info', 'wordstream_auth_state']);
+          
+          // Clear persistence check interval
+          if (persistenceCheckInterval) {
+            clearInterval(persistenceCheckInterval);
+            persistenceCheckInterval = null;
+          }
+        } catch (error) {
+          console.error('Auth: Error clearing auth info from storage:', error);
         }
       }
     });
@@ -120,11 +149,38 @@ export async function initializeAuth(): Promise<boolean> {
         try {
           await getIdToken(user, true);
           console.log('Auth: ID token refreshed successfully');
+          
+          // Update token refresh time in storage
+          try {
+            const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+            if (authInfo.wordstream_user_info) {
+              await chrome.storage.local.set({
+                'wordstream_user_info': {
+                  ...authInfo.wordstream_user_info,
+                  tokenRefreshTime: Date.now()
+                }
+              });
+            }
+          } catch (storageError) {
+            console.warn('Auth: Error updating token refresh time:', storageError);
+          }
         } catch (error) {
           console.error('Auth: Error refreshing token:', error);
         }
       }
     });
+    
+    // Check if we have stored auth state and try to restore it
+    try {
+      const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+      if (authInfo.wordstream_user_info && !auth.currentUser) {
+        console.log('Auth: Found stored user data, attempting to restore session');
+        // We have stored auth but no current user - try to refresh
+        await checkAndRefreshAuth();
+      }
+    } catch (storageError) {
+      console.warn('Auth: Error checking stored auth during init:', storageError);
+    }
     
     isAuthInitialized = true;
     console.log('Auth: Authentication initialized successfully');
@@ -133,6 +189,28 @@ export async function initializeAuth(): Promise<boolean> {
     console.error('Auth: Error initializing authentication:', error);
     return false;
   }
+}
+
+/**
+ * Set up periodic check to ensure auth persistence
+ */
+function setupPersistenceCheck() {
+  // Clear any existing interval
+  if (persistenceCheckInterval) {
+    clearInterval(persistenceCheckInterval);
+  }
+  
+  // Set up new interval
+  persistenceCheckInterval = setInterval(async () => {
+    try {
+      console.log('Auth: Running persistence check');
+      await checkAndRefreshAuth();
+    } catch (error) {
+      console.error('Auth: Error in persistence check:', error);
+    }
+  }, PERSISTENCE_CHECK_INTERVAL);
+  
+  console.log('Auth: Persistence check interval set up');
 }
 
 /**
@@ -311,15 +389,104 @@ export async function checkAndRefreshAuth(): Promise<boolean> {
  */
 export async function isAuthenticated(): Promise<boolean> {
   try {
-    // First check local storage for cached auth state
-    const isAuthenticatedFromStorage = await checkUserAuthFromStorage();
-    if (isAuthenticatedFromStorage) return true;
+    // First check local storage for cached auth state - fastest response
+    try {
+      const authInfo = await chrome.storage.local.get(['wordstream_user_info', 'wordstream_auth_state']);
+      
+      if (authInfo.wordstream_user_info?.uid) {
+        const lastAuth = authInfo.wordstream_auth_state?.lastChecked || 0;
+        const now = Date.now();
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        
+        // If we checked auth recently, trust the stored state
+        if (now - lastAuth < ONE_DAY) {
+          return true;
+        }
+        
+        // Otherwise, we'll verify with Firebase below
+        console.log('Auth: Stored auth state is old, verifying with Firebase');
+      }
+    } catch (storageError) {
+      console.warn('Auth: Error checking auth from storage:', storageError);
+      // Continue with Firebase check
+    }
     
-    // Fallback to Firebase check
-    const user = await getCurrentUser();
-    return !!user;
+    // Check with Firebase auth as the source of truth
+    try {
+      // If we already have currentUser cached, use it
+      if (currentUser) {
+        // Update storage just to be safe
+        try {
+          const userInfo = {
+            uid: currentUser.uid,
+            email: currentUser.email,
+            displayName: currentUser.displayName,
+            photoURL: currentUser.photoURL,
+            lastAuthenticated: Date.now()
+          };
+          
+          chrome.storage.local.set({
+            'wordstream_user_info': userInfo,
+            'wordstream_auth_state': {
+              isAuthenticated: true,
+              lastChecked: Date.now()
+            }
+          });
+        } catch (storageError) {
+          console.warn('Auth: Error updating storage in isAuthenticated:', storageError);
+        }
+        
+        return true;
+      }
+      
+      // Otherwise check Firebase directly
+      const services = await getFirebaseServices();
+      if (services.auth?.currentUser) {
+        // Update storage for faster future checks
+        try {
+          const userInfo = {
+            uid: services.auth.currentUser.uid,
+            email: services.auth.currentUser.email,
+            displayName: services.auth.currentUser.displayName,
+            photoURL: services.auth.currentUser.photoURL,
+            lastAuthenticated: Date.now()
+          };
+          
+          chrome.storage.local.set({
+            'wordstream_user_info': userInfo,
+            'wordstream_auth_state': {
+              isAuthenticated: true,
+              lastChecked: Date.now()
+            }
+          });
+        } catch (storageError) {
+          console.warn('Auth: Error updating storage in isAuthenticated:', storageError);
+        }
+        
+        return true;
+      }
+      
+      // Try refresh as last resort
+      const refreshed = await checkAndRefreshAuth();
+      return refreshed;
+    } catch (firebaseError) {
+      console.error('Auth: Error checking Firebase auth:', firebaseError);
+      
+      // Last resort fallback - check storage again and use it if available
+      try {
+        const authInfo = await chrome.storage.local.get(['wordstream_user_info']);
+        if (authInfo.wordstream_user_info?.uid) {
+          console.log('Auth: Firebase check failed but found user in storage, assuming authenticated');
+          return true;
+        }
+      } catch (storageError) {
+        console.error('Auth: Fatal error checking authentication:', storageError);
+      }
+      
+      return false;
+    }
   } catch (error) {
-    console.error('Error checking authentication status:', error);
+    console.error('Auth: Error in isAuthenticated:', error);
     return false;
   }
 }

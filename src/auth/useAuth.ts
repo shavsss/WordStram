@@ -1,325 +1,223 @@
 /**
  * useAuth Hook
- * This hook provides authentication state and functions for the application.
+ * This hook provides authentication state and functions for React components.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { User } from 'firebase/auth';
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-  User
-} from 'firebase/auth';
-
-// Import from centralized Firebase modules
-import { 
-  getFirebaseServices, 
-  initializeFirebase,
-  initializeAuth,
-  isExtensionContextValid,
-  signInWithEmail as authSignInWithEmail,
   signInWithGoogle as authSignInWithGoogle,
   signOut as authSignOut,
-  createUser as authCreateUser
-} from './index';
+  getCurrentUser,
+  isAuthenticated as checkIsAuthenticated
+} from './auth-manager';
 
-interface AuthState {
-  isAuthenticated: boolean;
-  user: User | null;
-  loading: boolean;
-  error: string | null;
+export interface UserInfo {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  lastAuthenticated: number;
 }
 
+/**
+ * Hook לניהול אימות משתמשים
+ */
 export default function useAuth() {
-  const [authState, setAuthState] = useState<AuthState>({
-    isAuthenticated: false,
-    user: null,
-    loading: true,
-    error: null
-  });
+  const [user, setUser] = useState<UserInfo | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
-  // Track extension context validation status
-  const [isContextValid, setIsContextValid] = useState<boolean>(true);
-
-  // Function to check and update context validity
-  const checkExtensionContext = () => {
-    const isValid = isExtensionContextValid();
-    setIsContextValid(isValid);
-    return isValid;
-  };
-
+  // Set up auth state listener on mount
   useEffect(() => {
-    let unsubscribe: (() => void) | null = null;
-
-    const setupAuth = async () => {
+    let unmounted = false;
+    let authStateListener: ((message: any) => void) | null = null;
+    
+    const checkInitialAuthState = async () => {
+      if (unmounted) return;
+      
+      setLoading(true);
+      
       try {
-        // Check extension context first
-        if (!checkExtensionContext()) {
-          setAuthState({
-            isAuthenticated: false,
-            user: null,
-            loading: false,
-            error: "Extension context is invalid. Try reloading the extension."
-          });
-          return;
-        }
-
-        // Check for cached user info first for faster UI updates
-        try {
-          const cachedUser = await chrome.storage.local.get(['wordstream_user_info']);
-          if (cachedUser.wordstream_user_info) {
-            // Show authenticated state immediately while verifying with Firebase
-            setAuthState({
-              isAuthenticated: true,
-              user: cachedUser.wordstream_user_info,
-              loading: true, // Still loading full auth state
-              error: null
-            });
+        // Check storage first for immediate UI update
+        const data = await chrome.storage.local.get(['wordstream_user_info']);
+        if (data.wordstream_user_info) {
+          if (!unmounted) {
+            setUser(data.wordstream_user_info);
+            setLoading(false);
           }
-        } catch (error) {
-          console.error("Error checking cached user:", error);
-          // Continue with Firebase initialization
-        }
-
-        // Ensure Firebase is initialized
-        await initializeFirebase();
-        
-        // Initialize auth
-        await initializeAuth();
-        
-        // Get services
-        const services = await getFirebaseServices();
-        if (!services.auth) {
-          throw new Error("Firebase auth is not initialized");
         }
         
-        // Set up auth state listener
-        unsubscribe = onAuthStateChanged(services.auth, (authUser) => {
-          // Recheck context validity when auth state changes
-          if (checkExtensionContext()) {
-            const isAuthenticated = !!authUser;
+        // Then check with Firebase for source of truth
+        const currentUser = await getCurrentUser();
+        if (!unmounted) {
+          if (currentUser) {
+            const userInfo = {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              photoURL: currentUser.photoURL,
+              lastAuthenticated: Date.now()
+            };
+            setUser(userInfo);
             
-            // If authenticated, update the cached user info
-            if (isAuthenticated && authUser) {
-              chrome.storage.local.set({
-                'wordstream_user_info': {
-                  uid: authUser.uid,
-                  email: authUser.email,
-                  displayName: authUser.displayName,
-                  photoURL: authUser.photoURL,
-                  lastAuthenticated: Date.now()
+            // Update storage with latest info
+            try {
+              chrome.storage.local.set({ 
+                'wordstream_user_info': userInfo,
+                'wordstream_auth_state': {
+                  isAuthenticated: true,
+                  lastChecked: Date.now()
                 }
               });
+            } catch (storageError) {
+              console.error('useAuth: Error updating auth in storage:', storageError);
             }
-            
-            setAuthState({
-              isAuthenticated,
-              user: authUser,
-              loading: false,
-              error: null
-            });
+          } else if (!data.wordstream_user_info) {
+            // Only clear user if we don't have storage data
+            setUser(null);
           }
-        }, (err) => {
-          // Check if error is related to extension context
-          if (err.message?.includes('extension context') ||
-              err.message?.includes('Extension context') ||
-              (err as any).code === 'auth/internal-error') {
-            setIsContextValid(false);
-            setAuthState({
-              isAuthenticated: false,
-              user: null,
-              loading: false,
-              error: "Extension context is invalid. Please reload the extension."
-            });
-          } else {
-            setAuthState({
-              isAuthenticated: false,
-              user: null,
-              loading: false,
-              error: err.message
-            });
-          }
-        });
-      } catch (error: any) {
-        console.error("Failed to set up auth state listener:", error);
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('useAuth: Error checking initial auth state:', error);
         
-        // Check if error is context-related
-        if (error.message?.includes('extension context') || 
-            error.message?.includes('Extension context')) {
-          setIsContextValid(false);
-          setAuthState({
-            isAuthenticated: false,
-            user: null, 
-            loading: false,
-            error: "Extension context is invalid. Please reload the extension."
-          });
-        } else {
-          setAuthState({
-            isAuthenticated: false,
-            user: null,
-            loading: false,
-            error: error.message || "Failed to initialize authentication"
-          });
+        // Fallback to storage if Firebase check fails
+        try {
+          const data = await chrome.storage.local.get(['wordstream_user_info']);
+          if (!unmounted) {
+            if (data.wordstream_user_info) {
+              setUser(data.wordstream_user_info);
+            } else {
+              setUser(null);
+            }
+            setLoading(false);
+          }
+        } catch (storageError) {
+          console.error('useAuth: Fatal error checking auth:', storageError);
+          if (!unmounted) {
+            setUser(null);
+            setLoading(false);
+          }
+        }
+      }
+      
+      if (!unmounted) {
+        setIsInitialized(true);
+      }
+    };
+    
+    // Set up listener for auth state changes
+    authStateListener = (message: any) => {
+      if (message.action === 'AUTH_STATE_CHANGED' && !unmounted) {
+        if (message.isAuthenticated && message.user) {
+          setUser(message.user);
+          setLoading(false);
+        } else if (message.isAuthenticated === false) {
+          setUser(null);
+          setLoading(false);
         }
       }
     };
 
-    setupAuth();
+    // Add the listener
+    chrome.runtime.onMessage.addListener(authStateListener);
+    
+    // Check initial state
+    checkInitialAuthState();
 
-    // Set up periodic context validation check
-    const contextCheckInterval = setInterval(() => {
-      if (!checkExtensionContext() && isContextValid) {
-        // Context has become invalid
-        setAuthState({
-          isAuthenticated: false,
-          user: null,
-          loading: false,
-          error: "Extension context has become invalid. Please reload the extension."
-        });
-      }
-    }, 5000);
-
-    // Clean up subscription and interval on unmount
+    // Clean up listener on unmount
     return () => {
-      if (unsubscribe) unsubscribe();
-      clearInterval(contextCheckInterval);
+      unmounted = true;
+      if (authStateListener) {
+        chrome.runtime.onMessage.removeListener(authStateListener);
+      }
     };
   }, []);
 
-  const signInWithEmailPassword = async (email: string, password: string) => {
-    setAuthState(prev => ({ ...prev, loading: true, error: null }));
+  // Enhanced Google Sign In with better error handling
+  const signInWithGoogle = useCallback(async () => {
     try {
-      // Check extension context first
-      if (!checkExtensionContext()) {
-        throw new Error("Extension context is invalid. Please reload the extension.");
+      setLoading(true);
+      setError(null);
+      
+      // Try background script first
+      try {
+        const response = await chrome.runtime.sendMessage({ 
+          action: "SIGN_IN_WITH_GOOGLE" 
+        });
+        
+        if (!response || !response.success) {
+          // Fall back to direct method
+          throw new Error(response?.error || "Google sign-in failed via background");
+        }
+        
+        // Success
+        setLoading(false);
+        return true;
+      } catch (backgroundError) {
+        console.warn('useAuth: Error using background sign-in, trying direct method:', backgroundError);
+        
+        // Fall back to direct method
+        try {
+          await authSignInWithGoogle();
+          setLoading(false);
+          return true;
+        } catch (directError) {
+          console.error('useAuth: Direct sign-in also failed:', directError);
+          throw directError;
+        }
+      }
+    } catch (error) {
+      console.error("useAuth: Login error:", error);
+      setLoading(false);
+      setError(error instanceof Error ? error.message : 'Unknown error occurred');
+      return false;
+    }
+  }, []);
+
+  // Improved logout
+  const logout = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Clear local storage first for immediate UI update
+      try {
+        await chrome.storage.local.remove(['wordstream_user_info', 'wordstream_auth_state']);
+        setUser(null);
+      } catch (storageError) {
+        console.error('useAuth: Error clearing storage during logout:', storageError);
       }
       
-      await authSignInWithEmail(email, password);
+      // Then sign out from Firebase
+      try {
+        await authSignOut();
+      } catch (signOutError) {
+        console.error('useAuth: Error in Firebase signOut:', signOutError);
+        // Continue despite error - we've already cleared local state
+      }
+      
+      setLoading(false);
       return true;
-    } catch (err: any) {
-      const errorMessage = err.message?.includes('extension context') || 
-                          err.message?.includes('Extension context') ?
-                          "Extension context is invalid. Please reload the extension." :
-                          err.message;
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        loading: false, 
-        error: errorMessage
-      }));
-      throw err;
+    } catch (error) {
+      console.error('useAuth: Logout error:', error);
+      setError(error instanceof Error ? error.message : 'Unknown error occurred');
+      setLoading(false);
+      return false;
     }
-  };
+  }, []);
 
-  const signUpWithEmailPassword = async (email: string, password: string) => {
-    setAuthState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      // Check extension context first
-      if (!checkExtensionContext()) {
-        throw new Error("Extension context is invalid. Please reload the extension.");
-      }
-      
-      await authCreateUser(email, password);
-      return true;
-    } catch (err: any) {
-      const errorMessage = err.message?.includes('extension context') || 
-                          err.message?.includes('Extension context') ?
-                          "Extension context is invalid. Please reload the extension." :
-                          err.message;
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        loading: false, 
-        error: errorMessage
-      }));
-      throw err;
-    }
-  };
-
-  const signInWithGoogle = async () => {
-    setAuthState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      // Check extension context first
-      if (!checkExtensionContext()) {
-        throw new Error("Extension context is invalid. Please reload the extension.");
-      }
-      
-      await authSignInWithGoogle();
-      return true;
-    } catch (err: any) {
-      const errorMessage = err.message?.includes('extension context') || 
-                          err.message?.includes('Extension context') ?
-                          "Extension context is invalid. Please reload the extension." :
-                          err.message;
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        loading: false, 
-        error: errorMessage
-      }));
-      throw err;
-    }
-  };
-
-  const logout = async () => {
-    setAuthState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      // Check extension context first
-      if (!checkExtensionContext()) {
-        throw new Error("Extension context is invalid. Please reload the extension.");
-      }
-      
-      await authSignOut();
-      setAuthState({
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-        error: null
-      });
-    } catch (err: any) {
-      const errorMessage = err.message?.includes('extension context') || 
-                          err.message?.includes('Extension context') ?
-                          "Extension context is invalid. Please reload the extension." :
-                          err.message;
-      
-      setAuthState(prev => ({ 
-        ...prev, 
-        loading: false, 
-        error: errorMessage
-      }));
-      throw err;
-    }
-  };
-
-  const reloadAuthState = async () => {
-    setAuthState(prev => ({ ...prev, loading: true }));
-    // Check context validity when manually reloading auth state
-    if (!checkExtensionContext()) {
-      setAuthState({
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-        error: "Extension context is invalid. Please reload the extension."
-      });
-      return;
-    }
-    // Otherwise trigger auth state listener update through Firebase
-  };
-
+  // Don't wait for loading if we have a user from storage - improves UX
+  const effectivelyAuthenticated = !!user;
+  
   return {
-    isAuthenticated: authState.isAuthenticated,
-    user: authState.user,
-    loading: authState.loading,
-    error: authState.error,
-    isContextValid, // Expose context validity status
-    signInWithEmailPassword,
-    signUpWithEmailPassword,
+    user,
+    loading: loading && !isInitialized, // Only show loading on initial load
+    error,
+    isAuthenticated: effectivelyAuthenticated,
     signInWithGoogle,
-    logout,
-    reloadAuthState,
-    checkExtensionContext // Expose function to manually check context
+    logout
   };
 }

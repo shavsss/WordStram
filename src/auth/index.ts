@@ -11,6 +11,8 @@ export {
   getFirebaseServices,
   getFirebaseAuth,
   isExtensionContextValid,
+  isTokenValid,
+  forceRefreshAuthToken,
   app,
   auth,
   firestore,
@@ -34,6 +36,13 @@ export {
   addAuthStateListener,
   removeAuthStateListener
 } from './auth-manager';
+
+// Export from hybrid-auth
+export {
+  refreshAuthToken,
+  isUserAuthenticated,
+  storeUserInfoToStorage
+} from './hybrid-auth';
 
 // Export from database-service
 export {
