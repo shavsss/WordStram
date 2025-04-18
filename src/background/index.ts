@@ -46,6 +46,9 @@ const extensionReadiness = {
   }
 };
 
+// Add a flag to track background readiness
+let isBackgroundReady = false;
+
 /**
  * More robust message sending that handles receiver readiness
  */
@@ -112,6 +115,10 @@ async function initializeBackgroundServices() {
     
     // Set up periodic auth token refresh
     setupAuthTokenRefresh();
+    
+    // Mark background as ready
+    isBackgroundReady = true;
+    console.log('WordStream: Background services fully initialized and ready');
     
     // Immediately check and restore authentication state
     try {
@@ -253,6 +260,33 @@ async function handleGoogleSignIn() {
         'wordstream_user_info': user
       });
       
+      // Broadcast authentication state to all tabs
+      console.log('WordStream: Broadcasting authentication state to all tabs');
+      
+      // Broadcast to all tabs
+      try {
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => {
+            if (tab.id) {
+              try {
+                chrome.tabs.sendMessage(tab.id, {
+                  action: 'AUTH_STATE_CHANGED',
+                  isAuthenticated: true,
+                  user: user,
+                  source: 'google_signin_broadcast'
+                }).catch(() => {
+                  // Ignore expected errors from tabs without listeners
+                });
+              } catch (tabError) {
+                // Ignore errors in broadcasting to specific tabs
+              }
+            }
+          });
+        });
+      } catch (broadcastError) {
+        console.warn('WordStream: Error broadcasting auth state:', broadcastError);
+      }
+      
       console.log('WordStream: Google sign in successful using direct method');
       return user;
     } catch (directError) {
@@ -261,6 +295,39 @@ async function handleGoogleSignIn() {
       // Fallback to dynamic import if the direct method fails
       const { signInWithGoogle } = await import('../auth/auth-manager');
       const result = await signInWithGoogle();
+      
+      // Also broadcast auth state after successful sign-in with fallback method
+      const user = result.user;
+      
+      // Broadcast to all tabs
+      try {
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => {
+            if (tab.id) {
+              try {
+                chrome.tabs.sendMessage(tab.id, {
+                  action: 'AUTH_STATE_CHANGED',
+                  isAuthenticated: true,
+                  user: {
+                    uid: user.uid,
+                    email: user.email,
+                    displayName: user.displayName,
+                    photoURL: user.photoURL,
+                    lastAuthenticated: Date.now()
+                  },
+                  source: 'google_signin_fallback_broadcast'
+                }).catch(() => {
+                  // Ignore expected errors from tabs without listeners
+                });
+              } catch (tabError) {
+                // Ignore errors in broadcasting to specific tabs
+              }
+            }
+          });
+        });
+      } catch (broadcastError) {
+        console.warn('WordStream: Error broadcasting auth state:', broadcastError);
+      }
       
       console.log('WordStream: Google sign in successful using import method');
       return result.user;
@@ -334,6 +401,16 @@ interface GeminiRequestBody {
  */
 function safelySendMessage(message: any, responseCallback?: (response: any) => void): void {
   try {
+    // Check if this is an authentication message
+    const isAuthMessage = message.action === 'AUTH_STATE_CHANGED';
+    
+    // Log message type
+    console.log(`WordStream: Broadcasting ${isAuthMessage ? 'AUTHENTICATION' : 'standard'} message to extension contexts`);
+    
+    // For auth messages, we want to be more persistent
+    const retryCount = isAuthMessage ? 3 : 1;
+    const initialDelay = isAuthMessage ? 100 : 500;
+    
     // Try to send to popup if it's ready
     if (extensionReadiness.isPopupReady()) {
       chrome.runtime.sendMessage(message, (response) => {
@@ -358,30 +435,40 @@ function safelySendMessage(message: any, responseCallback?: (response: any) => v
           }
           if (responseCallback) responseCallback(response);
         });
-      }, 500);
+      }, initialDelay);
     }
     
     // Get tabs and check each tab's readiness before sending
     chrome.tabs.query({}, (tabs) => {
       tabs.forEach(tab => {
         if (tab.id) {
-          // Use exponential backoff for tabs
-          const sendToTab = () => {
+          // For auth messages, try multiple times with increasing delays
+          const sendToTab = (attempt = 0) => {
             try {
               chrome.tabs.sendMessage(tab.id!, message, (response) => {
                 // Individual tab responses are ignored
                 if (chrome.runtime.lastError) {
-                  // This is expected for tabs without our content script
-                  // Just ignore the error quietly
+                  // If this is an auth message and we have retries left, try again
+                  if (isAuthMessage && attempt < retryCount) {
+                    const nextAttempt = attempt + 1;
+                    const delay = initialDelay * Math.pow(2, nextAttempt);
+                    console.log(`WordStream: Retry ${nextAttempt}/${retryCount} for auth message to tab ${tab.id} in ${delay}ms`);
+                    setTimeout(() => sendToTab(nextAttempt), delay);
+                  }
                 }
               });
             } catch (e) {
               // Ignore errors from tabs that can't receive messages
+              if (isAuthMessage && attempt < retryCount) {
+                const nextAttempt = attempt + 1;
+                const delay = initialDelay * Math.pow(2, nextAttempt);
+                setTimeout(() => sendToTab(nextAttempt), delay);
+              }
             }
           };
           
           // Use a slight delay to reduce chances of "receiving end does not exist"
-          setTimeout(sendToTab, 200);
+          setTimeout(() => sendToTab(0), 200);
         }
       });
     });
@@ -395,244 +482,508 @@ function safelySendMessage(message: any, responseCallback?: (response: any) => v
 // Set up listeners for messages from content scripts and popup
 function setupMessageListeners() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('WordStream: Background received message:', message);
+    console.log('WordStream: Background received message:', message?.action || 'Unknown action');
+
+    // Special case: Always respond to readiness check
+    if (message?.action === 'IS_BACKGROUND_READY') {
+      sendResponse({ ready: isBackgroundReady });
+      return true;
+    }
+    
+    // If background isn't ready yet, return an appropriate error
+    if (!isBackgroundReady && message?.action !== 'READY_CHECK') {
+      console.warn('WordStream: Background not ready yet for action:', message?.action);
+      sendResponse({ 
+        success: false, 
+        error: 'Background service not ready yet',
+        backgroundReady: false
+      });
+      return true;
+    }
 
     // Handle message based on action type
-    switch (message.action) {
+    switch (message?.action) {
       case 'SIGN_IN_WITH_GOOGLE':
         // Handle Google Sign In
         console.log('WordStream: Processing Google Sign In request');
-        handleGoogleSignIn()
-          .then(user => {
-            console.log('WordStream: Google sign-in successful, broadcasting state');
-            
-            // Prepare auth message with necessary user data
-            const authStateMessage = { 
-              action: "AUTH_STATE_CHANGED", 
-              user,
-              isAuthenticated: true,
-              source: 'google_signin_success'
-            };
-            
-            // Use safe message sending
-            safelySendMessage(authStateMessage);
-            
-            // Send success response
-            sendResponse({ 
-              success: true, 
-              user 
+        try {
+          handleGoogleSignIn()
+            .then(user => {
+              console.log('WordStream: Google sign-in successful, broadcasting state');
+              
+              // Prepare auth message with necessary user data
+              const authStateMessage = { 
+                action: "AUTH_STATE_CHANGED", 
+                user,
+                isAuthenticated: true,
+                source: 'google_signin_success'
+              };
+              
+              // Use safe message sending
+              safelySendMessage(authStateMessage);
+              
+              // Send success response
+              sendResponse({ 
+                success: true, 
+                user 
+              });
+            })
+            .catch(error => {
+              console.error('WordStream: Google Sign In error:', error);
+              sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Authentication failed"
+              });
             });
-          })
-          .catch(error => {
-            console.error('WordStream: Google Sign In error:', error);
-            sendResponse({
-              success: false,
-              error: error instanceof Error ? error.message : "Authentication failed"
-            });
+        } catch (error) {
+          console.error('WordStream: Immediate error in Google Sign In:', error);
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : "Authentication failed"
           });
+        }
         return true; // Indicates async response
         
       case 'AUTH_STATE_CHANGED':
         // Store authentication state in chrome.storage.local
-        if (message.isAuthenticated && message.user) {
-          console.log('WordStream: Received AUTH_STATE_CHANGED event (authenticated) from', message.source || 'unknown source');
-          
-          // Create user info with updated timestamp
-          const userInfo = {
-            ...message.user,
-            lastAuthenticated: Date.now()
-          };
-          
-          // Store in local storage
-          try {
-            chrome.storage.local.set({
-              'wordstream_user_info': userInfo
+        try {
+          if (message.isAuthenticated && message.user) {
+            console.log('WordStream: Received AUTH_STATE_CHANGED event (authenticated) from', message.source || 'unknown source');
+            
+            // Create user info with updated timestamp
+            const userInfo = {
+              ...message.user,
+              lastAuthenticated: Date.now()
+            };
+            
+            // Store in local storage
+            try {
+              chrome.storage.local.set({
+                'wordstream_user_info': userInfo
+              });
+              console.log('WordStream: Updated authentication in storage');
+            } catch (storageError) {
+              console.error('WordStream: Failed to store authentication:', storageError);
+            }
+            
+            // Forward safely to all contexts
+            safelySendMessage({
+              ...message,
+              user: userInfo
             });
-            console.log('WordStream: Updated authentication in storage');
-          } catch (storageError) {
-            console.error('WordStream: Failed to store authentication:', storageError);
+          } else {
+            console.log('WordStream: Received AUTH_STATE_CHANGED event (signed out) from', message.source || 'unknown source');
+            
+            // Clear authentication when signed out
+            try {
+              chrome.storage.local.remove(['wordstream_user_info']);
+              console.log('WordStream: Cleared authentication from storage');
+            } catch (storageError) {
+              console.error('WordStream: Error clearing authentication from storage:', storageError);
+            }
+            
+            // Forward safely
+            safelySendMessage(message);
           }
           
-          // Forward safely to all contexts
-          safelySendMessage({
-            ...message,
-            user: userInfo
+          // Always send a response
+          sendResponse({ success: true });
+        } catch (error) {
+          console.error('WordStream: Error handling AUTH_STATE_CHANGED:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : "Error handling auth state change" 
           });
-        } else {
-          console.log('WordStream: Received AUTH_STATE_CHANGED event (signed out) from', message.source || 'unknown source');
-          
-          // Clear authentication when signed out
-          try {
-            chrome.storage.local.remove(['wordstream_user_info']);
-            console.log('WordStream: Cleared authentication from storage');
-          } catch (storageError) {
-            console.error('WordStream: Error clearing authentication from storage:', storageError);
-          }
-          
-          // Forward safely
-          safelySendMessage(message);
         }
-        break;
+        return true;
         
       case 'SAVE_NOTE':
-        handleSaveNote(message.data)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          handleSaveNote(message.data)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in SAVE_NOTE:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true; // Indicates async response
         
       case 'GET_AUTH_STATE':
-        getAuthState()
-          .then(authState => sendResponse(authState))
-          .catch(error => sendResponse({ isAuthenticated: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          getAuthState()
+            .then(authState => sendResponse(authState))
+            .catch(error => sendResponse({ 
+              isAuthenticated: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in GET_AUTH_STATE:', error);
+          sendResponse({ 
+            isAuthenticated: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true;
         
       case 'GEMINI_CHAT':
         // Handle Gemini chat request
         console.log('WordStream: Processing Gemini chat request');
         
-        // Verify user authentication
-        if (!message.userId) {
-          console.error('WordStream: Gemini request missing user ID');
-          sendResponse({
-            success: false,
-            error: 'Authentication required'
-          });
-          return true;
-        }
-        
-        // Get API key from storage
-        chrome.storage.local.get(['api_keys'], async (result) => {
-          try {
-            let apiKey = result?.api_keys?.GOOGLE_API_KEY;
-            
-            // If API key not found, use fallback
-            if (!apiKey) {
-              console.warn('WordStream: Gemini API key not found in storage, using fallback');
-              apiKey = 'AIzaSyC9LYYnWBb4OvIZhisFHpYTnbBV3XFvzYE';
-              
-              // Save fallback key to storage for future use
-              await chrome.storage.local.set({
-                'api_keys': { 'GOOGLE_API_KEY': apiKey }
-              });
-            }
-            
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-            
-            const requestBody: GeminiRequestBody = {
-              contents: []
-            };
-            
-            // Add message history if available
-            if (message.history && message.history.length > 0) {
-              requestBody.contents = message.history.map((msg: GeminiMessage) => ({
-                role: msg.role === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.content }]
-              }));
-            }
-            
-            // Add the current message
-            requestBody.contents.push({
-              role: 'user',
-              parts: [{ text: message.query }]
-            });
-            
-            // Add generation configuration
-            requestBody.generationConfig = {
-              temperature: 0.7,
-              topK: 40,
-              topP: 0.95,
-              maxOutputTokens: 1024,
-            };
-            
-            console.log('WordStream: Sending request to Gemini API');
-            
-            // Send request to Gemini API
-            fetch(url, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(requestBody)
-            })
-            .then(response => {
-              if (!response.ok) {
-                return response.json().then(errorData => {
-                  console.error('WordStream: Gemini API error:', errorData);
-                  throw new Error(errorData.error?.message || `HTTP error ${response.status}`);
-                });
-              }
-              return response.json();
-            })
-            .then(data => {
-              console.log('WordStream: Gemini API response received');
-              // Extract the text from the response
-              const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
-              
-              // Send the response back to the content script
-              sendResponse({
-                success: true,
-                content: responseText
-              });
-              
-              // Save chat to Firebase
-              saveGeminiChatToFirebase(message.userId, message.query, responseText, message.context)
-                .catch(error => console.error('WordStream: Error saving chat to Firebase:', error));
-            })
-            .catch(error => {
-              console.error('WordStream: Error calling Gemini API:', error);
+        try {
+          // First verify user authentication
+          getAuthState().then(authState => {
+            if (!authState.isAuthenticated) {
+              console.error('WordStream: User not authenticated for Gemini chat');
               sendResponse({
                 success: false,
-                error: error.message || 'Error calling Gemini API'
+                error: 'User not authenticated'
               });
+              return;
+            }
+            
+            // Get API key from storage
+            chrome.storage.local.get(['api_keys'], async (result) => {
+              try {
+                let apiKey = result?.api_keys?.GOOGLE_API_KEY;
+                
+                // If API key not found, use fallback
+                if (!apiKey) {
+                  console.warn('WordStream: Gemini API key not found in storage, using fallback');
+                  apiKey = 'AIzaSyC9LYYnWBb4OvIZhisFHpYTnbBV3XFvzYE';
+                  
+                  // Save fallback key to storage for future use
+                  await chrome.storage.local.set({
+                    'api_keys': { 'GOOGLE_API_KEY': apiKey }
+                  });
+                }
+                
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+                
+                const requestBody: GeminiRequestBody = {
+                  contents: []
+                };
+                
+                // Add message history if available
+                if (message.history && message.history.length > 0) {
+                  requestBody.contents = message.history.map((msg: GeminiMessage) => ({
+                    role: msg.role === 'user' ? 'user' : 'model',
+                    parts: [{ text: msg.content }]
+                  }));
+                }
+                
+                // Add the current message
+                requestBody.contents.push({
+                  role: 'user',
+                  parts: [{ text: message.query }]
+                });
+                
+                // Add generation configuration
+                requestBody.generationConfig = {
+                  temperature: 0.7,
+                  topK: 40,
+                  topP: 0.95,
+                  maxOutputTokens: 1024,
+                };
+                
+                console.log('WordStream: Sending request to Gemini API');
+                
+                // Send request to Gemini API
+                fetch(url, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify(requestBody)
+                })
+                .then(response => {
+                  if (!response.ok) {
+                    return response.json().then(errorData => {
+                      console.error('WordStream: Gemini API error:', errorData);
+                      throw new Error(errorData.error?.message || `HTTP error ${response.status}`);
+                    });
+                  }
+                  return response.json();
+                })
+                .then(data => {
+                  console.log('WordStream: Gemini API response received');
+                  // Extract the text from the response
+                  const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
+                  
+                  // Send the response back to the content script
+                  sendResponse({
+                    success: true,
+                    content: responseText
+                  });
+                  
+                  // Save chat to Firebase
+                  saveGeminiChatToFirebase(message.userId || authState.user?.uid, message.query, responseText, message.context)
+                    .catch(error => console.error('WordStream: Error saving chat to Firebase:', error));
+                })
+                .catch(error => {
+                  console.error('WordStream: Error calling Gemini API:', error);
+                  sendResponse({
+                    success: false,
+                    error: error.message || 'Error calling Gemini API'
+                  });
+                });
+              } catch (error) {
+                console.error('WordStream: Error processing Gemini request:', error);
+                sendResponse({
+                  success: false,
+                  error: error instanceof Error ? error.message : String(error)
+                });
+              }
             });
-          } catch (error) {
-            console.error('WordStream: Error processing Gemini request:', error);
+          }).catch(error => {
+            console.error('WordStream: Error checking auth for Gemini:', error);
             sendResponse({
               success: false,
-              error: error instanceof Error ? error.message : String(error)
+              error: 'Failed to verify authentication: ' + (error instanceof Error ? error.message : String(error))
             });
-          }
-        });
+          });
+        } catch (error) {
+          console.error('WordStream: Immediate error in Gemini chat:', error);
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
         
         // Return true to indicate we will respond asynchronously
         return true;
         
       case 'CHECK_GEMINI_CONFIG':
-        validateGeminiApiKey()
-          .then(isValid => sendResponse({ success: true, configured: isValid }))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          validateGeminiApiKey()
+            .then(isValid => sendResponse({ success: true, configured: isValid }))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in CHECK_GEMINI_CONFIG:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true;
 
       case 'SAVE_TRANSLATION':
         // Handle saving translation to Firestore
-        handleSaveTranslation(message.translation)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          handleSaveTranslation(message.translation)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in SAVE_TRANSLATION:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true;
 
       case 'OPEN_AUTH_POPUP':
         // Open the login popup
-        openAuthPopup()
-          .then(() => sendResponse({ success: true }))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          openAuthPopup()
+            .then(() => sendResponse({ success: true }))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in OPEN_AUTH_POPUP:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true;
 
       case 'SAVE_CHAT':
         // Save a new chat session to Firestore
-        handleSaveChat(message.chat)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          handleSaveChat(message.chat)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in SAVE_CHAT:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
         return true;
 
       case 'UPDATE_CHAT':
         // Update an existing chat session
-        handleUpdateChat(message.chatId, message.updates)
-          .then(result => sendResponse(result))
-          .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        try {
+          handleUpdateChat(message.chatId, message.updates)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }));
+        } catch (error) {
+          console.error('WordStream: Immediate error in UPDATE_CHAT:', error);
+          sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          });
+        }
+        return true;
+        
+      case 'READY_CHECK':
+        // Handle readiness check message
+        if (sender.tab && sender.tab.id) {
+          // Message from content script
+          extensionReadiness.setTabReady(sender.tab.id, true);
+          sendResponse({ ready: true, component: 'background' });
+        } else {
+          // Message from popup or options page
+          extensionReadiness.setReady('popup', true);
+          sendResponse({ ready: true, component: 'background' });
+        }
+        return true;
+        
+      case 'TRANSLATE':
+        try {
+          console.log('WordStream: Processing translation request');
+          
+          // First verify user authentication
+          getAuthState().then(async authState => {
+            if (!authState.isAuthenticated) {
+              console.error('WordStream: User not authenticated for translation');
+              sendResponse({
+                success: false,
+                error: 'Authentication required'
+              });
+              return;
+            }
+            
+            // Process the translation
+            try {
+              const { text, targetLang } = message.data;
+              
+              if (!text) {
+                sendResponse({
+                  success: false,
+                  error: 'No text provided for translation'
+                });
+                return;
+              }
+              
+              // Get API key from storage
+              const apiKeysResult = await chrome.storage.local.get(['api_keys']);
+              let apiKey = apiKeysResult?.api_keys?.GOOGLE_API_KEY;
+              
+              // If API key not found, use fallback
+              if (!apiKey) {
+                console.warn('WordStream: Translation API key not found in storage, using fallback');
+                apiKey = 'AIzaSyC9LYYnWBb4OvIZhisFHpYTnbBV3XFvzYE';
+                
+                // Save fallback key to storage for future use
+                await chrome.storage.local.set({
+                  'api_keys': { 'GOOGLE_API_KEY': apiKey }
+                });
+              }
+              
+              // Construct the translation request URL
+              const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+              
+              // Build the request
+              const requestBody = {
+                q: text,
+                target: targetLang,
+                format: 'text'
+              };
+              
+              console.log('WordStream: Sending translation request to Google API');
+              
+              // Send the request
+              const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+              });
+              
+              if (!response.ok) {
+                const errorData = await response.json();
+                console.error('WordStream: Translation API error:', errorData);
+                sendResponse({
+                  success: false,
+                  error: errorData.error?.message || `HTTP error ${response.status}`
+                });
+                return;
+              }
+              
+              const data = await response.json();
+              
+              // Extract translation from response
+              if (data?.data?.translations?.[0]) {
+                const translation = data.data.translations[0];
+                console.log('WordStream: Translation successful');
+                
+                sendResponse({
+                  success: true,
+                  translation: translation.translatedText,
+                  detectedSourceLanguage: translation.detectedSourceLanguage
+                });
+                
+                // Optionally save translation to history here
+              } else {
+                console.error('WordStream: Unexpected translation response format');
+                sendResponse({
+                  success: false,
+                  error: 'Unexpected response format from translation API'
+                });
+              }
+            } catch (translationError) {
+              console.error('WordStream: Error in translation process:', translationError);
+              sendResponse({
+                success: false,
+                error: translationError instanceof Error ? translationError.message : String(translationError)
+              });
+            }
+          }).catch(error => {
+            console.error('WordStream: Error checking auth for translation:', error);
+            sendResponse({
+              success: false,
+              error: 'Failed to verify authentication: ' + (error instanceof Error ? error.message : String(error))
+            });
+          });
+        } catch (error) {
+          console.error('WordStream: Immediate error in translation:', error);
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        
+        // Return true to indicate we will respond asynchronously
+        return true;
+        
+      default:
+        console.warn('WordStream: Unknown message action:', message?.action);
+        sendResponse({ success: false, error: 'Unknown action' });
         return true;
     }
-    
-    return false;
   });
 }
 
@@ -977,6 +1328,7 @@ async function initializeExtension() {
   try {
     // Mark background as not ready yet
     extensionReadiness.setReady('background', false);
+    isBackgroundReady = false;
     
     // Initialize Firebase and other services
     const initialized = await initializeBackgroundServices();

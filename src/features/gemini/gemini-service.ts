@@ -60,6 +60,54 @@ function generateId(): string {
 }
 
 /**
+ * Send a message to the background script with retries
+ * @param message Message to send
+ * @param maxRetries Maximum number of retry attempts
+ * @returns Promise resolving to the response
+ */
+async function sendMessageToBackground(message: any, maxRetries = 2): Promise<any> {
+  let retries = 0;
+  
+  while (retries <= maxRetries) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Timeout waiting for Gemini response'));
+        }, 30000); // 30 second timeout for Gemini
+        
+        chrome.runtime.sendMessage(message, (response) => {
+          clearTimeout(timeoutId);
+          
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          
+          if (!response) {
+            reject(new Error('No response received'));
+            return;
+          }
+          
+          resolve(response);
+        });
+      });
+    } catch (error) {
+      console.warn(`WordStream Gemini: Error sending message (attempt ${retries + 1}/${maxRetries + 1}):`, error);
+      
+      if (retries >= maxRetries) {
+        throw error;
+      }
+      
+      retries++;
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, retries), 5000)));
+    }
+  }
+  
+  throw new Error('Failed to send message after maximum retries');
+}
+
+/**
  * Send a query to Gemini API with conversation history
  * @param query The query to send to Gemini
  * @param history Conversation history
@@ -77,10 +125,44 @@ export async function sendToGemini(
   } = {}
 ): Promise<string> {
   try {
-    // Get user authentication
-    const user = await getUserAuthentication();
+    // Check if user is authenticated first from local storage
+    let user = null;
+    let userId = '';
+    
+    try {
+      const userData = await chrome.storage.local.get(['wordstream_user_info']);
+      if (userData.wordstream_user_info?.uid) {
+        user = userData.wordstream_user_info;
+        userId = user.uid;
+      }
+    } catch (storageError) {
+      console.warn('WordStream Gemini: Error checking auth from storage:', storageError);
+    }
+    
+    // If no user found in storage, try fallback auth check
     if (!user) {
-      throw new Error('User not authenticated. Please sign in to use this feature.');
+      try {
+        const authState = await new Promise<any>((resolve) => {
+          chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+            if (chrome.runtime.lastError) {
+              resolve({ isAuthenticated: false });
+              return;
+            }
+            resolve(response || { isAuthenticated: false });
+          });
+        });
+        
+        if (authState.isAuthenticated && authState.user?.uid) {
+          user = authState.user;
+          userId = user.uid;
+        }
+      } catch (authError) {
+        console.warn('WordStream Gemini: Auth check fallback failed:', authError);
+      }
+    }
+    
+    if (!user || !userId) {
+      throw new Error('Please sign in to use the Gemini AI features.');
     }
     
     // Create context object with available information
@@ -125,65 +207,65 @@ export async function sendToGemini(
       localStorage.getItem('wordstream-language') || 
       'en';
     
-    // Send request to background script which has access to Gemini API
-    const response = await new Promise<string>((resolve, reject) => {
-      // Add timeout to prevent indefinite waiting
-      const timeout = setTimeout(() => {
-        reject(new Error('Request to Gemini API timed out'));
-      }, 30000);
-
-      try {
-        chrome.runtime.sendMessage({
-          action: 'GEMINI_CHAT',
-          query,
-          history: formattedHistory,
-          context,
-          language: preferredLanguage,
-          userId: user.uid
-        }, (response) => {
-          clearTimeout(timeout);
-          
-          // Check for chrome runtime errors
-          if (chrome.runtime.lastError) {
-            console.error('Error sending message to Gemini:', chrome.runtime.lastError);
-            
-            // If the message port closed error occurred, provide a fallback response
-            if (chrome.runtime.lastError.message && chrome.runtime.lastError.message.includes('message port closed')) {
-              console.log('WordStream: Using fallback response due to closed message port');
-              resolve("I'm sorry, but I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.");
-              return;
-            }
-            
-            reject(new Error(chrome.runtime.lastError.message || 'Unknown runtime error'));
-            return;
-          }
-          
-          if (!response || !response.success) {
-            // Check if response contains a suggestion to set up an API key
-            if (response?.error?.includes('API key')) {
-              reject(new Error('Gemini API key not configured. Please set up your API key in the extension settings.'));
-              return;
-            }
-            
-            reject(new Error(response?.error || 'Failed to get response from Gemini'));
-            return;
-          }
-          
-          resolve(response.content || response.answer || 'No response content');
-        });
-      } catch (error) {
-        clearTimeout(timeout);
-        console.error('Error in sendMessage:', error);
-        resolve("I'm sorry, but I couldn't connect to the Gemini API. Please try again later.");
-      }
-    });
-
-    // Save chat history to Firebase with proper user authentication
-    await saveGeminiChat(user.uid, query, response, history, context);
+    // Build message to send to background
+    const message = {
+      action: 'GEMINI_CHAT',
+      query,
+      history: formattedHistory,
+      context,
+      language: preferredLanguage,
+      userId
+    };
     
-    return response;
+    try {
+      // Use our enhanced message sending function with retries
+      const response = await sendMessageToBackground(message);
+      
+      if (!response.success) {
+        // Check for specific error cases
+        if (response.error && response.error.includes('API key')) {
+          throw new Error('Gemini API key not configured. Please set up your API key in the extension settings.');
+        }
+        
+        if (response.error && response.error.includes('not authenticated')) {
+          throw new Error('Please sign in to use the Gemini AI features.');
+        }
+        
+        if (response.error && response.error.includes('Background service not ready')) {
+          throw new Error('The service is not ready yet. Please wait a moment and try again.');
+        }
+        
+        throw new Error(response.error || 'Failed to get response from Gemini');
+      }
+      
+      return response.content || 'No response content';
+    } catch (sendError) {
+      // Provide helpful error messages for specific cases
+      if (sendError instanceof Error) {
+        // Messaging errors
+        if (sendError.message.includes('message port closed')) {
+          console.error('WordStream Gemini: Message port closed:', sendError.message);
+          return "I'm sorry, I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.";
+        }
+        
+        // Timeout errors
+        if (sendError.message.includes('Timeout')) {
+          console.error('WordStream Gemini: Request timed out:', sendError.message);
+          throw new Error('The request to Gemini timed out. Please try again later.');
+        }
+        
+        // Extension context errors
+        if (sendError.message.includes('Extension context invalidated')) {
+          console.error('WordStream Gemini: Extension context error:', sendError.message);
+          return "I'm sorry, there was an issue with the extension. Please try reloading the page.";
+        }
+      }
+      
+      throw sendError;
+    }
   } catch (error) {
     console.error('Error in sendToGemini:', error);
+    
     // Provide more user-friendly error messages
     if (error instanceof Error) {
       if (error.message.includes('API key')) {
@@ -194,7 +276,7 @@ export async function sendToGemini(
         throw new Error('Your Gemini API quota has been exceeded. Please try again later.');
       } else if (error.message.includes('message port closed')) {
         return "I'm sorry, I couldn't process your request through the Gemini API. The connection was interrupted. Please try again later.";
-      } else if (error.message.includes('not authenticated')) {
+      } else if (error.message.includes('sign in')) {
         throw new Error('Please sign in to use the Gemini AI features.');
       }
     }

@@ -983,11 +983,111 @@ function showToast(message: string, duration: number = 3000) {
 }
 
 /**
+ * Ensure the background script is ready before proceeding
+ * @param maxAttempts Maximum number of attempts to check readiness
+ * @param delay Delay between attempts
+ * @returns Promise resolving to true if ready, false otherwise
+ */
+async function ensureBackgroundReady(maxAttempts = 5, delay = 500): Promise<boolean> {
+  let attempts = 0;
+  
+  while (attempts < maxAttempts) {
+    try {
+      const response = await new Promise<any>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Timeout waiting for response'));
+        }, 1000);
+        
+        chrome.runtime.sendMessage({ action: 'IS_BACKGROUND_READY' }, (result) => {
+          clearTimeout(timeoutId);
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+            return;
+          }
+          resolve(result);
+        });
+      });
+      
+      if (response && response.ready) {
+        console.log('WordStream: Background is ready');
+        return true;
+      }
+      
+      console.log(`WordStream: Background not ready yet, attempt ${attempts + 1}/${maxAttempts}`);
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    } catch (error) {
+      console.warn(`WordStream: Error checking background readiness (attempt ${attempts + 1}/${maxAttempts}):`, error);
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  console.error('WordStream: Background not ready after maximum attempts');
+  return false;
+}
+
+/**
+ * Send a message to the background script with retries
+ * @param message Message to send
+ * @param maxRetries Maximum number of retry attempts
+ * @returns Promise resolving to the response
+ */
+async function sendMessageToBackground(message: any, maxRetries = 3): Promise<any> {
+  let retries = 0;
+  
+  while (retries <= maxRetries) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Timeout waiting for response'));
+        }, 5000);
+        
+        chrome.runtime.sendMessage(message, (response) => {
+          clearTimeout(timeoutId);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          
+          if (!response) {
+            reject(new Error('No response received'));
+            return;
+          }
+          
+          resolve(response);
+        });
+      });
+    } catch (error) {
+      console.warn(`WordStream: Error sending message (attempt ${retries + 1}/${maxRetries + 1}):`, error);
+      
+      if (retries >= maxRetries) {
+        throw error;
+      }
+      
+      retries++;
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, retries), 5000)));
+    }
+  }
+  
+  throw new Error('Failed to send message after maximum retries');
+}
+
+/**
  * Initialize the content script
  */
 async function initContentScript() {
   try {
     console.log('WordStream: Initializing content script');
+    
+    // Before anything else, check if background is ready
+    const isBackgroundReady = await ensureBackgroundReady(5, 1000);
+    
+    if (!isBackgroundReady) {
+      console.warn('WordStream: Background script not ready after waiting');
+      // Still continue initialization, as background might become ready later
+    }
     
     // Check if we're on a video site or any site with videos
     if (document.readyState === 'complete') {
@@ -999,8 +1099,8 @@ async function initContentScript() {
       // Initialize video speed controller
       monitorForVideos();
       
-      // Check if user is authenticated and start caption translation automatically
-      checkAuthAndStartCaptionTranslation();
+      // Use the retry mechanism to check auth and start features
+      retryFeatureActivation();
     } else {
       window.addEventListener('load', () => {
         createWordStreamUI();
@@ -1011,8 +1111,8 @@ async function initContentScript() {
         // Initialize video speed controller
         monitorForVideos();
         
-        // Check if user is authenticated and start caption translation automatically
-        checkAuthAndStartCaptionTranslation();
+        // Use the retry mechanism to check auth and start features
+        retryFeatureActivation();
       });
     }
     
@@ -1024,11 +1124,11 @@ async function initContentScript() {
     if (services.auth) {
       services.auth.onAuthStateChanged((user: any) => {
         if (user) {
-          console.log('WordStream: User is signed in');
+          console.log('WordStream: User is signed in via Firebase auth');
           // Start caption translation automatically when user is signed in
           startCaptionTranslation();
         } else {
-          console.log('WordStream: User is not signed in');
+          console.log('WordStream: User is not signed in via Firebase auth');
         }
       });
     }
@@ -1043,50 +1143,191 @@ async function initContentScript() {
  */
 async function checkAuthAndStartCaptionTranslation() {
   try {
-    const authState = await new Promise<any>((resolve) => {
-      chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({ isAuthenticated: false });
-          return;
-        }
-        resolve(response);
-      });
-    });
+    console.log('WordStream: Checking authentication status before enabling features');
     
-    if (authState.isAuthenticated) {
-      console.log('WordStream: User is authenticated, starting caption translation automatically');
+    // First check local storage directly (faster and more reliable)
+    let isAuthenticated = false;
+    try {
+      const result = await new Promise<{wordstream_user_info?: {uid: string, email?: string}}>(resolve => {
+        chrome.storage.local.get(['wordstream_user_info'], resolve);
+      });
+      
+      if (result.wordstream_user_info?.uid) {
+        console.log('WordStream: User authenticated via local storage check');
+        isAuthenticated = true;
+      }
+    } catch (storageError) {
+      console.warn('WordStream: Error checking local storage auth:', storageError);
+    }
+    
+    // If local storage check failed, try improved message passing to background
+    if (!isAuthenticated) {
+      try {
+        // Use our new reliable messaging function
+        const authState = await sendMessageToBackground({ action: 'GET_AUTH_STATE' });
+        
+        isAuthenticated = !!authState.isAuthenticated;
+        console.log('WordStream: Auth check via background returned:', isAuthenticated);
+      } catch (messageError) {
+        console.warn('WordStream: Error in background auth check:', messageError);
+        // Try again with basic method if sendMessageToBackground fails
+        try {
+          const basicAuthState = await new Promise<any>((resolve) => {
+            chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+              if (chrome.runtime.lastError) {
+                resolve({ isAuthenticated: false });
+                return;
+              }
+              resolve(response || { isAuthenticated: false });
+            });
+          });
+          
+          isAuthenticated = !!basicAuthState.isAuthenticated;
+          console.log('WordStream: Basic auth check returned:', isAuthenticated);
+        } catch (error) {
+          console.error('WordStream: Even basic auth check failed:', error);
+        }
+      }
+    }
+    
+    // Start features if authenticated
+    if (isAuthenticated) {
+      console.log('WordStream: User is authenticated, starting features');
       startCaptionTranslation();
+      return true;
     } else {
-      console.log('WordStream: User is not authenticated, caption translation not started automatically');
+      console.log('WordStream: User is not authenticated, features not started');
+      return false;
     }
   } catch (error) {
     console.error('WordStream: Error checking authentication:', error);
+    return false;
   }
+}
+
+/**
+ * Retry feature activation with exponential backoff
+ * @param maxRetries Maximum number of retry attempts
+ */
+function retryFeatureActivation(maxRetries = 3) {
+  let retries = 0;
+  
+  function attempt() {
+    console.log(`WordStream: Attempting feature activation (${retries+1}/${maxRetries})`);
+    
+    checkAuthAndStartCaptionTranslation()
+      .then(success => {
+        if (!success && retries < maxRetries - 1) {
+          retries++;
+          // Exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, retries), 5000);
+          console.log(`WordStream: Retrying in ${delay}ms...`);
+          setTimeout(attempt, delay);
+        }
+      })
+      .catch(error => {
+        console.error('WordStream: Error in feature activation:', error);
+        if (retries < maxRetries - 1) {
+          retries++;
+          // Exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, retries), 5000);
+          console.log(`WordStream: Retrying after error in ${delay}ms...`);
+          setTimeout(attempt, delay);
+        }
+      });
+  }
+  
+  attempt();
 }
 
 // Set up message listeners for communication with popup and background
 function setupMessageListeners() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('WordStream: Received message:', message);
+    console.log('WordStream: Received message:', message?.action || 'Unknown action');
     
-    // Handle different message types
-    if (message.action === 'ACTIVATE_FEATURES') {
-      activateFeatures();
+    try {
+      // Set up response timeout to ensure we always respond
+      const timeoutId = setTimeout(() => {
+        console.warn('WordStream: Response timeout for action:', message?.action);
+        try {
+          sendResponse({ success: false, error: 'Response timeout' });
+        } catch (error) {
+          console.error('WordStream: Failed to send timeout response:', error);
+        }
+      }, 4000);
       
-      // Apply settings if provided
-      if (message.settings) {
-        updateSettings(message.settings);
+      // Handle different message types
+      if (message?.action === 'ACTIVATE_FEATURES') {
+        activateFeatures();
+        
+        // Apply settings if provided
+        if (message?.settings) {
+          updateSettings(message.settings);
+        }
+        
+        clearTimeout(timeoutId);
+        sendResponse({ success: true });
       }
-      
-      sendResponse({ success: true });
-    }
-    
-    // Handle settings update
-    if (message.action === 'UPDATE_SETTINGS') {
-      if (message.settings) {
-        updateSettings(message.settings);
+      // Handle auth state changes
+      else if (message?.action === 'AUTH_STATE_CHANGED') {
+        console.log('WordStream: Received auth state change message:', 
+            message.isAuthenticated ? 'authenticated' : 'not authenticated');
+        
+        if (message.isAuthenticated && message.user) {
+          // User just logged in, activate features
+          console.log('WordStream: User authenticated, enabling features');
+          
+          // Set this in local storage for faster access next time
+          chrome.storage.local.set({
+            'wordstream_user_info': message.user
+          }).catch(error => {
+            console.error('WordStream: Error saving auth to storage:', error);
+          });
+          
+          if (!state.isFeatureActive) {
+            // Delay slightly to ensure background services are ready
+            setTimeout(() => {
+              startCaptionTranslation();
+              // Ensure UI elements are created
+              if (!document.getElementById('wordstream-container')) {
+                createWordStreamUI();
+              }
+            }, 500);
+          }
+        } else if (message.hasOwnProperty('isAuthenticated') && !message.isAuthenticated) {
+          // User signed out, update UI if needed
+          console.log('WordStream: User signed out');
+          
+          // Clear local storage auth
+          chrome.storage.local.remove(['wordstream_user_info']).catch(error => {
+            console.error('WordStream: Error removing auth from storage:', error);
+          });
+        }
+        
+        clearTimeout(timeoutId);
+        sendResponse({ success: true, received: true });
       }
-      sendResponse({ success: true });
+      // Handle settings update
+      else if (message?.action === 'UPDATE_SETTINGS') {
+        if (message?.settings) {
+          updateSettings(message.settings);
+        }
+        
+        clearTimeout(timeoutId);
+        sendResponse({ success: true });
+      }
+      // Handle unknown messages
+      else {
+        console.warn('WordStream: Received unknown message action:', message?.action);
+        clearTimeout(timeoutId);
+        sendResponse({ success: false, error: 'Unknown action' });
+      }
+    } catch (error) {
+      console.error('WordStream: Error handling message:', error);
+      sendResponse({ 
+        success: false, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
     }
     
     // Return true to indicate you will respond asynchronously

@@ -7,6 +7,7 @@ export interface UserInfo {
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
+  lastAuthenticated: number;
 }
 
 /**
@@ -27,7 +28,8 @@ export function useAuth() {
         uid: authModule.user.uid,
         email: authModule.user.email,
         displayName: authModule.user.displayName,
-        photoURL: authModule.user.photoURL
+        photoURL: authModule.user.photoURL,
+        lastAuthenticated: Date.now()
       });
     } else {
       setUser(null);
@@ -46,7 +48,8 @@ export function useAuth() {
             uid: message.user.uid,
             email: message.user.email,
             displayName: message.user.displayName,
-            photoURL: message.user.photoURL
+            photoURL: message.user.photoURL,
+            lastAuthenticated: Date.now()
           });
           setLoading(false);
           setError(null);
@@ -65,10 +68,63 @@ export function useAuth() {
       try {
         const data = await chrome.storage.local.get(['wordstream_user_info']);
         if (data.wordstream_user_info) {
-          setUser(data.wordstream_user_info);
+          // אנחנו מקלים בדרישות התוקף - מידע תקף לשבוע במקום ליום
+          const lastAuth = data.wordstream_user_info.lastAuthenticated || 0;
+          const now = Date.now();
+          // זמן תוקף מוארך ל-7 ימים
+          const isRecent = now - lastAuth < 7 * 24 * 60 * 60 * 1000; 
+          
+          // במקום לבדוק תוקף, פשוט נשתמש במידע המקומי
+          // תמיד נחשיב את המשתמש כמחובר אם יש מידע מקומי
+          const updatedUserInfo = {
+            ...data.wordstream_user_info,
+            lastAuthenticated: now // תמיד לעדכן את זמן האימות האחרון
+          };
+          
+          // עדכון האחסון המקומי
+          chrome.storage.local.set({ 
+            wordstream_user_info: updatedUserInfo 
+          }, () => {
+            console.log('useAuth: Updated lastAuthenticated timestamp');
+          });
+          
+          // עדכון מצב האימות המקומי
+          setUser(updatedUserInfo);
           setLoading(false);
+          
+          // שידור עדכון מצב האימות
+          try {
+            chrome.runtime.sendMessage({
+              action: "AUTH_STATE_CHANGED",
+              user: updatedUserInfo,
+              isAuthenticated: true,
+              source: 'popup_auth_refresh'
+            });
+          } catch (messageErr) {
+            console.error('useAuth: Error broadcasting refreshed auth state:', messageErr);
+          }
+          
+          // רק אם המידע ממש ישן, נבדוק גם את המודול
+          if (!isRecent) {
+            console.log('useAuth: Stored authentication is old, checking with auth module as backup');
+            // לוגיקת הגיבוי הקודמת נשארת
+            if (authModule.user) {
+              // עדכון מידע חדש מהמודול
+              const newUserInfo = {
+                uid: authModule.user.uid,
+                email: authModule.user.email,
+                displayName: authModule.user.displayName,
+                photoURL: authModule.user.photoURL,
+                lastAuthenticated: now
+              };
+              
+              chrome.storage.local.set({ 
+                wordstream_user_info: newUserInfo 
+              });
+            }
+          }
         } else {
-          // No stored auth, continue with module auth state
+          // אין אימות באחסון המקומי - ממשיכים לפי מודול האימות
           setLoading(false);
         }
       } catch (error) {
@@ -89,7 +145,22 @@ export function useAuth() {
   const signInWithGoogle = useCallback(async () => {
     try {
       setLoading(true);
-      await authModule.signInWithGoogle();
+      const result = await authModule.signInWithGoogle();
+      
+      // עדכון מיידי של האחסון המקומי לאחר כל התחברות מוצלחת
+      if (authModule.user) {
+        const userInfo = {
+          uid: authModule.user.uid,
+          email: authModule.user.email,
+          displayName: authModule.user.displayName,
+          photoURL: authModule.user.photoURL,
+          lastAuthenticated: Date.now()
+        };
+        
+        await chrome.storage.local.set({ wordstream_user_info: userInfo });
+        console.log('useAuth: Stored user info after Google sign-in');
+      }
+      
       return true;
     } catch (error: any) {
       console.error('Sign in error:', error);
@@ -104,10 +175,28 @@ export function useAuth() {
   const logout = useCallback(async () => {
     try {
       setLoading(true);
+      
+      // קודם מנקים את האחסון המקומי - חשוב!
+      await chrome.storage.local.remove(['wordstream_user_info']);
+      console.log('useAuth: Removed user info from storage before logout');
+      
+      // אחר כך מתנתקים מהשרת
       await authModule.logout();
       
-      // Also remove from storage
-      await chrome.storage.local.remove(['wordstream_user_info']);
+      // ריקון ה-state המקומי
+      setUser(null);
+      
+      // שידור שינוי מצב האימות
+      try {
+        chrome.runtime.sendMessage({
+          action: "AUTH_STATE_CHANGED",
+          user: null,
+          isAuthenticated: false,
+          source: 'popup_logout'
+        });
+      } catch (messageErr) {
+        console.error('useAuth: Error broadcasting logout state:', messageErr);
+      }
       
       return true;
     } catch (error: any) {

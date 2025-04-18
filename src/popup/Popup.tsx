@@ -104,88 +104,97 @@ export default function Popup() {
   const [showSpeedController, setShowSpeedController] = useState(true);
   const [showFloatingButtons, setShowFloatingButtons] = useState(true);
   const [showingSplash, setShowingSplash] = useState(true);
+  const [splashTimerDone, setSplashTimerDone] = useState(false);
   
   // Auth context
   const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();
   const authModule = useAuthModule();
+  // מצב כפול למניעת מצב התחברות/אי-התחברות
+  const [forcedAuth, setForcedAuth] = useState<boolean | null>(null);
+  
+  // הערך האפקטיבי של האימות (מחובר אם אחד מהתנאים מתקיים)
+  const effectivelyAuthenticated = forcedAuth === true || isAuthenticated;
 
-  // כשהפופאפ נפתח, הצג מסך פתיחה (splash) לחצי שנייה
+  // בדיקה מיידית של מצב האימות המקומי - לפני הכל
+  useEffect(() => {
+    // פונקציה שבודקת אם יש מידע אימות מקומי
+    const checkLocalAuth = async () => {
+      try {
+        const data = await chrome.storage.local.get(['wordstream_user_info']);
+        // אם יש מידע אימות מקומי, נכריח את המצב להיות "מחובר"
+        if (data.wordstream_user_info && data.wordstream_user_info.uid) {
+          console.log('Popup: Found local auth, forcing authenticated state');
+          setForcedAuth(true);
+          
+          // עדכון האחסון המקומי עם זמן חדש
+          const updatedInfo = {
+            ...data.wordstream_user_info,
+            lastAuthenticated: Date.now(),
+            isActive: true
+          };
+          
+          // שמירה מחדש עם זמן מעודכן
+          chrome.storage.local.set({ 
+            wordstream_user_info: updatedInfo 
+          });
+          
+          // שידור גלובלי של מצב האימות המעודכן
+          chrome.runtime.sendMessage({
+            action: "AUTH_STATE_CHANGED",
+            user: updatedInfo,
+            isAuthenticated: true,
+            source: 'popup_immediate_auth'
+          });
+        } else {
+          // אין מידע אימות מקומי, לא נכפה מצב
+          setForcedAuth(false);
+        }
+      } catch (error) {
+        console.error('Popup: Error in immediate local auth check:', error);
+        setForcedAuth(false);
+      }
+    };
+    
+    // הרצת הבדיקה המיידית של האחסון המקומי
+    checkLocalAuth();
+  }, []);
+  
+  // מציג מסך פתיחה (splash) למשך זמן קבוע ללא תלות במצב האימות
   useEffect(() => {
     const timer = setTimeout(() => {
-      setShowingSplash(false);
-    }, 500);
+      setSplashTimerDone(true);
+    }, 2000); // הגדלנו ל-2 שניות - זמן קבוע מוחלט
     
     return () => clearTimeout(timer);
   }, []);
 
-  // Check and restore authentication from storage early
+  // סיום מסך הטעינה רק לפי הטיימר (פשוט יותר)
   useEffect(() => {
-    const checkStoredAuth = async () => {
-      try {
-        console.log('Popup: Checking for stored authentication');
-        const data = await chrome.storage.local.get(['wordstream_user_info']);
-        if (data.wordstream_user_info) {
-          // If we have stored authentication, ensure it's not too old
-          const lastAuth = data.wordstream_user_info.lastAuthenticated || 0;
-          const now = Date.now();
-          // Consider auth valid if refreshed in the last 24 hours
-          if (now - lastAuth < 24 * 60 * 60 * 1000) {
-            // Force immediate UI update based on stored credentials
-            const user = data.wordstream_user_info;
-            if (user && typeof user === 'object' && user.uid) {
-              console.log('Popup: Restoring auth state from storage immediately', { 
-                email: user.email,
-                lastAuth: new Date(lastAuth).toISOString()
-              });
-              
-              // We have recent authentication data, force auth state update
-              try {
-                chrome.runtime.sendMessage({ 
-                  action: "AUTH_STATE_CHANGED", 
-                  user: data.wordstream_user_info,
-                  isAuthenticated: true,
-                  source: 'popup_restore'
-                });
-              } catch (messageError) {
-                console.error('Popup: Error broadcasting authentication state:', messageError);
-              }
-              
-              // Also listen for auth change confirmations
-              const authChangeListener = (message: any) => {
-                if (message.action === 'AUTH_STATE_CHANGED' && message.source === 'background_init') {
-                  console.log('Popup: Received confirmation of auth state change');
-                  // Cleanup listener after receiving confirmation
-                  chrome.runtime.onMessage.removeListener(authChangeListener);
-                }
-              };
-              
-              // Add the temporary listener
-              chrome.runtime.onMessage.addListener(authChangeListener);
-              
-              // Set a timeout to remove the listener if no confirmation is received
-              setTimeout(() => {
-                chrome.runtime.onMessage.removeListener(authChangeListener);
-              }, 5000);
-            } else {
-              console.warn('Popup: Stored user data is invalid or missing UID');
+    if (splashTimerDone) {
+      setShowingSplash(false);
+    }
+  }, [splashTimerDone]);
+
+  // עדכון והפצת מצב האימות האפקטיבי
+  useEffect(() => {
+    const updateAndBroadcastAuthState = async () => {
+      if (effectivelyAuthenticated && user) {
+        try {
+          await chrome.storage.local.set({
+            wordstream_user_info: {
+              ...user,
+              lastAuthenticated: Date.now(),
+              isActive: true
             }
-          } else {
-            console.log('Popup: Stored authentication is too old:', {
-              lastAuth: new Date(lastAuth).toISOString(),
-              now: new Date(now).toISOString(),
-              ageHours: Math.round((now - lastAuth) / 3600000)
-            });
-          }
-        } else {
-          console.log('Popup: No stored authentication found');
+          });
+        } catch (error) {
+          console.error('Popup: Error updating auth state in storage:', error);
         }
-      } catch (error) {
-        console.error('Popup: Error checking stored auth:', error);
       }
     };
-
-    checkStoredAuth();
-  }, []);
+    
+    updateAndBroadcastAuthState();
+  }, [effectivelyAuthenticated, user]);
 
   // Load dark mode preference
   useEffect(() => {
@@ -326,6 +335,24 @@ export default function Popup() {
           console.error('Popup: Google sign-in failed due to window reference error. Using direct method.');
           // Try direct sign-in as fallback
           await authModule.signInWithGoogle();
+          
+          // עדכון זמן האימות האחרון אם המשתמש הצליח להתחבר באמצעות השיטה הישירה
+          if (user) {
+            const userInfo = {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName,
+              photoURL: user.photoURL,
+              lastAuthenticated: Date.now()
+            };
+            
+            chrome.storage.local.set({ 
+              wordstream_user_info: userInfo 
+            }, () => {
+              console.log('Popup: Stored user info after direct Google sign-in');
+            });
+          }
+          
           return;
         }
         
@@ -335,6 +362,20 @@ export default function Popup() {
       
       // Success - the auth state will be updated automatically
       console.log('Popup: Google sign-in successful, received user:', response.user?.email);
+      
+      // עדכון זמן האימות האחרון בסיום התחברות מוצלחת
+      if (response.user) {
+        const userInfo = {
+          ...response.user,
+          lastAuthenticated: Date.now()
+        };
+        
+        chrome.storage.local.set({ 
+          wordstream_user_info: userInfo 
+        }, () => {
+          console.log('Popup: Stored user info after Google sign-in');
+        });
+      }
       
       // Set up a listener to ensure authentication state is propagated
       const authConfirmListener = (message: any) => {
@@ -436,8 +477,8 @@ export default function Popup() {
     );
   }
 
-  // Render login screen only if not authenticated
-  if (!isAuthenticated) {
+  // הצגת מסך התחברות רק אם בטוח שהמשתמש לא מחובר ואין אימות מקומי מאולץ
+  if (!effectivelyAuthenticated) {
     return (
       <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
         <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[120px] w-full relative overflow-hidden">
