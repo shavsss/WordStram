@@ -78,13 +78,34 @@ export function setAuthIssuesDetected(value: boolean): void {
 }
 
 // Set authentication status
-export function setAuthenticated(authenticated: boolean): void {
-  isUserAuthenticated = authenticated;
-  console.log(`WordStream: User authentication status set to ${authenticated}`);
-  
-  // If user becomes authenticated, auto-start captioning
-  if (authenticated && currentDetector) {
-    startDetection(true);
+export async function setAuthenticated(authenticated: boolean): Promise<void> {
+  try {
+    // Update local flag
+    isUserAuthenticated = authenticated;
+    console.log(`WordStream: User authentication status set to ${authenticated}`);
+    
+    // Try to update auth-manager state
+    try {
+      const { updateAuthState } = await import('@/auth/auth-manager');
+      if (typeof updateAuthState === 'function') {
+        // If there's a user object available, pass it to update state
+        // If not, just update the isAuthenticated flag
+        await updateAuthState({ 
+          isAuthenticated: authenticated,
+          user: null // We don't have user details here, auth-manager will handle this
+        });
+        console.log('WordStream: Updated auth state in auth-manager');
+      }
+    } catch (error) {
+      console.warn('WordStream: Could not update auth-manager state:', error);
+    }
+    
+    // If user becomes authenticated, auto-start captioning
+    if (authenticated && currentDetector) {
+      startDetection(true);
+    }
+  } catch (error) {
+    console.error('WordStream: Error setting authentication status:', error);
   }
 }
 
@@ -122,20 +143,37 @@ function initializeDetector(): CaptionDetector {
 
 // Check authentication status from background
 async function checkAuthenticationStatus(): Promise<boolean> {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
-      if (chrome.runtime.lastError || !response) {
-        console.log('WordStream: Error checking auth status or not authenticated');
-        resolve(false);
-        return;
-      }
-      
-      const isAuthenticated = response.isAuthenticated || false;
-      console.log(`WordStream: User authentication status: ${isAuthenticated}`);
+  try {
+    // Use auth-manager as the single source of truth
+    try {
+      const authManagerModule = await import('@/auth/auth-manager');
+      const isAuthenticated = await authManagerModule.isAuthenticated();
+      console.log(`WordStream: User authentication status via auth-manager: ${isAuthenticated}`);
       isUserAuthenticated = isAuthenticated;
-      resolve(isAuthenticated);
-    });
-  });
+      return isAuthenticated;
+    } catch (importError) {
+      console.warn('WordStream: Could not import auth-manager, falling back to messaging:', importError);
+      
+      // Fallback to messaging if import fails
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+          if (chrome.runtime.lastError || !response) {
+            console.log('WordStream: Error checking auth status or not authenticated');
+            resolve(false);
+            return;
+          }
+          
+          const isAuthenticated = response.isAuthenticated || false;
+          console.log(`WordStream: User authentication status: ${isAuthenticated}`);
+          isUserAuthenticated = isAuthenticated;
+          resolve(isAuthenticated);
+        });
+      });
+    }
+  } catch (error) {
+    console.error('WordStream: Error checking authentication status:', error);
+    return false;
+  }
 }
 
 // Start the caption detection process

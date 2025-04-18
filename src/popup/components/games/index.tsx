@@ -8,7 +8,6 @@ import { WordScramble } from './word-scramble';
 import { FlashCards } from './flash-cards';
 import { CombinedTest } from './combined-test';
 import { ArrowLeft, AlertTriangle } from 'lucide-react';
-import AuthManager from '@/auth/auth-manager';
 
 // Add Firebase type definition
 declare global {
@@ -44,40 +43,68 @@ export function Games({ words, onBack }: GamesProps) {
       try {
         console.log('WordStream Games: Starting authentication check');
         
-        // פישוט התהליך באופן משמעותי - רק מוודא שיש משתמש מחובר
-        // אם יש משתמש, נאפשר את השימוש במשחקים גם אם הטוקן אינו מעודכן
-        if (!AuthManager.isAuthenticated()) {
-          console.warn('WordStream Games: No authenticated user found');
-          setAuthError('לא נמצא משתמש מחובר. אנא התחבר כדי לשחק במשחקים.');
-          setIsAuthChecking(false);
-          return;
-        }
-        
-        console.log('WordStream Games: User is authenticated, proceeding to games');
-        
-        // מנסה לרענן את הטוקן, אבל לא עוצר את התהליך אם זה נכשל
+        // Use dynamic import to avoid circular dependencies
         try {
-          AuthManager.verifyTokenAndRefresh()
-            .then(result => {
-              if (!result) {
-                console.warn('WordStream Games: Token refresh failed, but continuing anyway');
+          // Import auth-manager dynamically
+          const authManager = await import('@/auth/auth-manager');
+          
+          // פישוט התהליך באופן משמעותי - רק מוודא שיש משתמש מחובר
+          // אם יש משתמש, נאפשר את השימוש במשחקים גם אם הטוקן אינו מעודכן
+          const isUserAuthenticated = await authManager.isAuthenticated();
+          if (!isUserAuthenticated) {
+            console.warn('WordStream Games: No authenticated user found');
+            setAuthError('לא נמצא משתמש מחובר. אנא התחבר כדי לשחק במשחקים.');
+            setIsAuthChecking(false);
+            return;
+          }
+          
+          console.log('WordStream Games: User is authenticated, proceeding to games');
+          
+          // מנסה לרענן את הטוקן, אבל לא עוצר את התהליך אם זה נכשל
+          try {
+            const refreshResult = await authManager.verifyTokenAndRefresh();
+            if (!refreshResult) {
+              console.warn('WordStream Games: Token refresh failed, but continuing anyway');
+            }
+          } catch (refreshError) {
+            console.warn('WordStream Games: Token refresh error, but continuing anyway:', refreshError);
+          }
+          
+          // מבטל את הבדיקות המחמירות של הרשאות - היות ומשחקים הם מקומיים
+          setAuthError(null);
+        } catch (importError) {
+          console.error('WordStream Games: Error importing auth-manager:', importError);
+          // Fallback to messaging if import fails
+          const authResponse = await new Promise<any>((resolve) => {
+            chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+              if (chrome.runtime.lastError || !response) {
+                resolve({ isAuthenticated: false });
+                return;
               }
-            })
-            .catch(error => {
-              console.warn('WordStream Games: Token refresh error, but continuing anyway:', error);
+              resolve(response);
             });
-        } catch (refreshError) {
-          console.warn('WordStream Games: Token refresh attempt failed, but continuing anyway:', refreshError);
+          });
+          
+          if (!authResponse.isAuthenticated) {
+            setAuthError('לא נמצא משתמש מחובר. אנא התחבר כדי לשחק במשחקים.');
+            setIsAuthChecking(false);
+            return;
+          }
+          
+          setAuthError(null);
         }
-        
-        // מבטל את הבדיקות המחמירות של הרשאות - היות ומשחקים הם מקומיים
-        setAuthError(null);
       } catch (error) {
         console.error('WordStream Games: Unhandled error during auth check:', error);
         // אפילו במקרה של שגיאה, נאפשר משחק כל עוד יש משתמש מחובר
-        if (AuthManager.getCurrentUser()) {
-          setAuthError(null);
-        } else {
+        try {
+          const authManager = await import('@/auth/auth-manager');
+          const currentUser = await authManager.getCurrentUser();
+          if (currentUser) {
+            setAuthError(null);
+          } else {
+            setAuthError('שגיאה לא צפויה בבדיקת האימות. אנא נסה להתחבר מחדש.');
+          }
+        } catch (getUserError) {
           setAuthError('שגיאה לא צפויה בבדיקת האימות. אנא נסה להתחבר מחדש.');
         }
       } finally {

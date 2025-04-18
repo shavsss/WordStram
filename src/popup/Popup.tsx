@@ -31,9 +31,9 @@ import {
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 
-// Auth service import
-import { useAuth } from '../hooks/useAuth';
-import { useAuth as useAuthModule } from '../auth';
+// Port Connection
+import { getPortConnection } from '../utils/port-connection';
+import { MessageType, AuthStateMessage } from '../shared/message';
 
 // Import feature components
 import { GeminiChat } from '../features/gemini/GeminiChat';
@@ -41,6 +41,16 @@ import { NotesAndSummaries } from '../features/notes/NotesAndSummaries';
 
 // Import countries list
 import countries from '../utils/countries';
+import { AuthErrorBanner } from './components/AuthErrorBanner';
+
+// Create a connection to the background service
+const portConnection = getPortConnection({ 
+  name: 'popup',
+  reconnect: true,
+  onDisconnect: () => {
+    console.log('WordStream: Connection to background service lost, attempting to reconnect...');
+  }
+});
 
 /**
  * Checks if the current website is a compatible site
@@ -90,6 +100,161 @@ function isCompatibleWebsite(url?: string): boolean {
 }
 
 /**
+ * Context Recovery Popup Component
+ * This component is shown when extension context is invalid
+ */
+function ExtensionContextErrorRecovery() {
+  const handleReload = () => {
+    window.location.reload();
+  };
+  
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-red-50 dark:bg-red-900">
+      <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-lg max-w-md w-full">
+        <h2 className="text-xl font-bold text-red-600 dark:text-red-400 mb-4">
+          Extension Context Error
+        </h2>
+        <p className="text-gray-700 dark:text-gray-300 mb-4">
+          The extension context has become invalid. This can happen if the extension was updated or temporarily disabled.
+        </p>
+        <p className="text-gray-700 dark:text-gray-300 mb-6">
+          Please try reloading the extension to restore functionality.
+        </p>
+        <div className="flex justify-center">
+          <button 
+            onClick={handleReload}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+          >
+            Reload Extension
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Authentication Error Recovery
+ */
+function AuthenticationErrorRecovery({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full mt-4">
+      <h2 className="text-lg font-bold text-amber-600 dark:text-amber-400 mb-3">
+        Authentication Problem
+      </h2>
+      <p className="text-gray-700 dark:text-gray-300 mb-4">
+        There was an issue with your authentication. This can happen if your session expired or if there was a connection issue.
+      </p>
+      <div className="flex justify-center">
+        <button 
+          onClick={onRefresh}
+          className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50"
+        >
+          Refresh Authentication
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Custom hook for authentication with the background service
+ */
+function useBackgroundAuth() {
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    // Set up listener for auth state changes
+    portConnection.addListener(MessageType.AUTH_STATE_CHANGED, (message: AuthStateMessage) => {
+      console.log('Received auth state update:', message);
+      setIsAuthenticated(message.isAuthenticated);
+      setUser(message.user);
+      setLoading(false);
+    });
+
+    // Request initial auth state
+    const getInitialAuthState = async () => {
+      try {
+        setLoading(true);
+        const response = await portConnection.sendMessage(
+          { type: MessageType.GET_AUTH_STATE },
+          MessageType.AUTH_STATE
+        );
+        
+        setIsAuthenticated(response.isAuthenticated);
+        setUser(response.user);
+      } catch (error: any) {
+        console.error('Error getting auth state:', error);
+        setError(error.message || 'Failed to get authentication state');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    getInitialAuthState();
+
+    // Cleanup listeners when component unmounts
+    return () => {
+      portConnection.removeListener(MessageType.AUTH_STATE_CHANGED, () => {});
+    };
+  }, []);
+
+  // Function to sign in with Google
+  const signInWithGoogle = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const response = await portConnection.sendMessage(
+        { type: MessageType.SIGN_IN_WITH_GOOGLE },
+        MessageType.SIGN_IN_RESULT
+      );
+      
+      if (!response.success) {
+        throw new Error(response.error || 'Sign in failed');
+      }
+      
+      setIsAuthenticated(true);
+      setUser(response.user);
+    } catch (error: any) {
+      console.error('Sign in error:', error);
+      setError(error.message || 'Failed to sign in with Google');
+      setIsAuthenticated(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Function to sign out
+  const logout = async () => {
+    try {
+      setLoading(true);
+      const response = await portConnection.sendMessage(
+        { type: MessageType.SIGN_OUT },
+        MessageType.SIGN_OUT_RESULT
+      );
+      
+      if (!response.success) {
+        throw new Error(response.error || 'Sign out failed');
+      }
+      
+      setIsAuthenticated(false);
+      setUser(null);
+    } catch (error: any) {
+      console.error('Sign out error:', error);
+      setError(error.message || 'Failed to sign out');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return { user, loading, error, isAuthenticated, signInWithGoogle, logout };
+}
+
+/**
  * Main Popup Component
  */
 export default function Popup() {
@@ -103,319 +268,8 @@ export default function Popup() {
   const [isTranslationEnabled, setIsTranslationEnabled] = useState(true);
   const [showSpeedController, setShowSpeedController] = useState(true);
   const [showFloatingButtons, setShowFloatingButtons] = useState(true);
-  const [showingSplash, setShowingSplash] = useState(true);
-  const [splashTimerDone, setSplashTimerDone] = useState(false);
   
-  // Auth context
-  const { user, loading, error, isAuthenticated, signInWithGoogle: signInWithGoogleHook, logout } = useAuth();
-  const authModule = useAuthModule();
-  // מצב כפול למניעת מצב התחברות/אי-התחברות
-  const [forcedAuth, setForcedAuth] = useState<boolean | null>(null);
-  
-  // הערך האפקטיבי של האימות (מחובר אם אחד מהתנאים מתקיים)
-  const effectivelyAuthenticated = forcedAuth === true || isAuthenticated;
-
-  // בדיקה מיידית של מצב האימות המקומי - לפני הכל
-  useEffect(() => {
-    // פונקציה שבודקת אם יש מידע אימות מקומי
-    const checkLocalAuth = async () => {
-      try {
-        const data = await chrome.storage.local.get(['wordstream_user_info']);
-        // אם יש מידע אימות מקומי, נכריח את המצב להיות "מחובר"
-        if (data.wordstream_user_info && data.wordstream_user_info.uid) {
-          console.log('Popup: Found local auth, forcing authenticated state');
-          setForcedAuth(true);
-          
-          // עדכון האחסון המקומי עם זמן חדש
-          const updatedInfo = {
-            ...data.wordstream_user_info,
-            lastAuthenticated: Date.now(),
-            isActive: true
-          };
-          
-          // שמירה מחדש עם זמן מעודכן
-          chrome.storage.local.set({ 
-            wordstream_user_info: updatedInfo 
-          });
-          
-          // שידור גלובלי של מצב האימות המעודכן
-          chrome.runtime.sendMessage({
-            action: "AUTH_STATE_CHANGED",
-            user: updatedInfo,
-            isAuthenticated: true,
-            source: 'popup_immediate_auth'
-          });
-        } else {
-          // אין מידע אימות מקומי, לא נכפה מצב
-          setForcedAuth(false);
-        }
-      } catch (error) {
-        console.error('Popup: Error in immediate local auth check:', error);
-        setForcedAuth(false);
-      }
-    };
-    
-    // הרצת הבדיקה המיידית של האחסון המקומי
-    checkLocalAuth();
-  }, []);
-  
-  // מציג מסך פתיחה (splash) למשך זמן קבוע ללא תלות במצב האימות
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSplashTimerDone(true);
-    }, 2000); // הגדלנו ל-2 שניות - זמן קבוע מוחלט
-    
-    return () => clearTimeout(timer);
-  }, []);
-
-  // סיום מסך הטעינה רק לפי הטיימר (פשוט יותר)
-  useEffect(() => {
-    if (splashTimerDone) {
-      setShowingSplash(false);
-    }
-  }, [splashTimerDone]);
-
-  // עדכון והפצת מצב האימות האפקטיבי
-  useEffect(() => {
-    const updateAndBroadcastAuthState = async () => {
-      if (effectivelyAuthenticated && user) {
-        try {
-          await chrome.storage.local.set({
-            wordstream_user_info: {
-              ...user,
-              lastAuthenticated: Date.now(),
-              isActive: true
-            }
-          });
-        } catch (error) {
-          console.error('Popup: Error updating auth state in storage:', error);
-        }
-      }
-    };
-    
-    updateAndBroadcastAuthState();
-  }, [effectivelyAuthenticated, user]);
-
-  // Load dark mode preference
-  useEffect(() => {
-    chrome.storage.local.get(['darkMode'], (result) => {
-      if (result.darkMode !== undefined) {
-        setDarkMode(result.darkMode);
-      } else {
-        // Check if system prefers dark mode
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        setDarkMode(prefersDark);
-        chrome.storage.local.set({ darkMode: prefersDark });
-      }
-    });
-  }, []);
-
-  // Load language and translation settings
-  useEffect(() => {
-    chrome.storage.local.get(['selectedLanguage', 'isTranslationEnabled', 'showSpeedController', 'showFloatingButtons'], (result) => {
-      if (result.selectedLanguage) setSelectedLanguage(result.selectedLanguage);
-      if (result.isTranslationEnabled !== undefined) setIsTranslationEnabled(result.isTranslationEnabled);
-      if (result.showSpeedController !== undefined) setShowSpeedController(result.showSpeedController);
-      if (result.showFloatingButtons !== undefined) setShowFloatingButtons(result.showFloatingButtons);
-    });
-  }, []);
-
-  // Track current tab
-  useEffect(() => {
-    const getCurrentTab = async () => {
-      try {
-        const queryOptions = { active: true, currentWindow: true };
-        const [tab] = await chrome.tabs.query(queryOptions);
-        if (tab && tab.url) {
-          setCurrentTab({ url: tab.url, id: tab.id });
-          setIsCompatibleSite(isCompatibleWebsite(tab.url));
-        }
-      } catch (err) {
-        console.error('Error getting current tab:', err);
-      } finally {
-        setIsLoaded(true);
-      }
-    };
-    
-    getCurrentTab();
-  }, []);
-
-  // Toggle dark mode
-  const toggleDarkMode = () => {
-    const newValue = !darkMode;
-    setDarkMode(newValue);
-    chrome.storage.local.set({ darkMode: newValue });
-  };
-
-  // Save settings
-  const saveSettings = () => {
-    chrome.storage.local.set({ 
-      selectedLanguage,
-      isTranslationEnabled,
-      showSpeedController,
-      showFloatingButtons
-    });
-
-    // Send settings to content script
-    if (currentTab?.id) {
-      chrome.tabs.sendMessage(currentTab.id, { 
-        action: 'UPDATE_SETTINGS',
-        settings: {
-          selectedLanguage,
-          isTranslationEnabled,
-          showSpeedController,
-          showFloatingButtons
-        }
-      });
-    }
-
-    alert('Settings saved successfully!');
-  };
-
-  // Handle content script injection for video sites
-  const activateOnPage = () => {
-    if (!currentTab?.id) return;
-    
-    chrome.tabs.sendMessage(
-      currentTab.id,
-      { 
-        action: 'ACTIVATE_FEATURES',
-        settings: {
-          selectedLanguage,
-          isTranslationEnabled,
-          showSpeedController,
-          showFloatingButtons
-        }
-      },
-      (response) => {
-        if (!response) {
-          // Content script not loaded, inject it
-          chrome.scripting.executeScript({
-            target: { tabId: currentTab.id as number },
-            files: ['content.js']
-          }).then(() => {
-            // Try sending the message again after script is loaded
-            setTimeout(() => {
-              if (currentTab.id) {
-                chrome.tabs.sendMessage(
-                  currentTab.id,
-                  { 
-                    action: 'ACTIVATE_FEATURES',
-                    settings: {
-                      selectedLanguage,
-                      isTranslationEnabled,
-                      showSpeedController,
-                      showFloatingButtons
-                    }
-                  }
-                );
-              }
-            }, 500);
-          }).catch(err => {
-            console.error('Error injecting content script:', err);
-          });
-        }
-      }
-    );
-  };
-
-  // Enhanced Google Sign In
-  const handleGoogleSignIn = async () => {
-    try {
-      console.log('Popup: Initiating Google sign-in process');
-      
-      // Use message passing instead of direct hook call
-      const response = await chrome.runtime.sendMessage({ 
-        action: "SIGN_IN_WITH_GOOGLE" 
-      });
-      
-      if (!response || !response.success) {
-        // Check for specific error message about window not defined
-        if (response?.error && response.error.includes('window is not defined')) {
-          console.error('Popup: Google sign-in failed due to window reference error. Using direct method.');
-          // Try direct sign-in as fallback
-          await authModule.signInWithGoogle();
-          
-          // עדכון זמן האימות האחרון אם המשתמש הצליח להתחבר באמצעות השיטה הישירה
-          if (user) {
-            const userInfo = {
-              uid: user.uid,
-              email: user.email,
-              displayName: user.displayName,
-              photoURL: user.photoURL,
-              lastAuthenticated: Date.now()
-            };
-            
-            chrome.storage.local.set({ 
-              wordstream_user_info: userInfo 
-            }, () => {
-              console.log('Popup: Stored user info after direct Google sign-in');
-            });
-          }
-          
-          return;
-        }
-        
-        console.error('Popup: Google sign-in failed:', response?.error || 'Unknown error');
-        throw new Error(response?.error || "Google sign-in failed");
-      }
-      
-      // Success - the auth state will be updated automatically
-      console.log('Popup: Google sign-in successful, received user:', response.user?.email);
-      
-      // עדכון זמן האימות האחרון בסיום התחברות מוצלחת
-      if (response.user) {
-        const userInfo = {
-          ...response.user,
-          lastAuthenticated: Date.now()
-        };
-        
-        chrome.storage.local.set({ 
-          wordstream_user_info: userInfo 
-        }, () => {
-          console.log('Popup: Stored user info after Google sign-in');
-        });
-      }
-      
-      // Set up a listener to ensure authentication state is propagated
-      const authConfirmListener = (message: any) => {
-        if (message.action === 'AUTH_STATE_CHANGED' && message.isAuthenticated) {
-          console.log('Popup: Received auth state confirmation');
-          // Remove this listener after confirmation
-          setTimeout(() => {
-            chrome.runtime.onMessage.removeListener(authConfirmListener);
-          }, 500);
-        }
-      };
-      
-      // Add temporary listener
-      chrome.runtime.onMessage.addListener(authConfirmListener);
-      
-      // Clean up listener after timeout if no confirmation received
-      setTimeout(() => {
-        chrome.runtime.onMessage.removeListener(authConfirmListener);
-      }, 5000);
-    } catch (error) {
-      console.error("Popup: Login error:", error);
-      
-      // Check for specific error about window not defined
-      if (error instanceof Error && error.message.includes('window is not defined')) {
-        alert('אירעה שגיאה בתהליך התחברות עם גוגל. מנסה שיטה חלופית...');
-        try {
-          // Try direct sign-in as fallback
-          await signInWithGoogleHook();
-        } catch (secondError) {
-          console.error('Popup: Second login attempt failed:', secondError);
-          alert('ההתחברות עם גוגל נכשלה. אנא נסה שנית מאוחר יותר.');
-        }
-      } else {
-        // Display generic error
-        alert('ההתחברות נכשלה: ' + (error instanceof Error ? error.message : 'שגיאה לא ידועה'));
-      }
-    }
-  };
-
-  // Email/Password sign in
+  // Email/Password auth state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -425,60 +279,216 @@ export default function Popup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   
-  const handleEmailPasswordAuth = async () => {
-    if (!email || !password) {
-      alert('Please enter your email and password');
-      return;
-    }
-    
-    if (isSignUp) {
-      // Validate form fields for sign up
-      if (password !== confirmPassword) {
-        alert('Passwords do not match');
-        return;
-      }
-      
-      if (!age) {
-        alert('Please enter your age');
-        return;
-      }
-      
-      if (!country) {
-        alert('Please select your country');
-        return;
-      }
-    }
-    
+  // Auth context using the custom hook
+  const { user, loading, error, isAuthenticated, signInWithGoogle, logout } = useBackgroundAuth();
+
+  const [extensionContextError, setExtensionContextError] = useState(false);
+  const [authenticationError, setAuthenticationError] = useState(false);
+  
+  // Check for extension context validity
+  useEffect(() => {
     try {
-      if (isSignUp) {
-        // Register new user
-        await authModule.signUpWithEmailPassword(email, password);
-        // Additional user info would be saved to database here
-        // We would create a user profile with age and country
-      } else {
-        // Sign in existing user
-        await authModule.signInWithEmailPassword(email, password);
+      // Simple check for extension context validity
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.storage) {
+        setExtensionContextError(true);
+      }
+      
+      // More thorough context check
+      const performContextCheck = async () => {
+        try {
+          // Try to access chrome API
+          await chrome.storage.local.get(['ping']);
+        } catch (error) {
+          console.error('Popup: Extension context check failed:', error);
+          setExtensionContextError(true);
+        }
+      };
+      
+      performContextCheck();
+    } catch (error) {
+      console.error('Popup: Error checking extension context:', error);
+      setExtensionContextError(true);
+    }
+  }, []);
+  
+  // Check for authentication errors
+  useEffect(() => {
+    if (error && 
+        (error.includes('Authentication required') || 
+         error.includes('User not signed in') || 
+         error.includes('auth') || 
+         error.includes('token'))) {
+      setAuthenticationError(true);
+    } else {
+      setAuthenticationError(false);
+    }
+  }, [error]);
+  
+  // Handle auth refresh
+  const handleAuthRefresh = async () => {
+    setAuthenticationError(false);
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('Popup: Error during manual auth refresh:', error);
+    }
+  };
+  
+  // Show context error recovery if extension context is invalid
+  if (extensionContextError) {
+    return <ExtensionContextErrorRecovery />;
+  }
+
+  // Load saved settings and get the current tab 
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await chrome.storage.local.get([
+          'darkMode',
+          'selectedLanguage',
+          'isTranslationEnabled',
+          'showSpeedController',
+          'showFloatingButtons'
+        ]);
+        
+        setDarkMode(settings.darkMode === true);
+        setSelectedLanguage(settings.selectedLanguage || 'en');
+        setIsTranslationEnabled(settings.isTranslationEnabled !== false);
+        setShowSpeedController(settings.showSpeedController !== false);
+        setShowFloatingButtons(settings.showFloatingButtons !== false);
+        
+        console.log('Popup: Settings loaded', settings);
+      } catch (error) {
+        console.error('Popup: Error loading settings', error);
+      }
+    };
+    
+    loadSettings();
+    getCurrentTab();
+    
+    // Apply dark mode if needed
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setDarkMode(true);
+      document.documentElement.classList.add('dark');
+    }
+    
+    setIsLoaded(true);
+  }, []);
+  
+  // Apply dark mode class
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+  
+  // Get the current tab URL
+  const getCurrentTab = async () => {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      if (tabs[0] && tabs[0].url) {
+        const newTab = { url: tabs[0].url, id: tabs[0].id };
+        setCurrentTab(newTab);
+        setIsCompatibleSite(isCompatibleWebsite(newTab.url));
       }
     } catch (error) {
-      console.error('Email/Password auth error:', error);
-      // Error state is handled by the auth module
+      console.error('Popup: Error getting current tab', error);
+    }
+  };
+  
+  // Toggle dark mode
+  const toggleDarkMode = () => {
+    const newDarkMode = !darkMode;
+    setDarkMode(newDarkMode);
+    chrome.storage.local.set({ darkMode: newDarkMode });
+  };
+  
+  // Save settings
+  const saveSettings = () => {
+    const settings = {
+      selectedLanguage,
+      isTranslationEnabled,
+      showSpeedController,
+      showFloatingButtons
+    };
+    
+    chrome.storage.local.set(settings);
+    
+    // Send settings to content script
+    if (currentTab && currentTab.id) {
+      chrome.tabs.sendMessage(currentTab.id, {
+        action: 'UPDATE_SETTINGS',
+        settings
+      });
+    }
+    
+    setActiveView('main');
+  };
+  
+  // Activate extension on the current page
+  const activateOnPage = () => {
+    if (currentTab && currentTab.id) {
+      // Save current settings first
+      const settings = {
+        selectedLanguage,
+        isTranslationEnabled,
+        showSpeedController,
+        showFloatingButtons
+      };
+      
+      chrome.storage.local.set(settings);
+      
+      // Send the activation message
+      chrome.tabs.sendMessage(currentTab.id, {
+        action: 'ACTIVATE_FEATURES',
+        settings
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Popup: Error sending activation message', chrome.runtime.lastError);
+          
+          // Inject the content script if not already loaded
+          chrome.scripting.executeScript({
+            target: { tabId: currentTab.id as number },
+            files: ['content/content.js']
+          }).then(() => {
+            // Now try sending the activation message again
+            setTimeout(() => {
+              chrome.tabs.sendMessage(currentTab.id as number, {
+                action: 'ACTIVATE_FEATURES',
+                settings
+              });
+            }, 500);
+          }).catch(error => {
+            console.error('Popup: Error injecting content script', error);
+          });
+          
+          return;
+        }
+        
+        console.log('Popup: Activation message sent successfully', response);
+      });
     }
   };
 
-  // Render splash screen first
-  if (showingSplash) {
-    return (
-      <div className={`w-[400px] min-h-[500px] flex justify-center items-center font-sans ${darkMode ? 'dark bg-gray-900' : 'bg-white'}`}>
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-t-blue-500 border-r-blue-500 border-b-gray-200 border-l-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
-          <div className="text-xl font-semibold text-blue-600 dark:text-blue-400">WordStream</div>
-        </div>
-      </div>
-    );
-  }
+  // Now using our background auth service
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('Popup: Google sign in error', error);
+    }
+  };
 
-  // הצגת מסך התחברות רק אם בטוח שהמשתמש לא מחובר ואין אימות מקומי מאולץ
-  if (!effectivelyAuthenticated) {
+  // Simple stub for email/password auth to be implemented later
+  const handleEmailPasswordAuth = async () => {
+    alert('Email/password authentication is not implemented in the new architecture yet.');
+  };
+
+  // Render login screen
+  if (!isAuthenticated && !loading) {
     return (
       <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
         <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[120px] w-full relative overflow-hidden">
@@ -974,12 +984,6 @@ export default function Popup() {
   // Render main view (default)
   return (
     <div className={`w-[400px] min-h-[500px] p-0 font-sans ${darkMode ? 'dark' : ''}`}>
-      {loading && (
-        <div className="absolute top-2 right-2 z-50">
-          <div className="w-5 h-5 border-2 border-t-blue-500 border-r-blue-500 border-b-gray-200 border-l-gray-200 rounded-full animate-spin"></div>
-        </div>
-      )}
-      
       <div className="bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-700 dark:to-indigo-800 h-[160px] w-full relative overflow-hidden">
         <div className="absolute top-4 right-4 flex gap-2">
           <Button
@@ -1028,6 +1032,9 @@ export default function Popup() {
       <div className="px-6 pt-12 pb-6 bg-white dark:bg-gray-900 min-h-[340px]">
         <h1 className="text-2xl font-bold text-center mb-1 text-gray-900 dark:text-white">WordStream</h1>
         <p className="text-center text-gray-500 dark:text-gray-400 mb-8">Advanced Language Learning from Videos</p>
+        
+        {/* Show auth error banner when needed */}
+        {authenticationError && <AuthErrorBanner onRefresh={handleAuthRefresh} />}
         
         {!isLoaded ? (
           <div className="flex justify-center py-4">

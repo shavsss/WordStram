@@ -2,9 +2,10 @@
 
 import { TranslationService } from '../translation/translation-service';
 import { SupportedLanguageCode } from '@/config/supported-languages';
-import { CaptionDetector } from './caption-detector';
+import { BaseCaptionDetector } from './base-detector';
+import { CaptionDetector } from './types';
 import { CaptionsLanguageInfo } from '@/types';
-import { Word } from '@/types/word';
+import { WordContext, WordStats } from '@/types/word';
 import { normalizeLanguageCode, LANGUAGE_MAP } from './shared/language-map';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
@@ -13,7 +14,11 @@ import { safeDate } from '@/utils/date-utils';
 import { createDebounce } from '../../utils/debounce';
 import { generateUID } from '../../utils/uid';
 import { loadAllWords } from '../../utils/word-storage';
-import { BaseCaptionDetector } from './base-detector';
+import { debounce } from '../../utils/debounce';
+import { saveWordToStorage } from '../../utils/word-storage';
+
+// Note: We use dynamic import of auth-manager for authentication checks 
+// to avoid circular dependencies. See handleWordClick method for implementation.
 
 // נוסיף הגדרת טיפוס עבור window.WordStream
 declare global {
@@ -414,34 +419,44 @@ export class YouTubeCaptionDetector extends BaseCaptionDetector {
       let isAuthenticated = false;
       
       try {
-        // Check if extension context is valid before trying authentication
-        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
-          console.warn('WordStream YouTube: Extension context invalidated, can\'t check authentication');
-          // Continue without authentication
-        } else {
-          // First try to check window.WordStream if available
-          if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
-            isAuthenticated = true;
+        // Use auth-manager as single source of truth
+        try {
+          // Import dynamically to avoid circular dependencies
+          const authManagerModule = await import('@/auth/auth-manager');
+          isAuthenticated = await authManagerModule.isAuthenticated();
+          console.log('WordStream YouTube: Authentication checked via auth-manager:', isAuthenticated);
+        } catch (importError) {
+          console.warn('WordStream YouTube: Could not import auth-manager, falling back to local checks:', importError);
+          
+          // Check if extension context is valid before trying authentication
+          if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+            console.warn('WordStream YouTube: Extension context invalidated, can\'t check authentication');
+            // Continue without authentication
           } else {
-            // Try Chrome messaging as a fallback with timeout
-            const authResponse = await new Promise<any>((resolve) => {
-              const timeout = setTimeout(() => {
-                console.warn('WordStream YouTube: Auth check timed out');
-                resolve({ isAuthenticated: false });
-              }, 2000);
-              
-              chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
-                clearTimeout(timeout);
-                if (chrome.runtime.lastError) {
-                  console.warn('WordStream YouTube: Auth check error:', chrome.runtime.lastError);
+            // First try to check window.WordStream if available
+            if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
+              isAuthenticated = true;
+            } else {
+              // Try Chrome messaging as a fallback with timeout
+              const authResponse = await new Promise<any>((resolve) => {
+                const timeout = setTimeout(() => {
+                  console.warn('WordStream YouTube: Auth check timed out');
                   resolve({ isAuthenticated: false });
-                  return;
-                }
-                resolve(response || { isAuthenticated: false });
+                }, 2000);
+                
+                chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+                  clearTimeout(timeout);
+                  if (chrome.runtime.lastError) {
+                    console.warn('WordStream YouTube: Auth check error:', chrome.runtime.lastError);
+                    resolve({ isAuthenticated: false });
+                    return;
+                  }
+                  resolve(response || { isAuthenticated: false });
+                });
               });
-            });
-            
-            isAuthenticated = authResponse?.isAuthenticated === true;
+              
+              isAuthenticated = authResponse?.isAuthenticated === true;
+            }
           }
         }
       } catch (authError) {

@@ -42,11 +42,19 @@ const LoginDialog: React.FC<LoginDialogProps> = ({
     }
   };
 
-  const handleGoogleLogin = () => {
-    setIsLoading(true);
-    setLoginError(null);
-    onGoogleLogin();
-    setIsLoading(false);
+  const handleGoogleLogin = async () => {
+    try {
+      setIsLoading(true);
+      setLoginError(null);
+      console.log('LoginDialog: Calling onGoogleLogin prop');
+      await onGoogleLogin();
+      console.log('LoginDialog: Google login completed successfully');
+    } catch (error) {
+      console.error('LoginDialog: Error during Google login:', error);
+      setLoginError(error instanceof Error ? error.message : 'An error occurred during Google login');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

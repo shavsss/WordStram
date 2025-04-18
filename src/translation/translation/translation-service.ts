@@ -30,88 +30,44 @@ export class TranslationService {
    * @returns אמת אם המשתמש מחובר, שקר אחרת
    */
   private async isUserAuthenticated(): Promise<boolean> {
-    // For translation service, we'll use a more permissive approach
     try {
-      // בדיקה ראשונה - גישה ישירה לאובייקט ה-window.WordStream.local
-      if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
-        console.log('WordStream Translation: User authenticated via window.WordStream');
-        return true;
-      }
-      
-      // בדיקה שנייה - Check for wordstream_user_info in storage
-      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        try {
-          const result = await new Promise<{wordstream_user_info?: {uid?: string}}>(resolve => {
-            chrome.storage.local.get(['wordstream_user_info'], resolve);
-          });
-          
-          if (result.wordstream_user_info?.uid) {
-            console.log('WordStream Translation: User authenticated via storage check');
+      // Use the auth-manager as single source of truth when possible
+      try {
+        // Import dynamically to avoid circular dependencies
+        const authManagerModule = await import('@/auth/auth-manager');
+        return await authManagerModule.isAuthenticated();
+      } catch (importError) {
+        console.warn('WordStream Translation: Could not import auth-manager, falling back to local checks:', importError);
+        
+        // Fallback to direct checks if import fails
+        
+        // בדיקה ראשונה - גישה ישירה לאובייקט ה-window.WordStream.local
+        if (typeof window !== 'undefined' && window.WordStream?.local?.isAuthenticated === true) {
+          return true;
+        }
+        
+        // בדיקה שנייה - storage.local (עובד גם ב-background ו-popup)
+        if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+          // Check for wordstream_user_info which is the standard key used across the application
+          const result = await chrome.storage.local.get(['wordstream_user_info']);
+          if (result.wordstream_user_info) {
             return true;
           }
-        } catch (storageError) {
-          console.warn('WordStream Translation: Storage access error:', storageError);
-          // Continue with other checks
+          
+          // Legacy check for old auth key for backward compatibility
+          const legacyResult = await chrome.storage.local.get('isAuthenticated');
+          if (legacyResult.isAuthenticated === true) {
+            return true;
+          }
         }
       }
       
-      // בדיקה שלישית - isAuthenticated flag in storage (older method)
-      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        try {
-          const result = await new Promise<{isAuthenticated?: boolean}>(resolve => {
-            chrome.storage.local.get(['isAuthenticated'], resolve);
-          });
-          
-          if (result.isAuthenticated === true) {
-            console.log('WordStream Translation: User authenticated via isAuthenticated flag');
-            return true;
-          }
-        } catch (storageError) {
-          console.warn('WordStream Translation: Error checking auth flag in storage:', storageError);
-          // Continue with other checks
-        }
-      }
-      
-      // בדיקה רביעית - GET_AUTH_STATE message
-      if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-        try {
-          const response = await new Promise<{isAuthenticated?: boolean}>((resolve) => {
-            const timeoutId = setTimeout(() => {
-              console.warn('WordStream Translation: Auth check timed out');
-              resolve({});
-            }, 1000);
-            
-            chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (result) => {
-              clearTimeout(timeoutId);
-              
-              if (chrome.runtime.lastError) {
-                console.warn('WordStream Translation: Error in message auth check:', chrome.runtime.lastError);
-                resolve({});
-                return;
-              }
-              resolve(result || {});
-            });
-          });
-          
-          if (response?.isAuthenticated === true) {
-            console.log('WordStream Translation: User authenticated via GET_AUTH_STATE');
-            return true;
-          }
-        } catch (messageError) {
-          console.warn('WordStream Translation: Error checking auth via messaging:', messageError);
-          // Continue with fallback
-        }
-      }
-      
-      // If all explicit checks failed, log and return false
-      console.log('WordStream Translation: All authentication checks failed');
+      // אם הגענו לכאן, המשתמש לא מאומת
       return false;
     } catch (error) {
-      // If any error occurs in the auth check process, we should be cautious
-      // In a real-world app, you might want to return false here
-      // But for better user experience during development, returning true can help
-      console.error('WordStream Translation: Error in authentication check:', error);
-      return false; // Change to true if you want to be more permissive during testing
+      console.error('WordStream Translation: Error checking authentication:', error);
+      // במקרה של שגיאה, מחזירים שקר כברירת מחדל
+      return false;
     }
   }
   

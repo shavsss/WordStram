@@ -165,18 +165,49 @@ export abstract class BaseCaptionDetector implements CaptionDetector {
 
   /**
    * Check if user is authenticated
+   * Uses auth-manager.ts as the single source of truth with fallback to messaging
    */
   protected async checkAuthentication(): Promise<{ isAuthenticated: boolean, user?: any }> {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
-        if (chrome.runtime.lastError || !response) {
-          resolve({ isAuthenticated: false });
-          return;
-        }
+    try {
+      // Try to use auth-manager as single source of truth
+      try {
+        // Import dynamically to avoid circular dependencies
+        const authManagerModule = await import('@/auth/auth-manager');
+        const isAuthenticated = await authManagerModule.isAuthenticated();
         
-        resolve(response);
-      });
-    });
+        if (isAuthenticated) {
+          // If authenticated, get user details
+          const authState = await authManagerModule.getAuthState();
+          console.log('WordStream: Authentication checked via auth-manager:', isAuthenticated);
+          return {
+            isAuthenticated: true,
+            user: authState.user
+          };
+        } else {
+          console.log('WordStream: User not authenticated (via auth-manager)');
+          return { isAuthenticated: false };
+        }
+      } catch (importError) {
+        console.warn('WordStream: Could not import auth-manager, falling back to messaging:', importError);
+        
+        // Fallback to messaging if import fails
+        return new Promise((resolve) => {
+          chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' }, (response) => {
+            if (chrome.runtime.lastError || !response) {
+              console.log('WordStream: User not authenticated (via messaging fallback)');
+              resolve({ isAuthenticated: false });
+              return;
+            }
+            
+            console.log('WordStream: Authentication checked via messaging:', response.isAuthenticated);
+            resolve(response);
+          });
+        });
+      }
+    } catch (error) {
+      console.error('WordStream: Error checking authentication status:', error);
+      return { isAuthenticated: false };
+    }
   }
 
   /**

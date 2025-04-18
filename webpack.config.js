@@ -7,7 +7,7 @@ module.exports = {
   entry: {
     popup: './src/popup.tsx',
     content: './src/content/index.ts',
-    background: './src/background/index.ts'
+    background: './src/background/service.ts'
   },
   output: {
     path: path.resolve(__dirname, 'dist'),

@@ -2,33 +2,23 @@
   "manifest_version": 3,
   "name": "WordStream",
   "version": "1.0.0",
-  "description": "A Chrome extension that enhances videos with summaries, search, and tagging.",
+  "description": "Learn languages while watching videos",
   "permissions": [
     "identity",
     "storage",
-    "tabs",
-    "scripting",
-    "webRequest"
+    "scripting"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",
+    "*://*.netflix.com/*",
     "*://*.googleapis.com/*",
     "https://*.firebaseio.com/*",
     "https://*.firebaseapp.com/*",
     "https://firestore.googleapis.com/*",
-    "https://identitytoolkit.googleapis.com/*",
-    "https://securetoken.googleapis.com/*",
-    "https://firebase.googleapis.com/*",
-    "https://firebaseremoteconfig.googleapis.com/*",
-    "https://firebasestorage.googleapis.com/*",
-    "https://firebaselogging-pa.googleapis.com/*",
-    "https://*.google.com/*",
-    "https://*.gstatic.com/*",
-    "wss://*.firebaseio.com/*",
-    "wss://*.firestore.googleapis.com/*"
+    "https://identitytoolkit.googleapis.com/*"
   ],
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "popup/index.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -39,16 +29,15 @@
     {
       "matches": [
         "*://*.youtube.com/*",
-        "*://*.netflix.com/*",
-        "*://*.google.com/*"
+        "*://*.netflix.com/*"
       ],
-      "js": ["content.js"],
-      "css": ["content.css"],
-      "run_at": "document_start"
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
     }
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "background/service.js",
     "type": "module"
   },
   "icons": {
@@ -58,7 +47,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["popup.html", "popup.css", "popup.js"],
+      "resources": ["icons/*", "content/styles/*"],
       "matches": ["<all_urls>"]
     }
   ],
@@ -70,6 +59,6 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebase.googleapis.com https://firebaseremoteconfig.googleapis.com https://firebasestorage.googleapis.com https://firebaselogging-pa.googleapis.com wss://*.firebaseio.com wss://*.firestore.googleapis.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
   }
 } 
