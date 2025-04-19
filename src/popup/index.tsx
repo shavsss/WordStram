@@ -4,10 +4,11 @@ import Popup from './Popup';
 import '../styles/globals.css';
 import AuthWrapper from './AuthWrapper';
 import { FirestoreProvider } from '../contexts/FirestoreContext';
-import { ToastContainer } from 'react-toastify';
+import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import AuthManager from '@/core/auth-manager';
 import { StoreProvider } from '@/providers/StoreProvider';
+import { initializeConnectionRecovery } from '../utils/connection-recovery';
 
 // Get the container element
 const container = document.getElementById('app');
@@ -114,12 +115,146 @@ function SimpleLoader({ message = "Loading..." }: { message?: string }) {
 }
 
 /**
+ * A connection error component displayed when background service is unavailable
+ */
+function ConnectionErrorComponent({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="p-4 bg-white text-black min-h-screen flex flex-col items-center justify-center">
+      <div className="w-16 h-16 flex items-center justify-center rounded-full bg-red-100 mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      </div>
+      
+      <h1 className="text-xl font-bold text-gray-800 mb-2 text-center">חיבור לשירות התוסף נכשל</h1>
+      
+      <div className="p-3 bg-red-50 border border-red-200 rounded-md mb-4 max-w-md w-full">
+        <p className="text-red-800 text-center">לא ניתן לחבר לשירות הרקע של התוסף. התוסף לא יתפקד כראוי.</p>
+      </div>
+      
+      <div className="mt-4 max-w-md w-full">
+        <h2 className="text-lg font-medium mb-2 text-center">פעולות לפתרון:</h2>
+        <ul className="list-disc pl-8 space-y-2 mb-6">
+          <li>סגור וחזור לפתוח את דפדפן כרום</li>
+          <li>השבת את התוסף והפעל אותו מחדש</li>
+          <li>בדוק אם יש עדכונים לדפדפן או לתוסף</li>
+          <li>נסה להסיר את התוסף ולהתקין אותו מחדש</li>
+        </ul>
+      </div>
+      
+      <button 
+        onClick={onRetry}
+        className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+      >
+        נסה שוב
+      </button>
+    </div>
+  );
+}
+
+/**
  * A wrapper component that provides initialization and error handling
  */
 function AppWrapper() {
   const [isLoading, setIsLoading] = useState(true);
   const [initStep, setInitStep] = useState<string>("Starting WordStream...");
   const [initError, setInitError] = useState<string | null>(null);
+  const [backgroundConnected, setBackgroundConnected] = useState<boolean | null>(null);
+  
+  // Set up connection recovery listeners
+  useEffect(() => {
+    const handleConnectionLost = (event: any) => {
+      console.warn('WordStream: Connection to background service lost', event.detail);
+      setBackgroundConnected(false);
+      toast.error('שירות התוסף מנותק. מנסה להתחבר מחדש...', {
+        position: "top-center",
+        autoClose: false,
+        closeOnClick: false,
+        pauseOnHover: true,
+        draggable: false
+      });
+    };
+    
+    const handleConnectionRecovered = () => {
+      console.log('WordStream: Connection to background service recovered');
+      setBackgroundConnected(true);
+      toast.success('החיבור לשירות התוסף התחדש!', {
+        position: "top-center",
+        autoClose: 3000
+      });
+    };
+    
+    // Initialize connection recovery mechanism
+    try {
+      initializeConnectionRecovery();
+      console.log('WordStream: Connection recovery mechanism initialized in popup');
+      
+      // Add event listeners
+      window.addEventListener('wordstream:connection_lost', handleConnectionLost);
+      window.addEventListener('wordstream:connection_recovered', handleConnectionRecovered);
+    } catch (error) {
+      console.warn('WordStream: Failed to initialize connection recovery in popup', error);
+    }
+    
+    return () => {
+      // Clean up event listeners
+      window.removeEventListener('wordstream:connection_lost', handleConnectionLost);
+      window.removeEventListener('wordstream:connection_recovered', handleConnectionRecovered);
+    };
+  }, []);
+  
+  // Check background connection status
+  const checkBackgroundConnection = async (): Promise<boolean> => {
+    try {
+      // Send a simple message to check if background is accessible
+      const response = await new Promise<any>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Background service check timed out'));
+        }, 3000);
+        
+        chrome.runtime.sendMessage(
+          { action: 'CHECK_SERVICE_WORKER_HEALTH' },
+          (response) => {
+            clearTimeout(timeoutId);
+            
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(response);
+            }
+          }
+        );
+      });
+      
+      return response && response.status === 'healthy';
+    } catch (error) {
+      console.error('WordStream: Background service check failed:', error);
+      return false;
+    }
+  };
+  
+  // Handle retry connection
+  const handleRetryConnection = async () => {
+    setIsLoading(true);
+    setInitStep("Attempting to reconnect...");
+    
+    try {
+      // Try to reinitialize the services in the background
+      const isConnected = await checkBackgroundConnection();
+      
+      if (isConnected) {
+        setBackgroundConnected(true);
+        init(); // Reinitialize the app
+      } else {
+        setBackgroundConnected(false);
+        setIsLoading(false);
+      }
+    } catch (error) {
+      console.error('WordStream: Retry connection failed:', error);
+      setBackgroundConnected(false);
+      setIsLoading(false);
+    }
+  };
   
   useEffect(() => {
     let isMounted = true;
@@ -163,6 +298,21 @@ function AppWrapper() {
     // Initialize the app with more detailed steps and longer timeouts
     const init = async () => {
       try {
+        // First check background service connection
+        if (isMounted) setInitStep("Checking background service...");
+        const isConnected = await checkBackgroundConnection();
+        
+        if (!isConnected) {
+          console.error('WordStream: Background service is not available');
+          if (isMounted) {
+            setBackgroundConnected(false);
+            setIsLoading(false);
+            return;
+          }
+        } else {
+          setBackgroundConnected(true);
+        }
+        
         // Step 1: Clear any expired caches
         if (isMounted) setInitStep("Clearing expired caches...");
         
@@ -249,137 +399,77 @@ function AppWrapper() {
         // Step 4: Initialize data synchronization
         if (isMounted) setInitStep("Initializing data synchronization...");
         
-        // Add a small delay to ensure everything is ready
-        await new Promise(resolve => setTimeout(resolve, 800));
+        // No need to actually do anything here, Firebase handles sync automatically
+        // Just give the process a moment to connect
+        await new Promise(resolve => setTimeout(resolve, 500));
         
-        // Step 5: Final initialization delay to ensure interface is ready
-        if (isMounted) setInitStep("Preparing interface...");
-        
-        // Step 6: Complete initialization
+        // Finish initialization
         if (isMounted) {
-          setInitError(null);
-          setInitStep("");
+          setIsLoading(false);
         }
       } catch (error) {
-        console.error('Initialization error:', error);
-        
-        // Store the error for debugging if we can
-        try {
-          chrome.storage.local.set({
-            'wordstream_init_error': error ? (error instanceof Error ? error.message : String(error)) : 'Unknown initialization error',
-            'wordstream_error_timestamp': Date.now()
-          });
-        } catch (storageError) {
-          console.error('Could not save error information:', storageError);
-        }
-        
+        console.error('WordStream: Error during initialization:', error);
         if (isMounted) {
-          setInitError('Failed to initialize. Please reload the extension.');
+          setInitError('An error occurred while initializing. Please try again.');
+          setIsLoading(false);
         }
       }
     };
     
-    // Start initialization
     init();
     
-    // Cleanup function
     return () => {
       isMounted = false;
     };
   }, []);
   
+  if (isLoading) {
+    return <SimpleLoader message={initStep} />;
+  }
+  
   if (initError) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen p-4 bg-red-50 dark:bg-red-900/20">
-        <div className="text-red-600 dark:text-red-400 mb-4">
+      <div className="p-4 flex flex-col items-center justify-center min-h-screen">
+        <div className="text-red-500 mb-4">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <h2 className="text-lg font-bold text-red-700 dark:text-red-300 mb-2">Initialization Error</h2>
-        <p className="text-center text-red-600 dark:text-red-400 mb-4">{initError}</p>
-        <button 
+        <h1 className="text-xl font-semibold mb-2 text-center">Initialization Error</h1>
+        <p className="text-gray-600 mb-4 text-center">{initError}</p>
+        <button
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
           onClick={() => window.location.reload()}
-          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
         >
-          Reload Extension
+          Retry
         </button>
       </div>
     );
   }
-
+  
+  // Show connection error if background is disconnected
+  if (backgroundConnected === false) {
+    return <ConnectionErrorComponent onRetry={handleRetryConnection} />;
+  }
+  
   return (
-    <ErrorBoundary>
-    <FirestoreProvider>
-      <StoreProvider>
-        <AuthWrapper>
+    <StoreProvider>
+      <AuthWrapper>
+        <FirestoreProvider>
           <Popup />
-        </AuthWrapper>
-        <ToastContainer 
-          position="bottom-right"
-          autoClose={3000}
-          hideProgressBar={false}
-          newestOnTop
-          closeOnClick
-            rtl={true}
-          pauseOnFocusLoss
-          draggable
-          pauseOnHover
-          theme="light"
-        />
-      </StoreProvider>
-    </FirestoreProvider>
-    </ErrorBoundary>
+          <ToastContainer position="top-right" />
+        </FirestoreProvider>
+      </AuthWrapper>
+    </StoreProvider>
   );
 }
 
-// Add base styles to body to prevent FOUC (Flash of Unstyled Content)
-document.body.classList.add('bg-white', 'font-sans');
-
-// Create a global error handler
-window.addEventListener('error', (event) => {
-  console.error('WordStream: Global error caught:', event.error);
-  
-  // Log to chrome storage for debugging
-  try {
-    if (chrome && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.set({
-        'wordstream_global_error': {
-          message: event.error?.message || 'Unknown error',
-          stack: event.error?.stack,
-          timestamp: new Date().toISOString()
-        }
-      });
-    }
-  } catch (storageError) {
-    console.error('Failed to log global error to storage:', storageError);
-  }
-});
-
-// Handle unhandled promise rejections
-window.addEventListener('unhandledrejection', (event) => {
-  console.error('WordStream: Unhandled promise rejection:', event.reason);
-  
-  // Log to chrome storage for debugging
-  try {
-    if (chrome && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.set({
-        'wordstream_unhandled_rejection': {
-          message: event.reason?.message || 'Unknown rejection',
-          stack: event.reason?.stack,
-          timestamp: new Date().toISOString()
-        }
-      });
-    }
-  } catch (storageError) {
-    console.error('Failed to log promise rejection to storage:', storageError);
-  }
-});
-
-// Render the app
+// Render the app inside our error boundary
 const root = createRoot(container);
 root.render(
   <React.StrictMode>
-    <AppWrapper />
+    <ErrorBoundary>
+      <AppWrapper />
+    </ErrorBoundary>
   </React.StrictMode>
 ); 

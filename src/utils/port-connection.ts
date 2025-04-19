@@ -99,11 +99,64 @@ export class PortConnection {
   }
   
   /**
+   * Validate a message against its expected type
+   */
+  private validateMessage(message: any, expectedType: MessageType): boolean {
+    if (!message || typeof message !== 'object') {
+      console.warn('Invalid message: not an object', message);
+      return false;
+    }
+    
+    if (message.type !== expectedType) {
+      console.warn(`Message type mismatch: expected ${expectedType}, got ${message.type}`, message);
+      return false;
+    }
+    
+    // Additional validation based on message type
+    switch (expectedType) {
+      case MessageType.TRANSLATE_TEXT:
+        if (!message.text || !message.targetLang) {
+          console.warn('Invalid TRANSLATE_TEXT message: missing required fields', message);
+          return false;
+        }
+        break;
+        
+      case MessageType.GET_GEMINI_RESPONSE:
+        if (!message.query) {
+          console.warn('Invalid GET_GEMINI_RESPONSE message: missing query', message);
+          return false;
+        }
+        break;
+      
+      case MessageType.SIGN_IN_WITH_GOOGLE:
+      case MessageType.SIGN_OUT:
+      case MessageType.GET_AUTH_STATE:
+        // These messages don't require additional fields
+        break;
+      
+      case MessageType.SAVE_NOTE:
+        if (!message.content) {
+          console.warn('Invalid SAVE_NOTE message: missing content', message);
+          return false;
+        }
+        break;
+    }
+    
+    return true;
+  }
+  
+  /**
    * Handle an incoming message
    */
   private handleMessage(message: Message): void {
     if (!message || !message.type) {
       console.warn('Received invalid message:', message);
+      return;
+    }
+    
+    // Validate message against its type
+    if (!this.validateMessage(message, message.type)) {
+      console.error('Message validation failed:', message);
       return;
     }
     
@@ -131,7 +184,7 @@ export class PortConnection {
     
     try {
       this.port.postMessage(message);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to send message:', error);
       this.port = null;
       
@@ -152,6 +205,7 @@ export class PortConnection {
     return new Promise<T>((resolve, reject) => {
       const timeout = timeoutMs || this.options.timeout;
       let timeoutId: number | null = null;
+      let disconnectHandler: () => void;
       
       // Create one-time handler for the response
       const handleResponse = (response: T) => {
@@ -163,6 +217,11 @@ export class PortConnection {
         // Remove the message handler
         this.removeListener(responseType, handleResponse);
         
+        // Remove disconnect handler
+        if (this.port) {
+          this.port.onDisconnect.removeListener(disconnectHandler);
+        }
+        
         // Handle errors in the response
         if ('error' in response && response.error) {
           reject(new Error(response.error as string));
@@ -171,17 +230,52 @@ export class PortConnection {
         }
       };
       
-      // Add the handler
+      // Handler for disconnection during pending request
+      disconnectHandler = () => {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+        
+        this.removeListener(responseType, handleResponse);
+        reject(new Error('Connection to background service lost while waiting for response'));
+      };
+      
+      // If port is already disconnected, fail fast
+      if (!this.port) {
+        return reject(new Error('Cannot send message, port is not connected'));
+      }
+      
+      // Add disconnect handler
+      this.port.onDisconnect.addListener(disconnectHandler);
+      
+      // Add the response handler
       this.addListener(responseType, handleResponse);
       
       // Set a timeout
       timeoutId = window.setTimeout(() => {
         this.removeListener(responseType, handleResponse);
+        if (this.port) {
+          this.port.onDisconnect.removeListener(disconnectHandler);
+        }
         reject(new Error(`Request timed out after ${timeout}ms`));
       }, timeout);
       
       // Send the message
-      this.postMessage(message);
+      try {
+        this.postMessage(message);
+      } catch (error: any) {
+        // Clean up on send failure
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+        
+        this.removeListener(responseType, handleResponse);
+        if (this.port) {
+          this.port.onDisconnect.removeListener(disconnectHandler);
+        }
+        
+        reject(new Error(`Failed to send message: ${error.message}`));
+      }
     });
   }
   

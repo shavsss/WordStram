@@ -8,6 +8,7 @@
 
 import { getPortConnection } from '../utils/port-connection';
 import { Message, MessageType, TranslateTextMessage, TranslationResultMessage, GeminiRequestMessage, GeminiResponseMessage } from '../shared/message';
+import { initializeConnectionRecovery } from '../utils/connection-recovery';
 
 console.log('WordStream: Content script initialized');
 
@@ -18,6 +19,38 @@ const portConnection = getPortConnection({
   onDisconnect: () => {
     console.log('WordStream: Connection to background service lost, attempting to reconnect...');
   }
+});
+
+// Initialize connection recovery mechanism
+try {
+  initializeConnectionRecovery();
+  console.log('WordStream: Connection recovery mechanism initialized');
+} catch (error) {
+  console.warn('WordStream: Failed to initialize connection recovery', error);
+}
+
+// Add listeners for connection recovery events
+window.addEventListener('wordstream:connection_lost', (event: any) => {
+  console.warn('WordStream: Connection to background service lost', event.detail);
+  
+  // Show a toast notification to the user
+  showToast('Connection to WordStream lost. Attempting to reconnect automatically.', 10000);
+  
+  // Disable interactive features that require background service
+  disableBackgroundDependentFeatures();
+});
+
+window.addEventListener('wordstream:connection_recovered', () => {
+  console.log('WordStream: Connection to background service recovered');
+  
+  // Show a toast notification to the user
+  showToast('Connection to WordStream restored!', 3000);
+  
+  // Re-enable features
+  enableBackgroundDependentFeatures();
+  
+  // Refresh authentication state
+  checkAuthenticationState();
 });
 
 // Interface for chat messages
@@ -42,7 +75,8 @@ const state = {
   chatHistory: [] as ChatMessage[],
   isProcessingChatRequest: false,
   isAuthenticated: false,
-  user: null as any
+  user: null as any,
+  isBackgroundConnected: true // New state to track background connection
 };
 
 // Attach state to window object for cross-module access
@@ -298,6 +332,12 @@ function addChatMessage(message: ChatMessage) {
  * Send a message to the Gemini AI
  */
 async function sendChatMessage() {
+  // Check if background is connected before sending
+  if (!state.isBackgroundConnected) {
+    showToast('Cannot send message: connection to WordStream service lost', 3000);
+    return;
+  }
+
   const inputElement = document.getElementById('chat-input') as HTMLInputElement;
   if (!inputElement || !inputElement.value.trim()) return;
   
@@ -517,6 +557,12 @@ async function loadNotes() {
  * Save notes for current video
  */
 async function saveNotes() {
+  // Check if background is connected before saving
+  if (!state.isBackgroundConnected) {
+    showToast('Cannot save notes: connection to WordStream service lost', 3000);
+    return;
+  }
+
   // If not authenticated, show login message
   if (!state.isAuthenticated) {
     showToast('Please sign in to save notes', 3000);
@@ -740,6 +786,124 @@ function setupMessageListeners() {
 function updateUIForAuthState() {
   // Update UI elements based on auth state
   // This would be implemented based on your specific UI needs
+}
+
+/**
+ * Disable features that depend on background service
+ */
+function disableBackgroundDependentFeatures() {
+  state.isBackgroundConnected = false;
+  
+  // Disable chat panel if open
+  if (state.isChatPanelOpen) {
+    const chatPanel = document.getElementById('wordstream-chat-panel');
+    if (chatPanel) {
+      // Add a connection error message to the chat
+      addChatMessage({
+        role: 'assistant',
+        content: 'Sorry, I\'ve lost connection to the WordStream service. I\'ll try to reconnect automatically.',
+        timestamp: Date.now()
+      });
+      
+      // Disable the input
+      const chatInput = document.getElementById('chat-input') as HTMLInputElement;
+      const sendButton = document.getElementById('send-chat') as HTMLButtonElement;
+      
+      if (chatInput) {
+        chatInput.disabled = true;
+        chatInput.placeholder = 'Connection lost. Reconnecting...';
+      }
+      
+      if (sendButton) {
+        sendButton.disabled = true;
+      }
+    }
+  }
+  
+  // Disable notes panel if open
+  if (state.isNotesPanelOpen) {
+    const notesPanel = document.getElementById('wordstream-notes-panel');
+    if (notesPanel) {
+      const notesArea = document.getElementById('notes-content') as HTMLTextAreaElement;
+      const saveButton = document.getElementById('save-notes') as HTMLButtonElement;
+      
+      if (notesArea) {
+        notesArea.disabled = true;
+      }
+      
+      if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = 'Connection Lost';
+      }
+    }
+  }
+}
+
+/**
+ * Re-enable features after background connection is restored
+ */
+function enableBackgroundDependentFeatures() {
+  state.isBackgroundConnected = true;
+  
+  // Re-enable chat panel if open
+  if (state.isChatPanelOpen) {
+    const chatPanel = document.getElementById('wordstream-chat-panel');
+    if (chatPanel) {
+      // Add a recovery message to the chat
+      addChatMessage({
+        role: 'assistant',
+        content: 'I\'m back online! How can I help you?',
+        timestamp: Date.now()
+      });
+      
+      // Re-enable the input
+      const chatInput = document.getElementById('chat-input') as HTMLInputElement;
+      const sendButton = document.getElementById('send-chat') as HTMLButtonElement;
+      
+      if (chatInput) {
+        chatInput.disabled = false;
+        chatInput.placeholder = 'Ask about the video...';
+      }
+      
+      if (sendButton) {
+        sendButton.disabled = false;
+      }
+    }
+  }
+  
+  // Re-enable notes panel if open
+  if (state.isNotesPanelOpen) {
+    const notesPanel = document.getElementById('wordstream-notes-panel');
+    if (notesPanel) {
+      const notesArea = document.getElementById('notes-content') as HTMLTextAreaElement;
+      const saveButton = document.getElementById('save-notes') as HTMLButtonElement;
+      
+      if (notesArea) {
+        notesArea.disabled = false;
+      }
+      
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save Notes';
+      }
+    }
+  }
+}
+
+/**
+ * Check the authentication state
+ */
+async function checkAuthenticationState() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'GET_AUTH_STATE' });
+    if (response) {
+      state.isAuthenticated = response.isAuthenticated;
+      state.user = response.user;
+      updateUIForAuthState();
+    }
+  } catch (error) {
+    console.error('WordStream: Error checking auth state', error);
+  }
 }
 
 /**

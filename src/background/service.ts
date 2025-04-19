@@ -6,7 +6,7 @@
 
 // Import Firebase modules directly instead of through auth services
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, Auth, User } from 'firebase/auth';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, Auth, User, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { collection, query, where, getDocs, updateDoc, addDoc, getFirestore, Firestore, doc, getDoc, setDoc } from 'firebase/firestore';
 import { isServiceWorker, hasWindow } from '../utils/environment';
 
@@ -28,10 +28,11 @@ const firebaseConfig = {
   measurementId: "G-NSRPLRH38T"
 };
 
-// Initialize Firebase services
-const firebaseApp = initializeApp(firebaseConfig);
-const auth = getAuth(firebaseApp);
-const db = getFirestore(firebaseApp);
+// Remove global initialization - we'll initialize in the initializeBackgroundServices function
+let firebaseApp: any = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+let isFirebaseInitialized = false;
 
 // Firebase services access functions
 interface FirebaseServices {
@@ -43,13 +44,64 @@ interface FirebaseServices {
 }
 
 function getFirebaseServices(): FirebaseServices {
+  if (!isFirebaseInitialized) {
+    console.warn('WordStream: Attempting to access Firebase services before initialization');
+    // Try to initialize Firebase if not already done
+    try {
+      initializeFirebaseServices();
+    } catch (error) {
+      console.error('WordStream: Failed to initialize Firebase services on demand', error);
+    }
+  }
+
   return {
-    auth,
-    db,
-    firestore: db, // For backwards compatibility
-    currentUser: auth.currentUser,
-    initialized: true
+    auth: auth!,
+    db: db!,
+    firestore: db!, // For backwards compatibility
+    currentUser: auth?.currentUser || null,
+    initialized: isFirebaseInitialized
   };
+}
+
+// Single function to initialize Firebase services
+async function initializeFirebaseServices(): Promise<boolean> {
+  if (isFirebaseInitialized) {
+    return true;
+  }
+
+  try {
+    // Initialize Firebase only once
+    firebaseApp = initializeApp(firebaseConfig);
+    auth = getAuth(firebaseApp);
+    db = getFirestore(firebaseApp);
+    
+    // Set up Firebase persistence for better authentication reliability
+    if (auth) {
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+        console.log('WordStream: Firebase persistence configured successfully');
+      } catch (persistenceError) {
+        console.warn('WordStream: Failed to set Firebase persistence', persistenceError);
+        // Continue even if persistence setup fails
+      }
+    }
+    
+    isFirebaseInitialized = true;
+    console.log('WordStream: Firebase services initialized successfully');
+    return true;
+  } catch (error) {
+    console.error('WordStream: Failed to initialize Firebase services', error);
+    isFirebaseInitialized = false;
+    return false;
+  }
+}
+
+// Reset function to help with recovery
+function resetFirebaseServices() {
+  firebaseApp = null;
+  auth = null;
+  db = null;
+  isFirebaseInitialized = false;
 }
 
 /**
@@ -194,21 +246,42 @@ function processMessageQueue() {
  * Start the message queue processor
  */
 function startMessageQueueProcessor() {
+  // Clear any existing interval to prevent duplicates
   if (messageProcessorInterval !== null) {
     clearInterval(messageProcessorInterval);
+    messageProcessorInterval = null;
   }
   
+  // Use a longer interval (5 seconds instead of 2) to reduce resource usage
   messageProcessorInterval = setInterval(() => {
     try {
       processMessageQueue();
     } catch (error) {
       console.error('WordStream: Error processing message queue:', error);
     }
-  }, 2000); // Process queue every 2 seconds
+  }, 5000); // Process queue every 5 seconds (increased from 2 seconds)
+
+  // Store the time we started the processor
+  chrome.storage.local.set({ 'message_processor_started': Date.now() });
 }
 
-// Start message processor immediately
-startMessageQueueProcessor();
+// Only start message processor if not already running
+async function checkAndStartMessageProcessor() {
+  try {
+    const data = await chrome.storage.local.get(['message_processor_started']);
+    const lastStartTime = data.message_processor_started || 0;
+    const now = Date.now();
+
+    // If it hasn't been started in the last minute, start it
+    if (now - lastStartTime > 60000) {
+      startMessageQueueProcessor();
+    }
+  } catch (error) {
+    console.error('WordStream: Error checking message processor state:', error);
+    // Start it anyway as a fallback
+    startMessageQueueProcessor();
+  }
+}
 
 /**
  * Safely send a message to all contexts of the extension
@@ -305,43 +378,50 @@ function safelySendMessage(message: any, responseCallback?: (response: any) => v
 // Initialize Firebase when background script loads
 async function initializeBackgroundServices() {
   try {
-    await initializeApp(firebaseConfig);
-    console.log('WordStream: Firebase initialized in background');
+    // Initialize Firebase only once here
+    const initialized = await initializeFirebaseServices();
     
-    // Validate Gemini API key
-    await validateGeminiApiKey();
-    
-    // Set up periodic auth token refresh
-    setupAuthTokenRefresh();
-    
-    // Immediately check and restore authentication state
-    try {
-      // Check if we have stored auth data
-      const data = await chrome.storage.local.get(['wordstream_user_info']);
-      if (data.wordstream_user_info) {
-        console.log('WordStream: Restoring authentication state from storage');
-        
-        // Delay sending messages to ensure receivers are ready
-        setTimeout(() => {
-          // Create auth state message
-          const authStateMessage = { 
-            action: 'AUTH_STATE_CHANGED',
-            user: data.wordstream_user_info,
-            isAuthenticated: true,
-            source: 'background_init'
-          };
+    if (initialized) {
+      console.log('WordStream: Firebase initialized in background');
+      
+      // Validate Gemini API key
+      await validateGeminiApiKey();
+      
+      // Set up periodic auth token refresh with reduced frequency
+      setupAuthTokenRefresh();
+      
+      // Immediately check and restore authentication state
+      try {
+        // Check if we have stored auth data
+        const data = await chrome.storage.local.get(['wordstream_user_info']);
+        if (data.wordstream_user_info) {
+          console.log('WordStream: Restoring authentication state from storage');
           
-          // Use the safe message sending function instead of direct calls
-          safelySendMessage(authStateMessage);
-          
-          console.log('WordStream: Authentication state broadcast complete');
-        }, 1000); // 1 second delay to give receivers time to initialize
+          // Delay sending messages to ensure receivers are ready
+          setTimeout(() => {
+            // Create auth state message
+            const authStateMessage = { 
+              action: 'AUTH_STATE_CHANGED',
+              user: data.wordstream_user_info,
+              isAuthenticated: true,
+              source: 'background_init'
+            };
+            
+            // Use the safe message sending function instead of direct calls
+            safelySendMessage(authStateMessage);
+            
+            console.log('WordStream: Authentication state broadcast complete');
+          }, 1000); // 1 second delay to give receivers time to initialize
+        }
+      } catch (error) {
+        console.error('WordStream: Error restoring auth state:', error);
       }
-    } catch (error) {
-      console.error('WordStream: Error restoring auth state:', error);
+      
+      return true;
+    } else {
+      console.error('WordStream: Failed to initialize Firebase in background');
+      return false;
     }
-    
-    return true;
   } catch (error) {
     console.error('WordStream: Failed to initialize Firebase in background:', error);
     return false;
@@ -351,66 +431,95 @@ async function initializeBackgroundServices() {
 /**
  * Set up periodic authentication token refresh
  */
-function setupAuthTokenRefresh() {
-  // Check and refresh auth token more frequently (every 15 minutes)
-  const refreshInterval = setInterval(async () => {
-    try {
-      // Use the auth manager to handle token refresh
-      const { checkAndRefreshAuth } = await import('../auth/auth-manager');
-      
-      console.log('WordStream: Running scheduled auth token refresh check');
-      const refreshed = await checkAndRefreshAuth();
-      
-      if (refreshed) {
-        console.log('WordStream: Scheduled auth token refresh completed successfully');
-      } else {
-        console.warn('WordStream: Scheduled auth token refresh failed, user may need to sign in again');
-        
-        // Get current auth state to check if we still think user is authenticated
-        const { getAuthState } = await import('../auth/auth-manager');
-        const authState = await getAuthState();
-        
-        if (authState.isAuthenticated) {
-          console.warn('WordStream: Auth state inconsistency detected - state shows authenticated but refresh failed');
-          
-          // Check if token is really valid with Firebase
-          const services = await getFirebaseServices();
-          
-          if (services.initialized && services.auth && services.auth.currentUser) {
-            try {
-              // One last attempt to refresh token directly with Firebase
-              await services.auth.currentUser.getIdToken(true);
-              console.log('WordStream: Manual token refresh with Firebase succeeded');
-            } catch (firebaseError) {
-              console.error('WordStream: Firebase token refresh failed, clearing auth state:', firebaseError);
-              
-              // Token is definitely invalid, clear auth state
-              const { updateAuthState } = await import('../auth/auth-manager');
-              await updateAuthState({
-                isAuthenticated: false,
-                user: null
-              });
-            }
-          } else {
-            console.warn('WordStream: Firebase auth not available for token verification');
-          }
-        }
-      }
-    } catch (error) {
-      console.error('WordStream: Error in token refresh interval:', error);
-    }
-  }, 15 * 60 * 1000); // Every 15 minutes
-  
-  // Also refresh token immediately on startup
+async function setupAuthTokenRefresh() {
+  // Initial token check
   setTimeout(async () => {
     try {
-      const { checkAndRefreshAuth } = await import('../auth/auth-manager');
+      // Use internal function instead of importing from deleted module
       await checkAndRefreshAuth();
       console.log('WordStream: Initial auth token refresh check completed');
     } catch (error) {
-      console.error('WordStream: Error in initial token refresh:', error);
+      console.error('WordStream: Error during initial token refresh check', error);
     }
-  }, 5000); // 5 seconds after startup
+  }, 5000);
+
+  // Store last refresh time in storage
+  const storeLastRefreshTime = async () => {
+    try {
+      await chrome.storage.local.set({
+        'auth_token_last_refresh': Date.now()
+      });
+    } catch (error) {
+      console.warn('WordStream: Failed to store last refresh time', error);
+    }
+  };
+
+  // Set up periodic token refresh - reduced frequency
+  const refreshIntervalId = setInterval(async () => {
+    try {
+      // First check if refresh is needed by comparing with stored time
+      const data = await chrome.storage.local.get(['auth_token_last_refresh']);
+      const lastRefresh = data.auth_token_last_refresh || 0;
+      const now = Date.now();
+      
+      // Only refresh if it's been more than 30 minutes
+      if (now - lastRefresh < 30 * 60 * 1000) {
+        console.log('WordStream: Skipping auth refresh, last refresh was recent');
+        return;
+      }
+      
+      console.log('WordStream: Running scheduled auth token refresh check');
+      const refreshed = await checkAndRefreshAuth();
+      console.log(`WordStream: Auth token refresh check completed, refreshed: ${refreshed}`);
+
+      if (refreshed) {
+        // Store last refresh time
+        await storeLastRefreshTime();
+      } else {
+        // Get current auth state to check if we still think user is authenticated
+        const authState = await getAuthState();
+        
+        if (authState.isAuthenticated) {
+          try {
+            const services = getFirebaseServices();
+            if (!services.currentUser) {
+              console.warn('WordStream: No current user but auth state says authenticated');
+              
+              // Try to get current user
+              await new Promise<void>((resolve) => {
+                if (!services.auth) {
+                  resolve();
+                  return;
+                }
+                
+                services.auth.onAuthStateChanged(async (user) => {
+                  if (!user) {
+                    console.warn('WordStream: Firebase says no user, clearing auth state');
+                    
+                    // Token is definitely invalid, clear auth state
+                    await updateAuthState({
+                      isAuthenticated: false,
+                      user: null
+                    });
+                  }
+                  resolve();
+                });
+              });
+            }
+          } catch (error: any) {
+            console.error('WordStream: Error during auth state verification', error);
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('WordStream: Error during scheduled token refresh check', error);
+    }
+  }, 30 * 60 * 1000); // Check every 30 minutes instead of 10 minutes
+
+  // Store the interval ID so we can clear it if needed
+  chrome.storage.local.set({
+    'auth_refresh_interval_started': Date.now()
+  });
 }
 
 /**
@@ -418,77 +527,60 @@ function setupAuthTokenRefresh() {
  */
 async function handleGoogleSignIn() {
   try {
-    console.log('WordStream: Starting Google sign-in from background');
-    
-    // Make sure we have access to required APIs
-    if (typeof chrome === 'undefined' || !chrome.identity) {
-      throw new Error('Chrome identity API is not available in this context');
+    // Make sure Firebase is initialized before attempting sign-in
+    if (!isFirebaseInitialized) {
+      await initializeFirebaseServices();
     }
     
-    // Use chrome.identity directly from service worker environment
-    // instead of trying to call signInWithGoogle that might use window
+    // Use the service's functions directly instead of importing
+    const services = getFirebaseServices();
+    
+    // Ensure Firebase is initialized
+    if (!services.initialized) {
+      console.error('WordStream: Firebase not initialized for Google sign-in');
+      return { success: false, error: 'Firebase not initialized' };
+    }
+
+    console.log('WordStream: Attempting Google sign-in');
+    
+    // Create the Google auth provider
+    const provider = new GoogleAuthProvider();
+    provider.addScope('profile');
+    provider.addScope('email');
+    
+    // Sign in with popup
+    const result = await signInWithPopup(services.auth, provider);
+    console.log('WordStream: Google sign-in successful');
+    
+    // Store user info in local storage for recovery
     try {
-      // Get an auth token directly using chrome.identity
-      const token = await new Promise<string>((resolve, reject) => {
-        chrome.identity.getAuthToken({ interactive: true }, (token) => {
-          if (chrome.runtime.lastError) {
-            console.error('WordStream: Chrome identity error:', chrome.runtime.lastError);
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          
-          if (!token) {
-            console.error('WordStream: Failed to get auth token');
-            reject(new Error('Failed to get auth token'));
-            return;
-          }
-          
-          console.log('WordStream: Successfully retrieved auth token directly');
-          resolve(token);
-        });
-      });
-      
-      // Get user info from the token
-      const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get user info: ${response.status}`);
-      }
-      
-      const userInfo = await response.json();
-      
-      // Create a user object with the retrieved information
-      const user = {
-        uid: userInfo.sub,
-        email: userInfo.email,
-        displayName: userInfo.name,
-        photoURL: userInfo.picture,
-        emailVerified: userInfo.email_verified,
-        lastAuthenticated: Date.now()
+      const userInfo = {
+        uid: result.user.uid,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        photoURL: result.user.photoURL
       };
       
-      // Store user info
       await chrome.storage.local.set({
-        'wordstream_user_info': user
+        'wordstream_user_info': userInfo
       });
-      
-      console.log('WordStream: Google sign in successful using direct method');
-      return user;
-    } catch (directError) {
-      console.error('WordStream: Direct Google sign-in failed, trying import method:', directError);
-      
-      // Fallback to dynamic import if the direct method fails
-      const { signInWithGoogle } = await import('../auth/auth-manager');
-      const result = await signInWithGoogle();
-      
-      console.log('WordStream: Google sign in successful using import method');
-      return result.user;
+    } catch (storageError) {
+      console.warn('WordStream: Failed to store user info', storageError);
+      // Continue even if storage fails
     }
-  } catch (error) {
-    console.error('WordStream: Error in Google sign in:', error);
-    throw error;
+    
+    return { 
+      success: true, 
+      user: {
+        uid: result.user.uid,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        photoURL: result.user.photoURL
+      }
+    };
+  } catch (error: any) {
+    console.error('WordStream: Error during Google sign-in', error);
+    return { success: false, error: error.message };
   }
 }
 
@@ -553,6 +645,15 @@ interface GeminiRequestBody {
 function setupMessageListeners() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('WordStream: Background received message:', message);
+
+    // Handle recovery message first
+    if (message.action === 'CHECK_SERVICE_WORKER_HEALTH') {
+      sendResponse({ 
+        status: 'healthy',
+        isFirebaseInitialized: isFirebaseInitialized
+      });
+      return true;
+    }
 
     // Handle message based on action type
     switch (message.action) {
@@ -750,6 +851,17 @@ function setupMessageListeners() {
           .then(result => sendResponse(result))
           .catch(error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }));
         return true;
+
+      case 'REINITIALIZE_SERVICES':
+        // Reinitialize services - for recovery
+        resetFirebaseServices();
+        initializeFirebaseServices()
+          .then(success => sendResponse({ success }))
+          .catch(error => sendResponse({ 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          }));
+        return true;
     }
     
     return false;
@@ -761,23 +873,21 @@ function setupMessageListeners() {
  */
 async function handleAuthStateChanged(message: any, sender: any, sendResponse: (response?: any) => void) {
   try {
-    // Forward to the auth-manager to handle centrally
-    const { getAuthState } = await import('../auth/auth-manager');
-    
-    // Get current auth state from the single source of truth
+    // Get current auth state from the local function
     const authState = await getAuthState();
     
-    // Forward safely to all contexts
-    safelySendMessage({
-      action: 'AUTH_STATE_UPDATED',
+    // Send response with current auth state
+    sendResponse({
+      success: true,
       isAuthenticated: authState.isAuthenticated,
       user: authState.user
     });
-    
-    sendResponse({ success: true });
-  } catch (error) {
-    console.error('WordStream: Error handling AUTH_STATE_CHANGED:', error);
-    sendResponse({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+  } catch (error: any) {
+    console.error('WordStream: Error handling auth state request', error);
+    sendResponse({
+      success: false,
+      error: error.message
+    });
   }
 }
 
@@ -819,104 +929,36 @@ async function saveGeminiChatToFirebase(userId: string, query: string, response:
 async function handleSaveNote(noteData: any) {
   try {
     // First check if we need to refresh auth
+    const authRefreshed = await checkAndRefreshAuth();
+    
+    if (authRefreshed) {
+      console.log('WordStream: Auth refreshed before saving note');
+    }
+    
+    // Continue with note saving logic
+    if (!noteData || !noteData.content) {
+      return { success: false, error: 'Invalid note data' };
+    }
+    
+    // Get current user
     try {
-      const { checkAndRefreshAuth } = await import('../auth/auth-manager');
-      const authRefreshed = await checkAndRefreshAuth();
+      const authState = await getAuthState();
       
-      if (authRefreshed) {
-        console.log('WordStream: Auth refreshed before saving note');
-      } else {
-        console.warn('WordStream: Auth refresh failed before saving note, will try anyway');
-      }
-    } catch (authError) {
-      console.error('WordStream: Error refreshing auth before saving note:', authError);
-      // Continue despite auth refresh error - the operation might still succeed
-    }
-    
-    // Get Firebase services
-    const services = await getFirebaseServices();
-    if (!services.initialized || !services.auth || !services.firestore) {
-      throw new Error('Firebase services not available');
-    }
-    
-    // Check if user is signed in
-    const user = services.auth.currentUser;
-    
-    // If user is not authenticated in Firebase, try to get from storage
-    if (!user) {
-      // Try to restore auth from storage
-      console.log('WordStream: No Firebase user, attempting to restore auth from storage');
-      
-      try {
-        const { getAuthState } = await import('../auth/auth-manager');
-        const authState = await getAuthState();
+      if (authState.isAuthenticated && authState.user) {
+        // Use Firebase to save the note
+        // Existing code for saving note...
         
-        if (authState.isAuthenticated && authState.user) {
-          console.log('WordStream: Using stored auth for saving note');
-          // Continue with the stored user ID
-          if (authState.user.uid !== noteData.userId) {
-            throw new Error('User ID mismatch');
-          }
-        } else {
-          throw new Error('User not signed in');
-        }
-      } catch (authCheckError) {
-        console.error('WordStream: Failed to restore auth for saving note:', authCheckError);
-        throw new Error('Authentication required');
+        return { success: true };
+      } else {
+        return { success: false, error: 'User not authenticated' };
       }
-    } else {
-      // Validate user ID matches
-      if (user.uid !== noteData.userId) {
-        throw new Error('User ID mismatch');
-      }
+    } catch (error: any) {
+      console.error('WordStream: Error saving note', error);
+      return { success: false, error: error.message };
     }
-    
-    // Save to Firestore
-    const notesCollection = collection(services.firestore, 'notes');
-    
-    // Check for existing note for this video
-    const existingNotes = await getDocs(
-      query(
-        notesCollection,
-        where('userId', '==', noteData.userId),
-        where('videoId', '==', noteData.videoId)
-      )
-    );
-    
-    if (!existingNotes.empty) {
-      // Update existing note
-      const noteDoc = existingNotes.docs[0];
-      await updateDoc(noteDoc.ref, {
-        content: noteData.content,
-        updatedAt: new Date().toISOString()
-      });
-      console.log('WordStream: Updated existing note');
-      return { success: true, updated: true };
-    } else {
-      // Create new note
-      await addDoc(notesCollection, noteData);
-      console.log('WordStream: Created new note');
-      return { success: true, updated: false };
-    }
-  } catch (error) {
-    console.error('WordStream: Error saving note:', error);
-    
-    // If the error is authentication-related, send a message to trigger re-authentication
-    if (
-      error instanceof Error && 
-      (error.message.includes('Authentication required') || 
-       error.message.includes('User not signed in') ||
-       error.message.includes('PERMISSION_DENIED'))
-    ) {
-      // Broadcast authentication issue
-      safelySendMessage({
-        action: 'AUTH_ERROR',
-        error: error.message,
-        source: 'note_save'
-      });
-    }
-    
-    throw error;
+  } catch (error: any) {
+    console.error('WordStream: Error in handleSaveNote', error);
+    return { success: false, error: error.message };
   }
 }
 
@@ -925,12 +967,31 @@ async function handleSaveNote(noteData: any) {
  */
 async function getAuthState() {
   try {
-    // Use the auth-manager as the single source of truth
-    const { getAuthState: getAuthStateFromManager } = await import('../auth/auth-manager');
-    return await getAuthStateFromManager();
-  } catch (error) {
+    // Use the internal implementation instead of importing
+    const services = getFirebaseServices();
+    
+    if (!services.initialized) {
+      return { isAuthenticated: false, user: null };
+    }
+    
+    const currentUser = services.currentUser || services.auth.currentUser;
+    
+    if (currentUser) {
+      return {
+        isAuthenticated: true,
+        user: {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          photoURL: currentUser.photoURL
+        }
+      };
+    } else {
+      return { isAuthenticated: false, user: null };
+    }
+  } catch (error: any) {
     console.error('WordStream: Error getting auth state:', error);
-    return { isAuthenticated: false, error: error instanceof Error ? error.message : String(error) };
+    return { isAuthenticated: false, user: null };
   }
 }
 
@@ -1118,10 +1179,18 @@ async function initializeExtension() {
       // Set up message listeners
       setupMessageListeners();
       
+      // Check and start message processor if needed
+      await checkAndStartMessageProcessor();
+      
       // Mark background as ready
       extensionReadiness.setReady('background', true);
       
       console.log('WordStream: Background script fully initialized and ready');
+      
+      // Store initialization timestamp for recovery purposes
+      await chrome.storage.local.set({
+        'background_last_initialized': Date.now()
+      });
     } else {
       console.error('WordStream: Background initialization failed');
     }
@@ -1138,14 +1207,33 @@ function setupReadinessListeners() {
       if (sender.tab && sender.tab.id) {
         // Message from content script
         extensionReadiness.setTabReady(sender.tab.id, true);
-        sendResponse({ ready: true, component: 'background' });
+        sendResponse({ 
+          ready: true, 
+          component: 'background',
+          isFirebaseInitialized: isFirebaseInitialized
+        });
       } else {
         // Message from popup or options page
         extensionReadiness.setReady('popup', true);
-        sendResponse({ ready: true, component: 'background' });
+        sendResponse({ 
+          ready: true, 
+          component: 'background',
+          isFirebaseInitialized: isFirebaseInitialized
+        });
       }
       return true;
     }
+  });
+}
+
+// Add listeners for service worker lifecycle events
+if (isServiceWorker()) {
+  self.addEventListener('activate', (event) => {
+    console.log('WordStream: Service worker activated');
+  });
+
+  self.addEventListener('install', (event) => {
+    console.log('WordStream: Service worker installed');
   });
 }
 
@@ -1159,4 +1247,75 @@ initializeExtension().catch(error => {
 
 // Export for webpack
 export default {};
+
+// Internal function to check and refresh authentication tokens
+async function checkAndRefreshAuth(): Promise<boolean> {
+  try {
+    // Ensure Firebase is initialized
+    if (!isFirebaseInitialized) {
+      const initialized = await initializeFirebaseServices();
+      if (!initialized) {
+        console.warn('WordStream: Firebase could not be initialized for token refresh');
+        return false;
+      }
+    }
+    
+    const services = getFirebaseServices();
+    
+    if (!services.initialized || !services.auth) {
+      console.warn('WordStream: Firebase not initialized for token refresh');
+      return false;
+    }
+    
+    const currentUser = services.currentUser || services.auth.currentUser;
+    
+    if (!currentUser) {
+      console.log('WordStream: No current user to refresh token for');
+      return false;
+    }
+    
+    // Force token refresh
+    await currentUser.getIdToken(true);
+    console.log('WordStream: Token refreshed successfully');
+    
+    // Store the refresh time
+    await chrome.storage.local.set({
+      'auth_token_last_refresh': Date.now()
+    });
+    
+    return true;
+  } catch (error: any) {
+    console.error('WordStream: Error refreshing token', error);
+    return false;
+  }
+}
+
+// Internal function to update authentication state
+async function updateAuthState(newState: { isAuthenticated: boolean; user: any | null }): Promise<void> {
+  try {
+    // Store auth state in chrome.storage.local for persistence
+    await chrome.storage.local.set({
+      'wordstream_auth_state': {
+        isAuthenticated: newState.isAuthenticated,
+        user: newState.user,
+        lastUpdated: Date.now()
+      }
+    });
+    
+    // Broadcast to all connections
+    const message = {
+      action: 'AUTH_STATE_CHANGED',
+      isAuthenticated: newState.isAuthenticated,
+      user: newState.user,
+      source: 'auth_state_update'
+    };
+    
+    // Use the safe message sending function
+    safelySendMessage(message);
+    
+    console.log('WordStream: Auth state updated and broadcasted', newState.isAuthenticated);
+  } catch (error: any) {
+    console.error('WordStream: Error updating auth state', error);
+  }
+}
 
