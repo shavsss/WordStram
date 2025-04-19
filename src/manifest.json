@@ -18,7 +18,7 @@
     "https://identitytoolkit.googleapis.com/*"
   ],
   "action": {
-    "default_popup": "popup/index.html",
+    "default_popup": "popup/simple-popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -37,7 +37,7 @@
     }
   ],
   "background": {
-    "service_worker": "background/service.js",
+    "service_worker": "background/index.js",
     "type": "module"
   },
   "icons": {
@@ -59,6 +59,6 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
   }
 } 

@@ -1,101 +1,77 @@
-# WordStream - לימוד שפות אינטראקטיבי
+# WordStream
 
-<div dir="rtl">
+Learn languages while watching videos. Browser extension that helps you translate, save words and take notes.
 
-## מבוא
-WordStream הוא תוסף לכרום המאפשר למידת שפות באופן אינטראקטיבי תוך כדי צפייה בסרטונים, קריאת תוכן או גלישה באינטרנט. התוסף מאפשר לשמור מילים חדשות, ליצור פתקים, לתרגל באמצעות משחקים ולסנכרן את כל הנתונים בין מכשירים שונים.
+## Project Structure
 
-## מאפיינים עיקריים
-- **שמירת מילים חדשות** - שמירה מהירה של מילים וביטויים חדשים תוך כדי גלישה
-- **תרגום אוטומטי** - תרגום אוטומטי של מילים בלחיצה אחת
-- **פתקיות וסיכומים** - יצירת הערות וסיכומים מקושרים לתוכן
-- **מגוון משחקי לימוד** - תרגול באמצעות משחקים אינטראקטיביים
-- **סנכרון בענן** - גיבוי ושיתוף בין מכשירים באמצעות Firebase
-- **ניתוח התקדמות** - מעקב אחר ההתקדמות בלימוד השפה
-
-## דרישות טכניות
-- דפדפן Chrome (גרסה 88 ומעלה)
-- חיבור לאינטרנט לסנכרון נתונים
-- חשבון Google לאימות ואחסון בענן
-
-## התקנה
-1. הורד את הקובץ האחרון מהגיט
-2. פתח את Chrome והיכנס לכתובת `chrome://extensions`
-3. הפעל את "מצב מפתח" בפינה הימנית העליונה
-4. לחץ על "טען תוסף לא ארוז" ובחר את תיקיית הפרויקט
-5. התוסף יותקן ויופיע בסרגל הכלים של Chrome
-
-## ארכיטקטורה
-הפרויקט בנוי בארכיטקטורת Feature-First, המאורגנת לפי תכונות פונקציונליות:
+The project is structured as follows:
 
 ```
-src/
-├── core/                 # ליבת המערכת
-│   ├── auth-manager.ts   # ניהול אימות
-│   ├── firebase/         # אינטגרציה עם Firebase
-│   └── services/         # שירותים משותפים
-├── features/             # תכונות המערכת
-│   ├── auth/             # אימות משתמשים
-│   ├── chat/             # צ'אט אינטראקטיבי
-│   ├── games/            # משחקי לימוד
-│   ├── notes/            # הערות וסיכומים
-│   └── statistics/       # סטטיסטיקות התקדמות
-├── lib/                  # כלים ויוטיליטי
-│   ├── utils.ts          # פונקציות עזר כלליות
-│   └── game-utils.ts     # פונקציות עזר למשחקים
-├── shared/               # רכיבים משותפים
-│   ├── components/       # רכיבי UI משותפים
-│   ├── panels/           # רכיבי פאנלים צפים
-│   └── ui/               # רכיבי UI בסיסיים
-├── utils/                # יוטיליטי נוספים
-└── background.ts         # תהליך הרקע של התוסף
+extension/
+├─ src/
+│  ├─ background/         ← Service Worker
+│  │  ├─ auth.ts          ← Authentication handling
+│  │  ├─ storage.ts       ← Local storage management
+│  │  ├─ firestore.ts     ← Firestore database interactions
+│  │  ├─ message-bus.ts   ← Messaging system
+│  │  ├─ constants.ts     ← Shared constants
+│  │  └─ index.ts         ← Main service worker
+│  ├─ shared/             ← Shared code
+│  │  └─ message.ts       ← Message type definitions
+│  ├─ utils/              ← Utility functions
+│  ├─ popup/              ← Popup UI
+│  │  └─ simple-popup.html ← Simple HTML popup
+│  ├─ content/            ← Content script
+│  │  └─ index.ts         ← Content script entry
+│  └─ manifest.json       ← Extension manifest
+├─ webpack.config.js      ← Build configuration
+└─ package.json           ← Dependencies
 ```
 
-## תלויות עיקריות
-- TypeScript
-- React
-- Firebase (Auth, Firestore)
-- Tailwind CSS
-- Shadcn/UI
+## Architecture
 
-## פיתוח
-לעבודה על הפרויקט:
+This extension uses a modern service worker based architecture:
 
-```bash
-# התקנת תלויות
+1. **Background Service Worker**: Manages authentication, storage, and all background processing.
+2. **Content Script**: Injected into web pages to provide translation and notes functionality.
+3. **Popup UI**: Simple HTML/JS interface for user interaction.
+
+## Communication System
+
+Components communicate through a unified messaging system:
+
+- All messages are sent through `chrome.runtime.sendMessage`
+- The `message-bus.ts` module handles routing and dispatching of messages
+- Message types are defined in `constants.ts` and exported via `shared/message.ts`
+
+## Authentication
+
+Authentication is handled via Chrome Identity API and Firebase:
+
+- Service worker manages the auth state
+- Identity tokens are obtained via `chrome.identity.getAuthToken`
+- Firebase is used for persistent authentication
+- Auth state is broadcast to all extension components
+
+## Development
+
+1. Install dependencies:
+```
 npm install
+```
 
-# הרצת הפרויקט בסביבת פיתוח
+2. Start development mode with hot reloading:
+```
 npm run dev
+```
 
-# בנייה לייצור
+3. Build for production:
+```
 npm run build
 ```
 
-## מבנה תיקיות Features
+4. Load the unpacked extension from the `dist` folder in Chrome.
 
-### Auth
-מודול אימות המשתמשים, מטפל בכניסה והרשמה דרך חשבון Google.
+## License
 
-### Chat
-צ'אט אינטראקטיבי המאפשר תקשורת עם המערכת או עם API של AI.
-
-### Games
-מגוון משחקים לתרגול ולימוד מילים:
-- משחק זיכרון
-- כרטיסיות לימוד
-- שאלות אמריקאיות
-- השלמת מילים
-- מילים מבולבלות
-- מבחן משולב
-
-### Notes
-מערכת הערות לשמירת הערות וסיכומים, עם אפשרות לקישור לסרטונים ותוכן.
-
-### Statistics
-מודול סטטיסטיקה למעקב אחר התקדמות המשתמש בלימוד השפה.
-
-## רישיון
-(c) 2025 WordStream. כל הזכויות שמורות.
-
-</div> 
+This project is licensed under the MIT License - see the LICENSE file for details. 

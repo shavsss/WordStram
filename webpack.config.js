@@ -5,9 +5,8 @@ const webpack = require('webpack');
 
 module.exports = {
   entry: {
-    popup: './src/popup.tsx',
-    content: './src/content/index.ts',
-    background: './src/background/service.ts'
+    'content/content': './src/content/index.ts',
+    'background/index': './src/background/index.ts'
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -64,12 +63,10 @@ module.exports = {
   plugins: [
     new CopyPlugin({
       patterns: [
-        { from: 'public/popup.html', to: 'popup.html' },
-        { from: 'public/popup.css', to: 'popup.css' },
-        { from: 'public/content.css', to: 'content.css' },
+        { from: 'src/popup/simple-popup.html', to: 'popup/simple-popup.html' },
+        { from: 'public/content.css', to: 'content/content.css' },
         { from: 'public/icons', to: 'icons' },
-        { from: 'public/manifest.json', to: 'manifest.json' },
-        { from: 'public/api-keys.json', to: 'api-keys.json' }
+        { from: 'src/manifest.json', to: 'manifest.json' }
       ],
     }),
     new webpack.DefinePlugin({
@@ -77,7 +74,7 @@ module.exports = {
       'process': '{}'
     }),
     new webpack.optimize.MinChunkSizePlugin({
-      minChunkSize: 10000000 // גדול מאוד כדי למנוע פיצול
+      minChunkSize: 10000000 // Prevent code splitting
     }),
   ],
   optimization: {
