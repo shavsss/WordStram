@@ -49,18 +49,39 @@ export function notifyReady(componentType: 'popup' | 'content_script'): Promise<
 export function sendToBackground(message: any): Promise<any> {
   return new Promise((resolve) => {
     try {
+      // First check if the runtime is still valid
+      if (!chrome.runtime?.id) {
+        console.warn('Extension context invalidated, cannot send message');
+        resolve({ error: 'Extension context invalidated' });
+        return;
+      }
+      
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime.lastError) {
-          console.warn(`Error sending message to background: ${chrome.runtime.lastError.message}`);
-          resolve(null);
+          const errorMsg = chrome.runtime.lastError.message || 'Unknown error';
+          
+          if (errorMsg.includes('context invalidated')) {
+            console.warn('Extension context invalidated while waiting for response');
+          } else {
+            console.warn(`Error sending message to background: ${errorMsg}`);
+          }
+          
+          resolve({ error: errorMsg });
           return;
         }
         
         resolve(response);
       });
-    } catch (error) {
-      console.error('Error in sendToBackground:', error);
-      resolve(null);
+    } catch (error: any) {
+      const errorMsg = error?.message || 'Unknown error';
+      
+      if (errorMsg.includes('context invalidated')) {
+        console.warn('Extension context invalidated, cannot send message');
+      } else {
+        console.error('Error in sendToBackground:', error);
+      }
+      
+      resolve({ error: errorMsg });
     }
   });
 }

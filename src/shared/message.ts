@@ -1,93 +1,70 @@
 /**
- * Message types for communication between background, content scripts and popup
+ * Message Types
  */
 export enum MessageType {
-  // Auth messages
-  SIGN_IN_WITH_GOOGLE = 'SIGN_IN_WITH_GOOGLE',
-  SIGN_IN_RESULT = 'SIGN_IN_RESULT',
-  SIGN_OUT = 'SIGN_OUT',
-  SIGN_OUT_RESULT = 'SIGN_OUT_RESULT',
-  GET_AUTH_STATE = 'GET_AUTH_STATE',
-  AUTH_STATE = 'AUTH_STATE',
+  // General messages
+  READY = 'READY',
+  PING = 'PING',
+  PONG = 'PONG',
+  ERROR = 'ERROR',
+  
+  // Content script messages
+  CONTENT_READY = 'CONTENT_READY',
+  CONTENT_CLOSED = 'CONTENT_CLOSED',
+  
+  // Popup messages
+  POPUP_READY = 'POPUP_READY',
+  POPUP_CLOSED = 'POPUP_CLOSED',
+  
+  // Word tracking messages
+  WORD_SELECTED = 'WORD_SELECTED',
+  WORD_TRANSLATED = 'WORD_TRANSLATED',
+  WORD_SAVED = 'WORD_SAVED',
+  
+  // Settings messages
+  GET_SETTINGS = 'GET_SETTINGS',
+  SET_SETTINGS = 'SET_SETTINGS',
+  SETTINGS_UPDATED = 'SETTINGS_UPDATED',
+  
+  // AI messages
+  AI_REQUEST = 'AI_REQUEST',
+  AI_RESPONSE = 'AI_RESPONSE',
+  
+  // Authentication messages
   AUTH_STATE_CHANGED = 'AUTH_STATE_CHANGED',
-  
-  // Translation messages
-  TRANSLATE_TEXT = 'TRANSLATE_TEXT',
-  TRANSLATION_RESULT = 'TRANSLATION_RESULT',
-  SAVE_TRANSLATION = 'SAVE_TRANSLATION',
-  SAVE_TRANSLATION_RESULT = 'SAVE_TRANSLATION_RESULT',
-  TRANSLATIONS_UPDATED = 'TRANSLATIONS_UPDATED',
-  
-  // Notes messages
-  SAVE_NOTE = 'SAVE_NOTE',
-  SAVE_NOTE_RESULT = 'SAVE_NOTE_RESULT',
-  NOTES_UPDATED = 'NOTES_UPDATED',
-  
-  // Gemini messages
-  GET_GEMINI_RESPONSE = 'GET_GEMINI_RESPONSE',
-  GEMINI_RESPONSE = 'GEMINI_RESPONSE',
-  
-  // System messages
-  BACKGROUND_READY = 'BACKGROUND_READY'
+  AUTH_REQUEST = 'AUTH_REQUEST',
+  AUTH_RESPONSE = 'AUTH_RESPONSE'
 }
 
 /**
- * Base message interface
+ * Base Message Interface
  */
 export interface Message {
-  type: MessageType;
-  [key: string]: any;
-}
-
-/**
- * Standard response message with success/error
- */
-export interface ResponseMessage extends Message {
-  success?: boolean;
+  type: string;
+  data?: any;
   error?: string;
+  timestamp?: number;
 }
 
 /**
- * Message for translation requests
+ * Create a new message
  */
-export interface TranslateTextMessage extends Message {
-  type: MessageType.TRANSLATE_TEXT;
-  text: string;
-  targetLang: string;
+export function createMessage(type: string, data?: any): Message {
+  return {
+    type,
+    data,
+    timestamp: Date.now()
+  };
 }
 
 /**
- * Message for translation results
+ * Create an error message
  */
-export interface TranslationResultMessage extends ResponseMessage {
-  type: MessageType.TRANSLATION_RESULT;
-  translation?: string;
-  detectedSourceLanguage?: string;
-}
-
-/**
- * Message for authentication state
- */
-export interface AuthStateMessage extends Message {
-  type: MessageType.AUTH_STATE | MessageType.AUTH_STATE_CHANGED;
-  isAuthenticated: boolean;
-  user: any | null;
-}
-
-/**
- * Message for Gemini requests
- */
-export interface GeminiRequestMessage extends Message {
-  type: MessageType.GET_GEMINI_RESPONSE;
-  query: string;
-  history?: any[];
-  context?: any;
-}
-
-/**
- * Message for Gemini responses
- */
-export interface GeminiResponseMessage extends ResponseMessage {
-  type: MessageType.GEMINI_RESPONSE;
-  content?: string;
+export function createErrorMessage(type: string, error: string, data?: any): Message {
+  return {
+    type,
+    data,
+    error,
+    timestamp: Date.now()
+  };
 } 

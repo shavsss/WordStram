@@ -32,13 +32,31 @@ window.addEventListener('unhandledrejection', (event) => {
 const init = () => {
   const container = document.getElementById('root');
   if (!container) {
-    logger.error('Root container not found');
+    logger.error('Root container not found [PopupEntry]');
+    // Try to create the root container dynamically if it doesn't exist
+    try {
+      const newRoot = document.createElement('div');
+      newRoot.id = 'root';
+      document.body.prepend(newRoot);
+      logger.info('Created root container dynamically');
+      // Continue with the new container
+      const root = createRoot(newRoot);
+      renderApp(root);
+    } catch (error) {
+      logger.error('Failed to create root container:', error);
+      return;
+    }
     return;
   }
   
   const root = createRoot(container);
+  renderApp(root);
   
-  // Render the popup wrapped in an error boundary
+  logger.info('Popup initialized');
+};
+
+// Separate render function to avoid code duplication
+const renderApp = (root: any) => {
   root.render(
     <React.StrictMode>
       <ErrorBoundary
@@ -54,8 +72,6 @@ const init = () => {
       </ErrorBoundary>
     </React.StrictMode>
   );
-  
-  logger.info('Popup initialized');
 };
 
 // Initialize when DOM is ready
