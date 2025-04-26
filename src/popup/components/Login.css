@@ -1,0 +1,125 @@
+.login-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.login-container h2 {
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.login-description {
+  margin-bottom: 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.login-error {
+  background-color: rgba(255, 0, 0, 0.1);
+  color: #e53935;
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.login-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 0.25rem;
+}
+
+.form-group label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--background-secondary);
+  color: var(--text-primary);
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+.login-button {
+  width: 100%;
+  padding: 0.75rem;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, opacity 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.google-login-button {
+  background-color: #4285F4;
+  color: white;
+}
+
+.google-login-button:hover:not(:disabled) {
+  background-color: #357ae8;
+}
+
+.email-login-button {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.email-login-button:hover:not(:disabled) {
+  background-color: var(--accent-color-dark);
+}
+
+.toggle-login-method {
+  background: none;
+  border: none;
+  color: var(--accent-color);
+  font-size: 0.85rem;
+  margin-top: 1rem;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.2s;
+}
+
+.toggle-login-method:hover:not(:disabled) {
+  color: var(--accent-color-dark);
+}
+
+.toggle-login-method:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+} 

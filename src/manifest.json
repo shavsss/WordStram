@@ -2,63 +2,58 @@
   "manifest_version": 3,
   "name": "WordStream",
   "version": "1.0.0",
-  "description": "Learn languages while watching videos",
+  "description": "Learn vocabulary from video captions across streaming platforms",
   "permissions": [
-    "identity",
     "storage",
-    "scripting"
+    "tabs",
+    "scripting",
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.netflix.com/*",
-    "*://*.googleapis.com/*",
-    "https://*.firebaseio.com/*",
-    "https://*.firebaseapp.com/*",
-    "https://firestore.googleapis.com/*",
-    "https://identitytoolkit.googleapis.com/*"
+    "*://*/*"
   ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
-    "default_popup": "popup/simple-popup.html",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "*://*.youtube.com/*",
-        "*://*.netflix.com/*"
-      ],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
-      "run_at": "document_idle"
-    }
-  ],
-  "background": {
-    "service_worker": "background/index.js",
-    "type": "module"
-  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*", "*://*.netflix.com/*", "*://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "content/styles/*"],
+      "resources": ["icons/*"],
       "matches": ["<all_urls>"]
     }
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://apis.google.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com wss://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.gstatic.com; frame-src 'self' https://accounts.google.com https://apis.google.com"
+  },
   "oauth2": {
     "client_id": "1097713470067-4o18jnj4sgujpu4f9o4kogen53e2bknj.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile"
     ]
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
   }
 } 

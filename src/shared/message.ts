@@ -8,10 +8,7 @@
  * @module shared/message
  */
 
-import { MessageType } from '../background/constants';
-
-// Re-export the MessageType enum
-export { MessageType };
+import { MessageType } from './message-types';
 
 /**
  * Base message interface that all message types must implement
@@ -93,16 +90,16 @@ export interface TranslationResultMessage extends Message {
 }
 
 /**
- * Save translation message interface
- * @interface SaveTranslationMessage
+ * Save word message interface
+ * @interface SaveWordMessage
  */
-export interface SaveTranslationMessage extends Message {
-  /** Message type for saving translations */
-  type: MessageType.SAVE_TRANSLATION;
-  /** Translation data to save */
+export interface SaveWordMessage extends Message {
+  /** Message type for saving words */
+  type: MessageType.SAVE_WORD;
+  /** Word data to save */
   data: {
-    originalText: string;
-    translatedText: string;
+    originalWord: string;
+    targetWord: string;
     sourceLang: string;
     targetLang: string;
     context?: string;
@@ -111,123 +108,31 @@ export interface SaveTranslationMessage extends Message {
 }
 
 /**
- * Get translations message interface
- * @interface GetTranslationsMessage
+ * Get words message interface
+ * @interface GetWordsMessage
  */
-export interface GetTranslationsMessage extends Message {
-  /** Message type for getting translations */
-  type: MessageType.GET_TRANSLATIONS;
-  /** Optional maximum number of translations to get */
+export interface GetWordsMessage extends Message {
+  /** Message type for getting words */
+  type: MessageType.GET_WORDS;
+  /** Optional maximum number of words to get */
   limit?: number;
 }
 
 /**
- * Get translations response interface
- * @interface GetTranslationsResponse
+ * Get words response interface
+ * @interface GetWordsResponse
  */
-export interface GetTranslationsResponse extends OperationResponse {
-  /** Array of translation objects */
-  translations: Array<{
+export interface GetWordsResponse extends OperationResponse {
+  /** Array of word objects */
+  words: Array<{
     id: string;
-    originalText: string;
-    translatedText: string;
+    originalWord: string;
+    targetWord: string;
     sourceLang: string;
     targetLang: string;
     timestamp: any;
     context?: string;
     url?: string;
-  }>;
-}
-
-/**
- * Save note message interface
- * @interface SaveNoteMessage
- */
-export interface SaveNoteMessage extends Message {
-  /** Message type for saving notes */
-  type: MessageType.SAVE_NOTE;
-  /** Note data to save */
-  data: {
-    title: string;
-    content: string;
-    tags?: string[];
-    url?: string;
-  };
-}
-
-/**
- * Get notes message interface
- * @interface GetNotesMessage
- */
-export interface GetNotesMessage extends Message {
-  /** Message type for getting notes */
-  type: MessageType.GET_NOTES;
-  /** Optional maximum number of notes to get */
-  limit?: number;
-}
-
-/**
- * Get notes response interface
- * @interface GetNotesResponse
- */
-export interface GetNotesResponse extends OperationResponse {
-  /** Array of note objects */
-  notes: Array<{
-    id: string;
-    title: string;
-    content: string;
-    timestamp: any;
-    tags?: string[];
-    url?: string;
-  }>;
-}
-
-/**
- * Save chat message interface
- * @interface SaveChatMessage
- */
-export interface SaveChatMessage extends Message {
-  /** Message type for saving chats */
-  type: MessageType.SAVE_CHAT;
-  /** Chat data to save */
-  data: {
-    title: string;
-    messages: Array<{
-      role: 'user' | 'assistant';
-      content: string;
-      timestamp?: any;
-    }>;
-    context?: string;
-  };
-}
-
-/**
- * Get chats message interface
- * @interface GetChatsMessage
- */
-export interface GetChatsMessage extends Message {
-  /** Message type for getting chats */
-  type: MessageType.GET_CHATS;
-  /** Optional maximum number of chats to get */
-  limit?: number;
-}
-
-/**
- * Get chats response interface
- * @interface GetChatsResponse
- */
-export interface GetChatsResponse extends OperationResponse {
-  /** Array of chat objects */
-  chats: Array<{
-    id: string;
-    title: string;
-    timestamp: any;
-    messages: Array<{
-      role: 'user' | 'assistant';
-      content: string;
-      timestamp?: any;
-    }>;
-    context?: string;
   }>;
 }
 
@@ -277,15 +182,115 @@ export interface GetSettingsResponse extends OperationResponse {
 }
 
 /**
- * Utility function to create a typed message
- * @template T Type of message to create
- * @param {MessageType|string} type Message type
- * @param {Omit<T, 'type'>} payload Message payload
- * @returns {T} Typed message object
+ * Gemini query message interface
+ * @interface GeminiQueryMessage
  */
-export function createMessage<T extends Message>(type: MessageType | string, payload: Omit<T, 'type'>): T {
+export interface GeminiQueryMessage extends Message {
+  /** Message type for querying Gemini */
+  type: MessageType.GEMINI_QUERY;
+  /** Query data */
+  data: {
+    query: string;
+    videoContext?: {
+      title?: string;
+      url?: string;
+      transcript?: string;
+    };
+  };
+}
+
+/**
+ * Gemini query result message interface
+ * @interface GeminiQueryResultMessage
+ */
+export interface GeminiQueryResultMessage extends OperationResponse {
+  /** Response from Gemini */
+  response?: string;
+  /** Whether the operation succeeded */
+  success: boolean;
+}
+
+/**
+ * Get Gemini history message interface
+ * @interface GetGeminiHistoryMessage
+ */
+export interface GetGeminiHistoryMessage extends Message {
+  /** Message type for getting Gemini history */
+  type: MessageType.GEMINI_GET_HISTORY;
+}
+
+/**
+ * Get Gemini history response interface
+ * @interface GetGeminiHistoryResponse
+ */
+export interface GetGeminiHistoryResponse extends OperationResponse {
+  /** History items */
+  history: Array<{
+    id: string;
+    query: string;
+    response: string;
+    timestamp: number;
+    videoContext?: {
+      title?: string;
+      url?: string;
+    };
+  }>;
+}
+
+/**
+ * Save Gemini history message interface
+ * @interface SaveGeminiHistoryMessage
+ */
+export interface SaveGeminiHistoryMessage extends Message {
+  /** Message type for saving Gemini history */
+  type: MessageType.GEMINI_SAVE_HISTORY;
+  /** History data to save */
+  data: {
+    id: string;
+    query: string;
+    response: string;
+    timestamp: number;
+    videoContext?: {
+      title?: string;
+      url?: string;
+    };
+  };
+}
+
+/**
+ * Clear Gemini history message interface
+ * @interface ClearGeminiHistoryMessage
+ */
+export interface ClearGeminiHistoryMessage extends Message {
+  /** Message type for clearing Gemini history */
+  type: MessageType.GEMINI_CLEAR_HISTORY;
+}
+
+/**
+ * Message type
+ * @type {Message}
+ */
+export type Message = 
+  | SystemMessage 
+  | AuthStateMessage 
+  | TranslateMessage 
+  | TranslateResponse
+  | GetSettingsMessage
+  | SaveSettingsMessage
+  | GeminiQueryMessage
+  | GetGeminiHistoryMessage
+  | SaveGeminiHistoryMessage
+  | ClearGeminiHistoryMessage;
+
+/**
+ * Helper function to create messages of a specified type with a payload
+ * @param type The message type
+ * @param payload Additional message properties
+ * @returns A message object
+ */
+export function createMessage(type: MessageType | string, payload: any = {}): Message {
   return {
     type,
-    ...payload
-  } as T;
+    ...payload,
+  };
 } 

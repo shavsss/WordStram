@@ -1,0 +1,302 @@
+.memory-container {
+  width: 100%;
+  padding: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Game Start Screen */
+.memory-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2rem;
+  background-color: var(--card-background, #f8f9fa);
+  border-radius: 10px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.memory-start h2 {
+  font-size: 1.8rem;
+  margin-bottom: 1rem;
+  color: var(--primary-color, #5271ff);
+}
+
+.memory-start p {
+  margin-bottom: 2rem;
+  color: var(--secondary-text-color, #666666);
+}
+
+.memory-settings {
+  margin-bottom: 2rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.05);
+  width: 100%;
+  max-width: 300px;
+}
+
+.memory-settings label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.memory-settings input {
+  width: 80px;
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #ddd);
+  text-align: center;
+}
+
+.start-button {
+  background-color: var(--primary-color, #5271ff);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.8rem 2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  margin-bottom: 1rem;
+}
+
+.start-button:hover {
+  background-color: var(--primary-dark-color, #3a57e2);
+}
+
+.exit-button {
+  background-color: var(--secondary-color, #e5e5e5);
+  color: var(--secondary-text-color, #666666);
+  border: none;
+  border-radius: 8px;
+  padding: 0.8rem 2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.exit-button:hover {
+  background-color: var(--secondary-dark-color, #d1d1d1);
+}
+
+/* Game Header */
+.memory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: var(--card-background, #f8f9fa);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.memory-stats {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.memory-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stat-label {
+  font-weight: 600;
+  color: var(--secondary-text-color, #666666);
+}
+
+.stat-value {
+  font-weight: 700;
+  color: var(--primary-color, #5271ff);
+}
+
+.exit-game-button {
+  background-color: var(--warning-color, #f59e0b);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.exit-game-button:hover {
+  background-color: var(--warning-dark-color, #d97706);
+}
+
+/* Game Board */
+.memory-board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+  perspective: 1000px;
+}
+
+/* Memory Cards */
+.memory-card {
+  aspect-ratio: 3/4;
+  position: relative;
+  transform-style: preserve-3d;
+  cursor: pointer;
+}
+
+.card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.5s;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+}
+
+.memory-card.flipped .card-inner {
+  transform: rotateY(180deg);
+}
+
+.card-front,
+.card-back {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.card-front {
+  background-color: var(--primary-color, #5271ff);
+  color: white;
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.card-back {
+  background-color: white;
+  color: var(--text-color, #333333);
+  transform: rotateY(180deg);
+  text-align: center;
+}
+
+.card-back span {
+  font-size: 1.1rem;
+  font-weight: 600;
+  word-break: break-word;
+  hyphens: auto;
+  margin-bottom: 0.5rem;
+}
+
+.card-type {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card-type.word {
+  background-color: var(--primary-light-color, #e6eaff);
+  color: var(--primary-color, #5271ff);
+}
+
+.card-type.translation {
+  background-color: var(--secondary-light-color, #f5f5f5);
+  color: var(--secondary-text-color, #666666);
+}
+
+.memory-card.matched .card-inner {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+  transform: rotateY(180deg);
+}
+
+/* Loading and Empty States */
+.memory-loading,
+.memory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  text-align: center;
+  background-color: var(--card-background, #f8f9fa);
+  border-radius: 10px;
+  padding: 2rem;
+  margin-top: 1rem;
+}
+
+.memory-empty h3 {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
+  color: var(--primary-color, #5271ff);
+}
+
+.memory-empty p,
+.memory-loading p {
+  color: var(--secondary-text-color, #666666);
+  margin-bottom: 1.5rem;
+}
+
+/* Dark Mode Support */
+:root.dark .memory-container {
+  --background-color: #1a1a1a;
+  --text-color: #f1f1f1;
+  --card-background: #2a2a2a;
+  --secondary-text-color: #b0b0b0;
+  --primary-light-color: #2a3659;
+  --secondary-light-color: #333333;
+  --border-color: #444;
+  --warning-dark-color: #b45309;
+}
+
+:root.dark .card-front {
+  background-color: #2a3659;
+}
+
+:root.dark .card-back {
+  background-color: #2a2a2a;
+  color: #f1f1f1;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .memory-board {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)) !important;
+  }
+  
+  .card-back span {
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .memory-stats {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .memory-card {
+    aspect-ratio: 2/3;
+  }
+  
+  .card-back span {
+    font-size: 0.8rem;
+  }
+} 

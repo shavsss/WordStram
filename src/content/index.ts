@@ -1,293 +1,784 @@
 /**
  * WordStream Content Script
  * 
- * This is the main entry point for the content script injected into web pages.
- * It handles communication with the background service and provides translation functionality.
- * 
- * @version 2.0
- * @module content/index
+ * This script is injected into video pages to detect and process captions.
+ * It handles word translation and interaction with the background script.
  */
 
-import { MessageType } from '../shared/message';
+import { MessageType } from '../shared/message-types';
+import messageBus from '../shared/message-bus';
+import { getCaptionDetector } from './detectors';
+import { showTranslationPopup } from './ui/translation-popup';
 
-// Connection state management
-interface ConnectionState {
-  isConnected: boolean;
-  lastAttempt: number;
-  retryCount: number;
-  maxRetries: number;
-  backoffInterval: number;
+// Add this interface near the top of the file with other interfaces
+interface VideoData {
+  title: string;
+  url: string;
+  channelName: string;
+  description: string;
+  [key: string]: string | undefined;
 }
 
-// Global state
-const state = {
-  connection: {
-    isConnected: false,
-    lastAttempt: 0,
-    retryCount: 0,
-    maxRetries: 5,
-    backoffInterval: 2000 // Start with 2 seconds, will increase with backoff
-  } as ConnectionState,
+// Add auth state to the state object
+interface State {
+  isInitialized: boolean;
+  messageHandlersRegistered: boolean;
+  hasFoundCaptions: boolean;
+  captionDetector: any;
+  detectionInterval: NodeJS.Timeout | null;
+  lastDetectionTime: number;
+  detectionAttempts: number;
   settings: {
-    enabled: true,
-    targetLanguage: 'he'
-  }
+    enableTranslation: boolean;
+    showHighlights: boolean;
+    targetLanguage: string;
+    highlightColor: string;
+    autoSave: boolean;
+  };
+  videoContext: {
+    url: string;
+    title: string;
+    pageType: 'youtube' | 'netflix' | 'other' | null;
+    description?: string;
+    channelName?: string;
+  };
+  isAuthenticated: boolean;
+  user: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+    photoURL: string | null;
+  } | null;
+  directMessageHandlers: Map<any, any>;
+}
+
+// Enhanced state object with auth state
+const state: State = {
+  isInitialized: false,
+  messageHandlersRegistered: false,
+  hasFoundCaptions: false,
+  captionDetector: null,
+  detectionInterval: null,
+  lastDetectionTime: 0,
+  detectionAttempts: 0,
+  settings: {
+    enableTranslation: true,
+    showHighlights: true,
+    targetLanguage: 'en',
+    highlightColor: 'rgba(100, 181, 246, 0.3)',
+    autoSave: false
+  },
+  videoContext: {
+    url: window.location.href,
+    title: document.title,
+    pageType: null
+  },
+  isAuthenticated: false,
+  user: null,
+  directMessageHandlers: new Map()
 };
+
+// IMPORTANT: Register a direct message listener first to ensure we can handle messages
+// even before full initialization
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Check if we have a handler for this message type
+  if (message && message.type) {
+    console.log(`WordStream: Received message ${message.type} via direct listener`);
+    
+    // For GET_VIDEO_CONTEXT messages, respond immediately
+    if (message.type === MessageType.GET_VIDEO_CONTEXT) {
+      sendResponse({
+        success: true,
+        data: state.videoContext
+      });
+      return true;
+    }
+    
+    // For AUTH_STATE_CHANGED messages, update our state
+    if (message.type === MessageType.AUTH_STATE_CHANGED) {
+      state.isAuthenticated = message.payload?.user != null;
+      console.log(`WordStream: Authentication state updated: ${state.isAuthenticated}`);
+      sendResponse({ success: true });
+      return true;
+    }
+    
+    // Check if we have a registered handler
+    const handler = state.directMessageHandlers.get(message.type);
+    if (handler) {
+      try {
+        // Call the handler and wait for response
+        Promise.resolve(handler(message, sender))
+          .then(response => sendResponse(response))
+          .catch(err => {
+            console.error(`WordStream: Error in handler for ${message.type}:`, err);
+            sendResponse({ success: false, error: err.message });
+          });
+        return true; // Indicate async response
+      } catch (err) {
+        console.error(`WordStream: Error in direct handler for ${message.type}:`, err);
+        sendResponse({ success: false, error: 'Error processing message' });
+        return true;
+      }
+    }
+  }
+  
+  // Let other listeners handle it or respond with a default
+  if (message && message.type && !state.isInitialized) {
+    sendResponse({ success: false, error: 'Content script not fully initialized' });
+    return true;
+  }
+  
+  return false; // Let other listeners handle it
+});
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initialize);
+} else {
+  // DOM already loaded, initialize directly
+  initialize();
+}
 
 /**
  * Initialize the content script
  */
-function initialize() {
-  console.log('WordStream: Content script initializing...');
-  
-  // Set up message listeners
-  setupMessageListeners();
-  
-  // Connect to background service
-  connectToBackgroundService();
-  
-  // Set up periodic connection check (every 30 seconds)
-  setInterval(checkConnection, 30000);
+export async function initialize() {
+  if (state.isInitialized) {
+    return;
+  }
+
+  console.log('WordStream: Content script initializing');
+
+  // Check authentication state first
+  await checkAuthState();
+
+  // Set up DOM observer
+  setupDOMObserver();
+
+  // Register message handlers if not yet registered
+  if (!state.messageHandlersRegistered) {
+    registerMessageHandlers();
+    state.messageHandlersRegistered = true;
+  }
+
+  // Set initialization flag
+  state.isInitialized = true;
+  console.log('WordStream: Content script initialized');
 }
 
 /**
- * Set up message listeners for communication with the background service
+ * Complete the initialization process after video page detection
  */
-function setupMessageListeners() {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!message || !message.type) return false;
+async function completeInitialization() {
+  try {
+    // Get settings from background
+    const settingsResponse = await messageBus.sendMessage({
+      type: MessageType.GET_SETTINGS,
+      payload: {}
+    });
     
-    try {
-      // Handle incoming messages
-      switch (message.type) {
-        case MessageType.BACKGROUND_READY:
-          handleBackgroundReady();
-          break;
-          
-        case MessageType.TRANSLATION_RESULT:
-          handleTranslationResult(message);
-          break;
-          
-        case MessageType.AUTH_STATE_CHANGED:
-          handleAuthStateChanged(message);
-          break;
-          
-        default:
-          // Unknown message type
-          console.log('WordStream: Received unknown message type', message.type);
-          break;
-      }
-      
-      // Required for async response handling
-      return true;
-    } catch (error) {
-      console.error('WordStream: Error handling message', error);
-      return false;
+    if (settingsResponse && settingsResponse.success) {
+      state.settings = settingsResponse.settings;
+      console.log('WordStream: Retrieved settings', state.settings);
+    } else {
+      console.warn('WordStream: Failed to get settings, using defaults');
+      // Use default settings if we couldn't get them from background
+      state.settings = {
+        enableTranslation: true,
+        showHighlights: true,
+        targetLanguage: 'en',
+        highlightColor: 'rgba(100, 181, 246, 0.3)',
+        autoSave: false
+      };
     }
-  });
+    
+    // Check authentication state
+    try {
+      const authResponse = await messageBus.sendMessage({
+        type: MessageType.GET_AUTH_STATE,
+        payload: {}
+      });
+      
+      if (authResponse && authResponse.success) {
+        state.isAuthenticated = authResponse.user != null;
+        console.log(`WordStream: Authentication state: ${state.isAuthenticated}`);
+      }
+    } catch (authError) {
+      console.warn('WordStream: Failed to get auth state:', authError);
+    }
+    
+    // Notify background script that content script is ready
+    try {
+      await messageBus.sendMessage({
+        type: MessageType.CONTENT_SCRIPT_READY,
+        payload: {
+          url: window.location.href,
+          videoFound: true
+        }
+      });
+    } catch (msgError) {
+      console.warn('WordStream: Could not notify background of ready state:', msgError);
+    }
+    
+    // Start caption detection
+    startCaptionDetection();
+    
+    // Add DOM observation for late-loaded videos
+    observeDOM();
+    
+    // Initialize pop-up styles
+    initializeStyles();
+    
+    // Mark as initialized
+    state.isInitialized = true;
+    
+    console.log('WordStream: Content script initialized successfully');
+  } catch (error) {
+    console.error('WordStream: Error completing initialization:', error);
+  }
 }
 
 /**
- * Send a message to the background service with error handling
- * @param message The message to send
- * @returns Promise that resolves with the response
+ * Start caption detection process
  */
-function sendMessage(message: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (!chrome.runtime?.id) {
-      reject(new Error('Extension context invalidated'));
+function startCaptionDetection() {
+  // Clear any existing interval
+  if (state.detectionInterval) {
+    clearInterval(state.detectionInterval);
+  }
+  
+  // Create a new detector
+  state.captionDetector = getCaptionDetector();
+  console.log(`WordStream: Using caption detector for ${state.captionDetector.source}`);
+  
+  // Try detecting captions immediately
+  detectCaptions();
+  
+  // Set up interval to try again if needed
+  state.detectionInterval = setInterval(() => {
+    // Only try if no successful detection in last 5 seconds
+    const now = Date.now();
+    if (now - state.lastDetectionTime > 5000) {
+      detectCaptions();
+    }
+    
+    // After 15 attempts (roughly 30 seconds), slow down the attempts
+    if (state.detectionAttempts > 15) {
+      if (state.detectionInterval) {
+        clearInterval(state.detectionInterval);
+        // Try less frequently (every 10 seconds)
+        state.detectionInterval = setInterval(detectCaptions, 10000);
+      }
+    }
+  }, 2000);
+}
+
+/**
+ * Detect captions using the appropriate detector
+ */
+async function detectCaptions() {
+  try {
+    state.detectionAttempts++;
+    
+    // Skip detection if document is hidden (tab in background)
+    if (document.hidden) {
       return;
     }
 
-    try {
-      chrome.runtime.sendMessage(message, (response) => {
-        // Check for chrome runtime errors
-        const runtimeError = chrome.runtime.lastError;
-        if (runtimeError) {
-          // Handle specific error cases
-          if (runtimeError.message?.includes('receiving end does not exist')) {
-            state.connection.isConnected = false;
-            connectToBackgroundService(); // Try to reconnect
-          }
-          console.warn('WordStream: Runtime error sending message', runtimeError);
-          reject(runtimeError);
+    if (!state.captionDetector) {
+      console.error('WordStream: No caption detector available');
           return;
         }
         
-        // Check for application-level errors
-        if (response && response.error) {
-          console.warn('WordStream: Application error in response', response.error);
-          reject(new Error(response.error));
-    return;
-  }
-  
-        // Success case
-        resolve(response);
-      });
-  } catch (error) {
-      console.error('WordStream: Exception sending message', error);
-      reject(error);
-    }
-  });
-}
-
-/**
- * Connect to the background service
- */
-async function connectToBackgroundService() {
-  // Check if extension is still valid
-  if (!chrome.runtime?.id) {
-    console.error('WordStream: Extension context invalidated');
-    return;
-  }
-  
-  // Prevent connection attempts if we've exceeded retry limits
-  if (state.connection.retryCount >= state.connection.maxRetries) {
-    console.warn('WordStream: Maximum connection retries exceeded. Will try again later.');
+    const captionElement = await state.captionDetector.detect();
     
-    // Reset retry count after 2 minutes to try again
-    setTimeout(() => {
-      state.connection.retryCount = 0;
-      connectToBackgroundService();
-    }, 120000);
-    
-    return;
-  }
-  
-  try {
-    // Update connection attempt state
-    state.connection.lastAttempt = Date.now();
-    state.connection.retryCount++;
-    
-    // Try to send a message to the background service
-    const response = await sendMessage({ type: MessageType.CONTENT_SCRIPT_READY })
-      .catch(error => {
-        if (error.message?.includes('Extension context invalidated')) {
-          console.error('WordStream: Extension context invalidated, stopping retries');
-          return null;
-        }
-        throw error;
-      });
-
-    if (response) {
-      console.log('WordStream: Successfully connected to background service');
-      state.connection.isConnected = true;
-      state.connection.retryCount = 0;
+    if (captionElement) {
+      state.lastDetectionTime = Date.now();
+      console.log('WordStream: Caption detection was successful');
       
-      // If this was a response with auth state, handle it
-      if (response.type === MessageType.AUTH_STATE_CHANGED) {
-        handleAuthStateChanged(response);
+      // Process the caption element
+      state.captionDetector.processCaption(captionElement);
+      
+      // If we've found captions, reduce detection frequency
+      if (state.detectionInterval) {
+        clearInterval(state.detectionInterval);
+        // Check occasionally for new captions (every 10 seconds)
+        state.detectionInterval = setInterval(detectCaptions, 10000);
       }
-    } else {
-      // Use exponential backoff for retry
-      const backoffTime = state.connection.backoffInterval * Math.pow(2, state.connection.retryCount - 1);
-      setTimeout(() => connectToBackgroundService(), backoffTime);
+      
+      // Track the caption detection event
+      messageBus.sendMessage({
+        type: MessageType.CONTENT_SCRIPT_READY,
+        payload: {
+          captionsDetected: true,
+          source: state.captionDetector.source,
+          url: window.location.href
+        }
+      }).catch(err => {
+        console.error('WordStream: Error reporting caption detection:', err);
+      });
+      
+      return true;
     }
-    } catch (error) {
-    console.error('WordStream: Error connecting to background service', error);
-    state.connection.isConnected = false;
-    
-    // Use exponential backoff for retry
-    const backoffTime = state.connection.backoffInterval * Math.pow(2, state.connection.retryCount - 1);
-    setTimeout(() => connectToBackgroundService(), backoffTime);
-    }
+  } catch (error) {
+    console.error('WordStream: Error detecting captions:', error);
+  }
+  
+  return false;
 }
 
 /**
- * Check if we're still connected to the background service
+ * Check if we're on a page that might have videos
  */
-function checkConnection() {
-  if (!state.connection.isConnected) {
-    // If we're not connected, try to reconnect
-    if (Date.now() - state.connection.lastAttempt > 60000) { // Don't retry if we tried recently
-      state.connection.retryCount = 0; // Reset retry count for a fresh start
-      connectToBackgroundService();
+function isVideoPage(): boolean {
+  // Check for video-specific URLs first (faster than DOM checks)
+  const url = window.location.href;
+  if (
+    // תבניות YouTube סטנדרטיות
+    url.includes('youtube.com/watch') || 
+    // תבניות קצרות של YouTube
+    url.includes('youtube.com/shorts') ||
+    // תבניות מוטמעות של YouTube (לפעמים בדומיינים אחרים)
+    url.includes('youtube.com/embed') ||
+    // הזרמה ישירה של YouTube
+    url.includes('youtube.com/live') ||
+    // נטפליקס (ודא שמתאים לתבנית URL של נטפליקס)
+    url.includes('netflix.com/watch') ||
+    // דפי וידאו גנריים
+    url.includes('vimeo.com') ||
+    url.includes('/video/') ||
+    url.includes('/watch/') ||
+    url.includes('music.youtube.com')
+  ) {
+    console.log('WordStream: Valid video page detected by URL:', url);
+    return true;
+  }
+  
+  // Check for YouTube-specific player elements
+  if (
+    document.querySelector('#movie_player') ||
+    document.querySelector('.html5-video-player') ||
+    document.querySelector('.ytp-cued-thumbnail-overlay')
+  ) {
+    console.log('WordStream: YouTube player elements detected');
+    return true;
+  }
+
+  // Get all videos on the page and check for valid ones
+  const videos = document.querySelectorAll('video');
+  if (videos.length > 0) {
+    // Check for visible videos with content
+    for (const video of Array.from(videos)) {
+      // נבדוק האם הוידאו גדול מספיק להיות משמעותי
+      const rect = video.getBoundingClientRect();
+      const isVisible = (rect.width > 200 && rect.height > 100) || 
+                        (video.offsetWidth > 200 && video.offsetHeight > 100);
+      
+      if (isVisible && (video.duration > 0 || video.src || video.querySelector('source'))) {
+        console.log('WordStream: Valid video element detected');
+        return true;
+      }
     }
+  }
+  
+  // Check for common video page elements
+  const videoElementSelectors = [
+    'video-player',
+    'player-container',
+    'video-container',
+    'media-player',
+    'ytp-player-content',
+    'watch-video--player-view',
+    'html5-video-container',
+    '.video-stream',
+    '.player'
+  ];
+  
+  for (const selector of videoElementSelectors) {
+    if (document.querySelector(`.${selector}`) || document.getElementById(selector)) {
+      console.log('WordStream: Video container element detected');
+      return true;
+    }
+  }
+  
+  console.log('WordStream: Not a video page - no matching URL pattern or video element found');
+  return false;
+}
+
+/**
+ * Observe DOM changes to detect videos added after page load
+ * with optimized performance for dynamic content
+ */
+function observeDOM() {
+  // Configuration for observation
+  const config = {
+    videoCheckInterval: 500,     // Milliseconds between checks for new video elements
+    maxObservationTime: 300000,  // Maximum time to observe (5 minutes)
+    throttleDelay: 100,          // Delay for throttling mutation processing
+    videoSelectors: [
+      'video',                   // Standard video element
+      '.video-player video',     // Common video player containers
+      '.player-container video',
+      '#movie_player video',
+      '.html5-video-player video'
+    ]
+  };
+  
+  let lastProcessTime = 0;
+  let startObservationTime = Date.now();
+  let activeVideoElements = new Set<HTMLVideoElement>();
+  let pendingCheck = false;
+  let observer: MutationObserver | null = null;
+  
+  // Function to check for new videos with throttling
+  const checkForNewVideos = () => {
+    if (pendingCheck) return;
+    
+    const now = Date.now();
+    if (now - lastProcessTime < config.throttleDelay) {
+      // Throttle to avoid excessive processing
+      pendingCheck = true;
+    setTimeout(() => {
+        pendingCheck = false;
+        checkForNewVideos();
+      }, config.throttleDelay);
+      return;
+    }
+    
+    lastProcessTime = now;
+    
+    // Check if we've been observing too long (for performance)
+    if (now - startObservationTime > config.maxObservationTime) {
+      if (observer) {
+        console.log('WordStream: Stopping DOM observation after timeout');
+        observer.disconnect();
+        observer = null;
+        
+        // Set up a periodic check instead
+        setInterval(detectNewVideos, config.videoCheckInterval);
+      }
     return;
   }
   
-  // Ping the background service to check connection
-  sendMessage({ type: MessageType.GET_AUTH_STATE })
-    .then(response => {
-      // We got a response, so we're still connected
-      state.connection.isConnected = true;
-    })
-    .catch(error => {
-      console.warn('WordStream: Connection check failed, will try to reconnect', error);
-      state.connection.isConnected = false;
-      state.connection.retryCount = 0; // Reset retry count for a reconnection attempt
-      connectToBackgroundService();
-    });
-}
-
-/**
- * Handle background service ready message
- */
-function handleBackgroundReady() {
-  console.log('WordStream: Background service is ready');
-  state.connection.isConnected = true;
-  state.connection.retryCount = 0;
+    detectNewVideos();
+  };
   
-  // Load settings from background
-  sendMessage({ type: MessageType.GET_SETTINGS })
-    .then(response => {
-      if (response && response.success && response.settings) {
-        state.settings = response.settings;
+  // Function to find new videos and process them
+  const detectNewVideos = () => {
+    // Targeted search for video elements
+    for (const selector of config.videoSelectors) {
+      document.querySelectorAll(selector).forEach(video => {
+        if (!(video instanceof HTMLVideoElement)) return;
+        
+        // Skip already processed videos
+        if (activeVideoElements.has(video) || video.dataset.wordstreamProcessed) return;
+        
+        // Only process videos with some duration or source
+        if ((video.duration > 0 || video.src || video.querySelector('source')) && video.offsetWidth > 0) {
+          console.log('WordStream: New video element detected', video);
+          
+          // Mark as processed
+          video.dataset.wordstreamProcessed = 'true';
+          activeVideoElements.add(video);
+          
+          // Trigger caption detection
+          setTimeout(detectCaptions, 1000);
+        }
+      });
+    }
+    
+    // Clean up removed videos
+    activeVideoElements.forEach(video => {
+      if (!document.body.contains(video)) {
+        activeVideoElements.delete(video);
       }
-    })
-    .catch(error => {
-      console.error('WordStream: Failed to load settings', error);
     });
+  };
+  
+  // Create an optimized mutation observer
+  observer = new MutationObserver((mutations) => {
+    let hasRelevantChanges = false;
+    
+    // Quick scan of mutations to see if any are relevant
+    for (const mutation of mutations) {
+      if (mutation.type !== 'childList') continue;
+      
+      // Check if added nodes include video elements or possible containers
+      for (const node of Array.from(mutation.addedNodes)) {
+        if (
+          (node instanceof HTMLVideoElement) || 
+          (node instanceof HTMLElement && (
+            node.tagName === 'DIV' || 
+            node.tagName === 'SECTION' || 
+            node.querySelector('video')
+          ))
+        ) {
+          hasRelevantChanges = true;
+          break;
+        }
+      }
+      
+      if (hasRelevantChanges) break;
+    }
+    
+    // Only process if we found relevant changes
+    if (hasRelevantChanges) {
+      checkForNewVideos();
+    }
+  });
+  
+  // Initialize by checking for videos first
+  detectNewVideos();
+  
+  // Then start observing for changes
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+  
+  // Also add a periodic check as a fallback for video players that 
+  // might load videos dynamically without DOM mutations
+  const periodicChecker = setInterval(() => {
+    if (!observer) {
+      clearInterval(periodicChecker);
+      return;
+    }
+    detectNewVideos();
+  }, 5000); // Check every 5 seconds
 }
 
 /**
- * Handle translation result message
+ * Initialize styles for translation popups
  */
-function handleTranslationResult(message: any) {
-  if (message.success) {
-    console.log('WordStream: Translation received', {
-      original: message.originalText,
-      translated: message.translatedText,
-      language: message.targetLang
-    });
+function initializeStyles() {
+  if (document.getElementById('wordstream-styles')) {
+    return; // Styles already added
+  }
+  
+  const style = document.createElement('style');
+  style.id = 'wordstream-styles';
+  style.textContent = `
+    .wordstream-word {
+      cursor: pointer;
+      display: inline-block;
+      border-radius: 3px;
+      transition: background-color 0.2s;
+    }
     
-    // Here you would update the UI with the translation
-    // For now, we just log it
+    .wordstream-word:hover {
+      background-color: ${state.settings?.highlightColor || 'rgba(100, 181, 246, 0.3)'};
+    }
+    
+    .wordstream-translation-popup {
+      position: absolute;
+      z-index: 999999;
+      background: rgba(28, 28, 28, 0.95);
+      color: white;
+      padding: 12px;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      max-width: 300px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    
+    .wordstream-popup-save {
+      background: #64B5F6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 5px 10px;
+      margin-top: 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    
+    .wordstream-popup-close {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.7);
+      position: absolute;
+      top: 5px;
+      right: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * Register message handlers from the background script
+ */
+function registerMessageHandlers() {
+  // Handle requests to translate a word
+  messageBus.registerHandler(MessageType.TRANSLATE_WORD_RESULT, async (message) => {
+    if (message.payload && message.payload.originalWord && message.payload.translatedWord) {
+      // This happens when the background script sends us a translation
+      // We might want to update any UI with this translation
+      console.log('WordStream: Received translation:', message.payload);
+    }
+    return { success: true };
+  });
+  
+  // Handle requests to toggle translation feature
+  messageBus.registerHandler(MessageType.SETTINGS_UPDATED, async (message) => {
+    if (message.payload && message.payload.settings) {
+      console.log('WordStream: Settings updated', message.payload.settings);
+      
+      // Update specific features based on settings
+      if (state.settings) {
+        state.settings = { ...state.settings, ...message.payload.settings };
+        
+        // Re-initialize styles with new settings
+        initializeStyles();
+      }
+    }
+    return { success: true };
+  });
+  
+  // Another handler for direct setting changes (legacy support)
+  messageBus.registerHandler(MessageType.SAVE_SETTINGS, async (message) => {
+    if (message.payload && message.payload.settings) {
+      console.log('WordStream: Updating settings', message.payload.settings);
+      state.settings = { ...state.settings, ...message.payload.settings };
+      
+      // Re-initialize styles with new settings
+      initializeStyles();
+    }
+    return { success: true };
+  });
+  
+  // Handler for GET_VIDEO_CONTEXT message
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('WordStream: Content script received message', message);
+
+    if (!message || !message.type) {
+      sendResponse({ success: false, error: 'Invalid message format' });
+      return false;
+    }
+
+    // Handle different message types
+    switch (message.type) {
+      case MessageType.GET_VIDEO_CONTEXT:
+        try {
+          const videoData = {
+            title: document.title || undefined,
+            url: window.location.href,
+            channelName: getChannelName(),
+            description: getVideoDescription()
+          };
+
+          // Filter out undefined or null values
+          const filteredData = Object.fromEntries(
+            Object.entries(videoData).filter(([_, value]) => value !== undefined && value !== null)
+          );
+
+          sendResponse({ success: true, data: filteredData });
+        } catch (error) {
+          console.error('WordStream: Error getting video context', error);
+          sendResponse({ success: false, error: 'Failed to get video context' });
+        }
+        return true;
+
+      case MessageType.AUTH_STATE_CHANGED:
+        // Update local auth state when it changes in the background
+        if (message.data) {
+          state.isAuthenticated = message.data.isAuthenticated;
+          state.user = message.data.user;
+          console.log('WordStream: Auth state updated from background', { 
+            isAuthenticated: state.isAuthenticated, 
+            user: state.user 
+          });
+        }
+        sendResponse({ success: true });
+        return true;
+
+      default:
+        // Unhandled message type
+        sendResponse({ success: false, error: 'Unhandled message type' });
+        return false;
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Get video description if available
+ */
+function getVideoDescription(): string {
+  // YouTube
+  const ytDescription = document.querySelector('meta[name="description"]');
+  if (ytDescription && ytDescription.getAttribute('content')) {
+    return ytDescription.getAttribute('content') || '';
+  }
+  
+  // Netflix
+  const netflixInfo = document.querySelector('.title-info');
+  if (netflixInfo) {
+    return netflixInfo.textContent || '';
+  }
+  
+  return '';
+}
+
+/**
+ * Get channel name if available
+ */
+function getChannelName(): string {
+  // YouTube
+  const ytChannel = document.querySelector('#owner-name a, .ytd-channel-name a');
+  if (ytChannel) {
+    return ytChannel.textContent || '';
+  }
+  
+  // Fallback to document title
+  return '';
+}
+
+// For clean-up when navigating away
+window.addEventListener('beforeunload', () => {
+  if (state.detectionInterval) {
+    clearInterval(state.detectionInterval);
+  }
+  
+  if (state.captionDetector && typeof state.captionDetector.cleanup === 'function') {
+    state.captionDetector.cleanup();
+  }
+});
+
+// Export for testing
+export { state, detectCaptions };
+
+// Check authentication state
+async function checkAuthState() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: MessageType.GET_AUTH_STATE
+    });
+
+    if (response && response.success) {
+      state.isAuthenticated = response.data.isAuthenticated;
+      state.user = response.data.user;
+      console.log('WordStream: Auth state updated', { 
+        isAuthenticated: state.isAuthenticated, 
+        user: state.user 
+      });
     } else {
-    console.error('WordStream: Translation failed', message.error);
+      console.error('WordStream: Failed to check auth state', response?.error || 'Unknown error');
+      state.isAuthenticated = false;
+      state.user = null;
+    }
+  } catch (error) {
+    console.error('WordStream: Error checking auth state', error);
+    state.isAuthenticated = false;
+    state.user = null;
   }
 }
 
-/**
- * Handle auth state changed message
- */
-function handleAuthStateChanged(message: any) {
-  console.log('WordStream: Auth state changed', {
-    isAuthenticated: message.isAuthenticated,
-    user: message.user ? message.user.email : 'none'
-  });
-  
-  // Here you would update the UI based on auth state
-}
-
-/**
- * Request a translation from the background service
- * @param text The text to translate
- * @param targetLang The target language
- * @returns Promise that resolves with the translation result
- */
-function requestTranslation(text: string, targetLang: string = state.settings.targetLanguage): Promise<any> {
-  return sendMessage({
-    type: MessageType.TRANSLATE_TEXT,
-    text,
-    targetLang
-  });
-}
-
-// Initialize the content script
-initialize();
-
-// Export public API
-export {
-  requestTranslation
-}; 
+// Set up DOM observer
+function setupDOMObserver() {
+  // Implementation of setupDOMObserver function
+} 

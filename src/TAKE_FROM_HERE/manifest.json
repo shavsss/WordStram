@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "WordStream",
+  "version": "1.0.0",
+  "description": "Learn languages while watching videos",
+  "permissions": [
+    "identity",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.netflix.com/*",
+    "*://*.googleapis.com/*",
+    "https://*.firebaseio.com/*",
+    "https://*.firebaseapp.com/*",
+    "https://firestore.googleapis.com/*",
+    "https://identitytoolkit.googleapis.com/*"
+  ],
+  "action": {
+    "default_popup": "popup/simple-popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.netflix.com/*"
+      ],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*", "content/styles/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "oauth2": {
+    "client_id": "1097713470067-4o18jnj4sgujpu4f9o4kogen53e2bknj.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
+  }
+} 
